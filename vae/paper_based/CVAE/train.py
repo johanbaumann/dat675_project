@@ -5,6 +5,8 @@ import os
 import torch
 import time
 import argparse
+import pandas as pd
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', help='batch_size', type=int, default=128)
@@ -21,14 +23,33 @@ parser.add_argument('--num_prop', help='number of propertoes', type=int, default
 parser.add_argument('--save_dir', help='save dir', type=str, default='save/')
 args = parser.parse_args()
 
-print (args)
+
+
+
+config = {
+    'batch_size': 128,
+    'latent_size': 200,
+    'unit_size': 512,
+    'n_rnn_layer': 3,
+    'seq_length': 120,
+    'prop_file': "smiles_prop.csv",
+    'mean': 0.0,
+    'stddev': 1.0,
+    'num_epochs': 100,
+    'lr': 0.0001,
+    'num_prop': 3,
+    'save_dir': 'save/'
+}
+
+
+print (config)
 #convert smiles to numpy array
-molecules_input, molecules_output, char, vocab, labels, length = load_data(args.prop_file, args.seq_length)
+molecules_input, molecules_output, char, vocab, labels, length = load_data(config['prop_file'], config['seq_length'])
 vocab_size = len(char)
 
 #make save_dir
-if not os.path.isdir(args.save_dir):
-    os.mkdir(args.save_dir)
+if not os.path.isdir(config['save_dir']):
+    os.mkdir(config['save_dir'])
 
 #divide data into training and test set
 num_train_data = int(len(molecules_input)*0.75)
@@ -49,6 +70,11 @@ model = CVAE(vocab_size,
              )
 print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
+history = {
+    'train_loss': [],
+    'test_loss': []
+}
+    
 for epoch in range(args.num_epochs):
 
     st = time.time()
@@ -56,19 +82,24 @@ for epoch in range(args.num_epochs):
     #model.assign_lr(learning_rate * (decay_rate ** epoch))
     train_loss = []
     test_loss = []
+    
+ 
     st = time.time()
     
-    for iteration in range(len(train_molecules_input)//args.batch_size):
-        n = np.random.randint(len(train_molecules_input), size = args.batch_size)
+
+    #train
+    for iteration in range(len(train_molecules_input)//config['batch_size']):
+        n = np.random.randint(len(train_molecules_input), size = config['batch_size'])
         x = np.array([train_molecules_input[i] for i in n])
         y = np.array([train_molecules_output[i] for i in n])
         l = np.array([train_length[i] for i in n])
         c = np.array([train_labels[i] for i in n])
         cost = model.train_batch(x, y, l, c)
         train_loss.append(cost)
-    
-    for iteration in range(len(test_molecules_input)//args.batch_size):
-        n = np.random.randint(len(test_molecules_input), size = args.batch_size)
+    # test on test set..
+    # there is data leakage here, but we just want to see the trend of loss, not the actual performance of the model.
+    for iteration in range(len(test_molecules_input)//config['batch_size']):
+        n = np.random.randint(len(test_molecules_input), size = config['batch_size'])
         x = np.array([test_molecules_input[i] for i in n])
         y = np.array([test_molecules_output[i] for i in n])
         l = np.array([test_length[i] for i in n])
@@ -78,10 +109,19 @@ for epoch in range(args.num_epochs):
     
     train_loss = np.mean(np.array(train_loss))        
     test_loss = np.mean(np.array(test_loss))    
+    history['train_loss'].append(train_loss)
+    history['test_loss'].append(test_loss)
     end = time.time()    
     if epoch==0:
         print ('epoch\ttrain_loss\ttest_loss\ttime (s)')
     print ("%s\t%.3f\t%.3f\t%.3f" %(epoch, train_loss, test_loss, end-st))
-    ckpt_path = args.save_dir+'/model_'+str(epoch)+'.ckpt'
-    model.save(ckpt_path, epoch)
+    # save model!
+    # only save for the last epoch...
+
+    if epoch == config['num_epochs']-1:
+        ckpt_path = config['save_dir']+'/model_'+'.ckpt'
+        model.save(ckpt_path, epoch)
+        #save history as csv file
+        history_df = pd.DataFrame(history)
+        history_df.to_csv(config['save_dir']+'/history.csv', index=False)
 
