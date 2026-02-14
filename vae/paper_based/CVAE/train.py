@@ -32,7 +32,7 @@ config = {
     'unit_size': 512,
     'n_rnn_layer': 3,
     'seq_length': 120,
-    'prop_file': "smiles_prop.csv",
+    'prop_file': "smiles_prop.txt",
     'mean': 0.0,
     'stddev': 1.0,
     'num_epochs': 100,
