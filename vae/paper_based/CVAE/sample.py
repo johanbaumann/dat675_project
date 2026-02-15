@@ -6,7 +6,7 @@ from rdkit import Chem
 from rdkit.Chem.Descriptors import ExactMolWt
 from rdkit.Chem.Crippen import MolLogP
 from rdkit.Chem.rdMolDescriptors import CalcTPSA
-
+import pandas as pd
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', help='batch_size', type=int, default=128)
 parser.add_argument('--num_iteration', help='num_iteration', type=int, default=10)
@@ -79,10 +79,49 @@ print ('number of generate smiles (after remove duplicated ones) : ', len(smiles
 ms = [Chem.MolFromSmiles(s) for s in smiles]
 ms = [m for m in ms if m is not None]
 print ('number of valid smiles : ', len(ms))
-with open(config['result_filename'], 'w') as w:
-    w.write('smiles\tMW\tLogP\tTPSA\n')
-    for m in ms:
-        try:
-            w.write('%s\t%.3f\t%.3f\t%.3f\n' %(Chem.MolToSmiles(m), ExactMolWt(m), MolLogP(m), CalcTPSA(m)))
-        except:
-            continue            
+
+
+def avg_mv(mols:list) -> float:
+    return sum([ExactMolWt(m) for m in mols])/len(mols)
+
+def avg_logp(mols:list) -> float:
+    return sum([MolLogP(m) for m in mols])/len(mols)
+
+
+smiles = [Chem.MolToSmiles(m) for m in ms]
+mw = [ExactMolWt(m) for m in ms]
+logp = [MolLogP(m) for m in ms]
+tpsa = [CalcTPSA(m) for m in ms]
+
+df = pd.DataFrame({
+    'smiles': smiles,
+    'MW': mw,
+    'LogP': logp,
+    'TPSA': tpsa
+})
+
+print(df.describe())
+
+print('average MW : ', avg_mv(ms))
+print('average LogP : ', avg_logp(ms))
+
+
+
+
+
+
+# save smiles and properties to file
+df.to_csv(config['result_filename'], index=False)
+
+
+
+
+#
+#
+#with open(config['result_filename'], 'w') as w:
+#    w.write('smiles\tMW\tLogP\tTPSA\n')
+#    for m in ms:
+#        try:
+#            w.write('%s\t%.3f\t%.3f\t%.3f\n' %(Chem.MolToSmiles(m), ExactMolWt(m), MolLogP(m), CalcTPSA(m)))
+#        except:
+#            continue            

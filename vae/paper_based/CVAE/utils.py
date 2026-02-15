@@ -102,6 +102,9 @@ def accuracy(arr1, arr2, length):
 
     return float(count1/float(total)), float(count2/count3)
 
+
+
+
 def load_data(n, seq_length):
     import collections
     f = open(n)
