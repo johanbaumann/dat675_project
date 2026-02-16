@@ -44,6 +44,7 @@ config = {
     'lr': 0.0001
 }
 
+# override config with command line arguments
 for key in config:
     value = getattr(args, key, None)
     if value is not None:
