@@ -3,16 +3,19 @@
 # Conditional VAE for molecular generation (PyTorch)
 
 Reference paper:
+
 - https://jcheminf.biomedcentral.com/articles/10.1186/s13321-018-0286-7
 - https://arxiv.org/abs/1806.05805
 
 This repository now contains an extended implementation that supports both:
+
 - `lstm` CVAE (paper-style baseline), and
 - `transformer` CVAE (your extension).
 
 ## What is different from the original paper implementation
 
 Your modifications in this repo include:
+
 - Dual architecture switch in one `CVAE` class: `model_mode = lstm | transformer`.
 - Saved training/model recreation config (`training_config.json`) during training.
 - Sampling that can auto-load training config from the checkpoint folder (no manual architecture retyping).
@@ -37,6 +40,7 @@ Set input/output filenames in the `args` dict at the top of `cal_prop.py`.
 ```
 
 Supported descriptor names:
+
 - `MW`
 - `LogP`
 - `TPSA`
@@ -68,9 +72,14 @@ For Transformer mode:
 'transformer_heads': 8,
 'transformer_ff_size': 2048,
 'transformer_dropout': 0.1,
+'use_amp': True,
+'amp_dtype': 'float16',  # or 'bfloat16'
 ```
 
 In Transformer mode, embedding dimension is driven by `latent_size` (can be much smaller than `unit_size`).
+
+AMP mixed precision is enabled by default on CUDA (`use_amp=True`) and controlled by `amp_dtype`.
+If CUDA is unavailable, training automatically falls back to full precision.
 
 ### Run training
 
@@ -85,6 +94,7 @@ No external config file is required to start training.
 ### Training outputs
 
 Each run saves:
+
 - checkpoint: `save_dir/model_.ckpt-<epoch>.pt`
 - training history: `save_dir/history.csv`
 - model recreation config: `save_dir/training_config.json`
@@ -92,6 +102,7 @@ Each run saves:
 ## 3) Generate molecules (sampling)
 
 `sample.py` now uses an internal config block. Set:
+
 - `save_file` to a trained checkpoint path,
 - `target_prop` to desired property values in the same order as `cal_prop.py` `args["properties"]`.
 

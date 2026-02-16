@@ -7,10 +7,16 @@ import torch
 from copy import deepcopy
 
 
+def log_cuda_mem(prefix: str = "") -> None:
+    if torch.cuda.is_available():
+        alloc = torch.cuda.memory_allocated() / (1024**2)
+        reserved = torch.cuda.memory_reserved() / (1024**2)
+        print(f"{prefix} cuda_mem_allocated={alloc:.1f} MiB reserved={reserved:.1f} MiB")
+
 # Single source of truth for run configuration.
 # Edit values here directly; CLI arguments are intentionally disabled.
 config = {
-    'batch_size': 128,
+    'batch_size': 64,
     'latent_size': 200, # latent vector size; also Transformer token embedding size
     'unit_size': 512, # hidden size (LSTM) / internal Transformer d_model width
     'n_rnn_layer': 2, # number of RNN layers in the encoder and decoder
@@ -29,6 +35,8 @@ config = {
     'early_stopping_restore_best': True,
     'optimizer': 'adamw',  # 'adam' or 'adamw'
     'weight_decay': 0.01,
+    'use_amp': True,
+    'amp_dtype': 'float16',  # 'float16' or 'bfloat16'
     'use_reduce_lr_on_plateau': True,
     'lr_plateau_factor': 0.5,
     'lr_plateau_patience': 5,
@@ -155,6 +163,8 @@ for epoch in range(config['num_epochs']):
 
     train_loss = np.mean(np.array(train_loss))
     test_loss = np.mean(np.array(test_loss))
+    
+    log_cuda_mem(prefix=f"[epoch {epoch}]")
 
     if not np.isfinite(train_loss) or not np.isfinite(test_loss):
         print(f'non-finite loss detected at epoch {epoch} (train={train_loss}, test={test_loss}), stopping early')

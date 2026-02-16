@@ -15,5 +15,7 @@
   "patientce": 10,
   "transformer_heads": 8,
   "transformer_ff_size": 128,
+  "use_amp": true,
+  "amp_dtype": "float16",
   "transformer_dropout": 0.1
 }

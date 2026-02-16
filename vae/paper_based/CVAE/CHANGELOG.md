@@ -16,6 +16,8 @@ All notable changes to this project are documented in this file.
 - `utils.py`: Added reusable utility helpers `ensure_dir(...)` and `split_train_test(...)` used by training flow.
 - `utils.py`: Added `compose_train_config_from_dict(...)` for validating/normalizing a direct in-file config dictionary.
 - `train.py`: Added in-file config controls for `optimizer` (`adam`/`adamw`), optional `ReduceLROnPlateau`, and robust early stopping parameters.
+- `train.py` / `utils.py`: Added mixed-precision config keys `use_amp` and `amp_dtype` (`float16`/`bfloat16`) to defaults and normalization paths.
+- `model.py`: Added AMP training support with CUDA autocast and GradScaler integration for stable mixed-precision updates.
 - `sample.py`: Added `--num_unique` (and `--max_batches` safety cap) to keep generating batches until a target number of **unique, valid** molecules is collected.
 - `sample.py`: Added generation quality reporting with total generated count, accepted count, not-ok share, and breakdown (`invalid_or_empty`, `in_training`, `duplicate`).
 - `utils.py`: Added `load_training_canonical_smiles(...)` and `collect_new_unique_from_raw(...)` helper utilities.
@@ -30,6 +32,7 @@ All notable changes to this project are documented in this file.
 - `train.py`: Primary training workflow now uses a single editable `config` dictionary inside the file (no external JSON or CLI arguments required).
 - `train.py`: Early stopping now uses robust best-loss tracking (`best_epoch`, `epochs_without_improvement`, `min_delta`) and optional best-weight restore before final save.
 - `train.py`: Training history now also logs learning rate per epoch (`lr`).
+- `model.py`: Checkpoint payloads now also persist GradScaler state for AMP-enabled training resume.
 - `model.py`: `CVAE.save(...)` now stores optional `model_config` metadata in checkpoint payload.
 - `sample.py`: Refactored generation flow into small helper functions and clarified comments.
 - `sample.py`: Removed command-line argument parsing and switched to a config-only workflow (single editable `config` block).

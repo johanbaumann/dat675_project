@@ -1,5 +1,6 @@
 import os
 import inspect
+import contextlib
 import numpy as np
 import torch
 import torch.nn as nn
@@ -88,11 +89,18 @@ class CVAE(nn.Module):
         self.model_mode = self._get_arg_or_default(args, 'model_mode', 'lstm').lower()
         self.optimizer_name = self._get_arg_or_default(args, 'optimizer', 'adam').lower()
         self.weight_decay = float(self._get_arg_or_default(args, 'weight_decay', 0.0))
+        self.use_amp = bool(self._get_arg_or_default(args, 'use_amp', True))
+        self.amp_dtype_name = str(self._get_arg_or_default(args, 'amp_dtype', 'float16')).lower()
         self.transformer_heads = self._get_arg_or_default(args, 'transformer_heads', 8)
         self.transformer_ff_size = self._get_arg_or_default(args, 'transformer_ff_size', self.unit_size * 4)
         self.transformer_dropout = self._get_arg_or_default(args, 'transformer_dropout', 0.1)
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if self.amp_dtype_name not in ('float16', 'bfloat16'):
+            raise ValueError("amp_dtype must be either 'float16' or 'bfloat16'.")
+        self.amp_dtype = torch.float16 if self.amp_dtype_name == 'float16' else torch.bfloat16
+        self.amp_enabled = bool(self.use_amp and self.device.type == 'cuda')
+        self.use_grad_scaler = bool(self.amp_enabled and self.amp_dtype == torch.float16)
 
         # embedding layer to convert input characters to dense vectors
         # embedes using 
@@ -157,9 +165,16 @@ class CVAE(nn.Module):
         else:
             raise ValueError(f"Unsupported optimizer='{self.optimizer_name}'. Use 'adam' or 'adamw'.")
 
+        self.grad_scaler = torch.cuda.amp.GradScaler(enabled=self.use_grad_scaler)
 
         self.to(self.device)
-        print(f'Network Ready ({self.model_mode})')
+        amp_status = f"enabled dtype={self.amp_dtype_name}" if self.amp_enabled else "disabled"
+        print(f'Network Ready ({self.model_mode}, amp={amp_status})')
+
+    def _autocast_context(self):
+        if self.amp_enabled:
+            return torch.autocast(device_type='cuda', dtype=self.amp_dtype)
+        return contextlib.nullcontext()
 
     @staticmethod
     def _get_arg(args:dict, key:str):
@@ -300,16 +315,23 @@ class CVAE(nn.Module):
         self.train(True)
         x_t, y_t, l_t, c_t = self._to_tensor_batch(x, y, l, c)
         self.optimizer.zero_grad()
-        loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
-        loss.backward()
-        self.optimizer.step()
+        with self._autocast_context():
+            loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
+        if self.use_grad_scaler:
+            self.grad_scaler.scale(loss).backward()
+            self.grad_scaler.step(self.optimizer)
+            self.grad_scaler.update()
+        else:
+            loss.backward()
+            self.optimizer.step()
         return float(loss.item())
 
     def test_batch(self, x:np.ndarray, y:np.ndarray, l:np.ndarray, c:np.ndarray) -> float:
         self.train(False)
         x_t, y_t, l_t, c_t = self._to_tensor_batch(x, y, l, c)
         with torch.no_grad():
-            loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
+            with self._autocast_context():
+                loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
         return float(loss.item())
 
     def save(self, ckpt_path:str, global_step:int, model_config:Optional[dict]=None):
@@ -319,6 +341,7 @@ class CVAE(nn.Module):
             {
                 'model_state_dict': self.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
+                'grad_scaler_state_dict': self.grad_scaler.state_dict(),
                 'global_step': global_step,
                 'model_config': model_config,
             },
@@ -326,15 +349,17 @@ class CVAE(nn.Module):
         )
 
     def restore(self, ckpt_path:str):
-        load_kwargs = {'map_location': self.device}
         # Newer PyTorch supports weights_only; set it explicitly to avoid warning-prone implicit behavior.
         if 'weights_only' in inspect.signature(torch.load).parameters:
-            load_kwargs['weights_only'] = True
-        checkpoint = torch.load(ckpt_path, **load_kwargs)
+            checkpoint = torch.load(ckpt_path, map_location=self.device, weights_only=True)
+        else:
+            checkpoint = torch.load(ckpt_path, map_location=self.device)
         if 'model_state_dict' in checkpoint:
             self.load_state_dict(checkpoint['model_state_dict'])
             if 'optimizer_state_dict' in checkpoint:
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'grad_scaler_state_dict' in checkpoint and self.use_grad_scaler:
+                self.grad_scaler.load_state_dict(checkpoint['grad_scaler_state_dict'])
         else:
             self.load_state_dict(checkpoint)
 
