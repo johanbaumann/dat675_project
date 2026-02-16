@@ -40,12 +40,12 @@ def apply_training_preset(cfg:dict) -> dict:
             'model_mode': 'transformer',
             'optimizer': 'adamw',
             'weight_decay': 0.0,
-            'use_amp': False,
+            'use_amp': True,
             'kl_anneal_enabled': True,
-            'kl_anneal_start_beta': 0.0,
+            'kl_anneal_start_beta': 0.01,
             'kl_anneal_max_beta': 1.0,
-            'kl_anneal_hold_epochs': 2,
-            'kl_anneal_warmup_epochs': 20,
+            'kl_anneal_hold_epochs': 0,
+            'kl_anneal_warmup_epochs': 50,
             'diagnostics_every': 1,
         })
         print('training preset: stable_transformer (applied)')
@@ -54,50 +54,67 @@ def apply_training_preset(cfg:dict) -> dict:
     raise ValueError("training_preset must be one of: 'custom', 'stable_transformer'")
 
 # Single source of truth for run configuration.
-# Edit values here directly; CLI arguments are intentionally disabled.
+# Grouped sections are easier to edit; utils will flatten this to legacy keys.
 config = {
-    'training_preset': 'stable_transformer',  # 'custom' or 'stable_transformer'
-    'batch_size': 128,
-    'latent_size': 200, # latent vector size; also Transformer token embedding size
-    'unit_size': 512, # hidden size (LSTM) / internal Transformer d_model width
-    'n_rnn_layer': 2, # number of RNN layers in the encoder and decoder
-    'seq_length': 120, # maximum length of the input and output sequences (smiles strings)
-    'prop_file': 'prop_mw_logp.txt',
-    'mean': 0.0,
-    'stddev': 1.0,
-    'num_epochs': 100,
-    'lr': 0.0001,
-    'num_prop': None,
-    'save_dir': 'save/',
-    'save_every': 10, # save a checkpoint every N epochs
-    'patientce': 10,
-    'early_stopping_patience': 10,
-    'early_stopping_min_delta': 0.0,
-    'early_stopping_restore_best': True,
-    'optimizer': 'adamw',  # 'adam' or 'adamw'
-    'weight_decay': 0.0,
-    'use_amp': False,
-    'amp_dtype': 'bfloat16',  # 'float16' or 'bfloat16'
-    'grad_clip_norm': 8.0, # max norm for gradient clipping (to prevent exploding gradients)
-    'use_reduce_lr_on_plateau': True,
-    'lr_plateau_factor': 0.5,
-    'lr_plateau_patience': 5,
-    'lr_plateau_threshold': 1e-4,
-    'lr_plateau_min_lr': 1e-6,
-    'model_mode': 'transformer',  # 'lstm' or 'transformer'
-    'transformer_heads': 8, # number of heads in the multi-head attention mechanism
-    'transformer_ff_size': 1024, # dimension of the feedforward network in the transformer layers
-    'transformer_dropout': 0.15, # dropout rate for the transformer layers
-    'train_ratio': 0.75, # ratio of data to use for training (the rest is used for testing)
-    'kl_anneal_enabled': True,
-    'kl_anneal_start_beta': 0.0,
-    'kl_anneal_max_beta': 1.0,
-    'kl_anneal_hold_epochs': 2,
-    'kl_anneal_warmup_epochs': 20,
-    'diagnostics_every': 1,
+    'training_preset': 'custom',  # 'custom' or 'stable_transformer'
+    'data': {
+        'prop_file': 'prop_mw_logp.txt',
+        'seq_length': 120,
+        'train_ratio': 0.75,
+    },
+    'model': {
+        'mode': 'transformer',  # 'lstm' or 'transformer'
+        'latent_size': 200,
+        'unit_size': 512,
+        'n_rnn_layer': 2,
+        'mean': 0.0,
+        'stddev': 1.0,
+        'num_prop': None,  # inferred from property file
+    },
+    'transformer': {
+        'heads': 8,
+        'ff_size': 1024,
+        'dropout': 0.15,
+    },
+    'optimization': {
+        'optimizer': 'adamw',
+        'lr': 0.0001,
+        'weight_decay': 0.0,
+        'use_amp': True,
+        'amp_dtype': 'float16',
+        'grad_clip_norm': 8.0,
+    },
+    'training': {
+        'batch_size': 64,
+        'num_epochs': 100,
+        'save_dir': 'save/',
+        'save_every': 10,
+        'early_stopping_patience': 10,
+        'early_stopping_min_delta': 0.0,
+        'early_stopping_restore_best': True,
+    },
+    'scheduler': {
+        'enabled': True,
+        'factor': 0.5,
+        'patience': 5,
+        'threshold': 1e-4,
+        'min_lr': 1e-6,
+    },
+    'kl': {
+        'enabled': True,
+        'start_beta': 0.01,
+        'max_beta': 1.0,
+        'hold_epochs': 0,
+        'warmup_epochs': 50,
+    },
+    'diagnostics': {
+        'every': 1,
+    },
 }
 
+config = compose_train_config_from_dict(config)
 config = apply_training_preset(config)
+config = compose_train_config_from_dict(config)
 
 # check for gpu
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -108,10 +125,6 @@ if config['model_mode'] == 'transformer':
     if config['unit_size'] % config['transformer_heads'] != 0:
         print(f"Possible values: unit_size={config['unit_size']}, transformer_heads={config['transformer_heads']}")
         raise ValueError(f'For transformer model, unit_size ({config["unit_size"]}) must be divisible by transformer_heads ({config["transformer_heads"]}).')
-
-
-# convert config dict to a dataclass for better attribute access and type checking
-config = compose_train_config_from_dict(config)
 
 
 print (config)
@@ -182,10 +195,6 @@ start_time = time.time()
 for epoch in range(config['num_epochs']):
 
     st = time.time()
-    # Learning rate scheduling 
-    #model.assign_lr(learning_rate * (decay_rate ** epoch))
-    # lr scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
-    # optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
     train_loss = []
     test_loss = []
     train_recon = []
@@ -200,20 +209,7 @@ for epoch in range(config['num_epochs']):
     test_kl = []
 
     beta = get_kl_beta(epoch, config)
-    
- 
-    st = time.time()
-    
-    """
-    train:
-    n: random batch of data
-    x: input_smiles 
-    y: output_smiles, with added X(start token) and E(end-token) tokens
-    l: lenght of input smiles
-    c: properties (Conditions) of generation
-    
-    
-    """
+
     train_perm = np.random.permutation(len(train_molecules_input))
     for start in range(0, len(train_perm), config['batch_size']):
         batch_idx = train_perm[start:start + config['batch_size']]
@@ -222,6 +218,8 @@ for epoch in range(config['num_epochs']):
         l = train_length[batch_idx]
         c = train_labels[batch_idx]
         metrics = model.train_batch(x, y, l, c, beta=beta, return_metrics=True)
+        if not isinstance(metrics, dict):
+            raise TypeError('train_batch(return_metrics=True) must return a metrics dict.')
         train_loss.append(metrics['total_loss'])
         train_recon.append(metrics['recon_loss'])
         train_kl.append(metrics['kl_loss'])
@@ -230,8 +228,7 @@ for epoch in range(config['num_epochs']):
         train_log_sigma_min.append(metrics['log_sigma_min'])
         train_log_sigma_max.append(metrics['log_sigma_max'])
         train_grad_norm.append(metrics['grad_norm'])
-    # test on test set..
-    # there is data leakage here, but we just want to see the trend of loss, not the actual performance of the model.
+    # test on test set (trend monitoring).
     test_perm = np.random.permutation(len(test_molecules_input))
     for start in range(0, len(test_perm), config['batch_size']):
         batch_idx = test_perm[start:start + config['batch_size']]
@@ -240,6 +237,8 @@ for epoch in range(config['num_epochs']):
         l = test_length[batch_idx]
         c = test_labels[batch_idx]
         metrics = model.test_batch(x, y, l, c, beta=beta, return_metrics=True)
+        if not isinstance(metrics, dict):
+            raise TypeError('test_batch(return_metrics=True) must return a metrics dict.')
         test_loss.append(metrics['total_loss'])
         test_recon.append(metrics['recon_loss'])
         test_kl.append(metrics['kl_loss'])
@@ -274,8 +273,6 @@ for epoch in range(config['num_epochs']):
     else:
         epochs_without_improvement += 1
 
-    #early stopping if no improvment for a while
-    # 
     if epochs_without_improvement >= config['early_stopping_patience']:
         print(
             f'early stop at epoch {epoch} since no improvement for '
@@ -312,19 +309,6 @@ for epoch in range(config['num_epochs']):
             f"{np.mean(train_log_sigma_min):.4f}/{np.mean(train_log_sigma_max):.4f} "
             f"grad_norm={np.mean(train_grad_norm):.4f}"
         )
-
-    
-    
-    # logic to calculate expected time remaining, based on time taken and epochs
-    
-    #if epoch > 0:
-
-    #    print(f'{epoch}\t{train_loss:.3f}\t{test_loss:.3f}\t{current_lr:.6f}\t{passed_time:.3f}\tETA: {expected_time_remaining/60:.2f} min')
-
-   
-
-    # save model!
-    # only save for the last epoch...
 
     if epoch == config['num_epochs']-1 or (epoch + 1) % config['save_every'] == 0:
         if config['early_stopping_restore_best'] and best_state_dict is not None:

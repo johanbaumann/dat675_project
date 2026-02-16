@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- `train.py` / `utils.py`: Training config now supports grouped sections (`data`, `model`, `transformer`, `optimization`, `training`, `scheduler`, `kl`, `diagnostics`) while remaining backward compatible with legacy flat keys.
+- `train.py`: Simplified default config and aligned KL annealing defaults to safer startup values (`start_beta=0.01`, `hold_epochs=0`, `warmup_epochs=50`).
+- `train.py`: `stable_transformer` preset now keeps AMP enabled and applies the safer KL schedule.
+
+### Fixed
+
+- `model.py`: Transformer decoder path no longer passes `tgt_key_padding_mask`, avoiding all-masked-query NaN behavior.
+- `model.py`: Under AMP, Transformer encoder/decoder attention blocks now execute in fp32 via selective autocast disable, reducing fp16/bf16 attention-softmax instability.
+
 ### Added
 
 - `model.py`: Added dual architecture support in `CVAE` via `model_mode` (`lstm` or `transformer`) with shared training/sampling API.

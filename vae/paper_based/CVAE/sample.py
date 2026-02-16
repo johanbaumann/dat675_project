@@ -14,6 +14,7 @@ from rdkit.Chem.rdMolDescriptors import CalcTPSA
 from model import CVAE
 from utils import (
     collect_new_unique_from_raw,
+    compose_train_config_from_dict,
     convert_to_smiles,
     infer_training_config_path,
     load_data,
@@ -229,8 +230,10 @@ if __name__ == '__main__':
         training_config = load_json(training_config_path)
         print(f'loaded training config from: {training_config_path}')
 
+        # Support both grouped and legacy flat training config formats.
+        model_config = compose_train_config_from_dict(training_config)
+
         # Allow a few runtime overrides when needed (batch_size/seq_length/mean/stddev/prop_file).
-        model_config = dict(training_config)
         for key in ['batch_size', 'prop_file', 'seq_length', 'mean', 'stddev']:
             if config.get(key) is not None:
                 model_config[key] = config[key]

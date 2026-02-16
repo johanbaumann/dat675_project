@@ -55,31 +55,25 @@ Training is configured directly inside `train.py` using a single `config` dictio
 
 ### Configure in `train.py`
 
-Edit the `config` block near the top of `train.py`.
-
-For LSTM mode:
+Edit the grouped `config` block near the top of `train.py`.
 
 ```python
-'model_mode': 'lstm'
+config = {
+	'training_preset': 'custom',
+	'data': {'prop_file': 'prop_mw_logp.txt', 'seq_length': 120, 'train_ratio': 0.75},
+	'model': {'mode': 'transformer', 'latent_size': 200, 'unit_size': 512, 'n_rnn_layer': 2},
+	'transformer': {'heads': 8, 'ff_size': 1024, 'dropout': 0.15},
+	'optimization': {'optimizer': 'adamw', 'lr': 1e-4, 'use_amp': True, 'amp_dtype': 'float16'},
+	'training': {'batch_size': 64, 'num_epochs': 100, 'save_dir': 'save/'},
+	'scheduler': {'enabled': True, 'factor': 0.5, 'patience': 5, 'threshold': 1e-4, 'min_lr': 1e-6},
+	'kl': {'enabled': True, 'start_beta': 0.01, 'max_beta': 1.0, 'hold_epochs': 0, 'warmup_epochs': 50},
+	'diagnostics': {'every': 1},
+}
 ```
 
-For Transformer mode:
+Grouped config is flattened internally, so legacy flat keys are still supported for compatibility.
 
-```python
-'model_mode': 'transformer',
-'latent_size': 200,      # token embedding width for Transformer
-'unit_size': 512,        # internal Transformer d_model width
-'transformer_heads': 8,
-'transformer_ff_size': 2048,
-'transformer_dropout': 0.1,
-'use_amp': True,
-'amp_dtype': 'float16',  # or 'bfloat16'
-```
-
-In Transformer mode, embedding dimension is driven by `latent_size` (can be much smaller than `unit_size`).
-
-AMP mixed precision is enabled by default on CUDA (`use_amp=True`) and controlled by `amp_dtype`.
-If CUDA is unavailable, training automatically falls back to full precision.
+In Transformer mode, embedding width is still `latent_size`, while internal attention/FFN width is `unit_size`.
 
 ### Run training
 
@@ -123,6 +117,12 @@ python sample.py
 ```
 
 Output is written to `result_filename` (default `result.txt`).
+
+## Numerical stability notes
+
+- Transformer decoder no longer receives `tgt_key_padding_mask`; reconstruction masking is handled by sequence-length loss masking.
+- Transformer encoder/decoder blocks run in fp32 under AMP (`selective autocast`) to avoid fp16 softmax/masked-attention NaNs.
+- KL annealing defaults are set to safer values for early training: `start_beta=0.01`, `hold_epochs=0`, `warmup_epochs=50`.
 
 ## Notes
 

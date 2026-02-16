@@ -8,6 +8,7 @@ import importlib
 
 
 TRAIN_CONFIG_DEFAULTS = {
+    'training_preset': 'custom',
     'batch_size': 128,
     'latent_size': 200,
     'unit_size': 512,
@@ -39,7 +40,197 @@ TRAIN_CONFIG_DEFAULTS = {
     'transformer_ff_size': 2048,
     'transformer_dropout': 0.1,
     'train_ratio': 0.75,
+    'save_every': 10,
+    'diagnostics_every': 1,
+    'kl_anneal_enabled': True,
+    'kl_anneal_start_beta': 0.0,
+    'kl_anneal_max_beta': 1.0,
+    'kl_anneal_hold_epochs': 0,
+    'kl_anneal_warmup_epochs': 50,
 }
+
+
+def _flatten_grouped_train_config(config_override:dict) -> dict:
+    """Map grouped config sections to legacy flat keys.
+
+    Supported top-level grouped sections:
+    - data
+    - model
+    - transformer
+    - optimization
+    - training
+    - scheduler
+    - kl
+    - diagnostics
+    """
+    flat = {}
+
+    data = config_override.get('data')
+    if isinstance(data, dict):
+        if 'prop_file' in data:
+            flat['prop_file'] = data['prop_file']
+        if 'seq_length' in data:
+            flat['seq_length'] = data['seq_length']
+        if 'train_ratio' in data:
+            flat['train_ratio'] = data['train_ratio']
+
+    model = config_override.get('model')
+    if isinstance(model, dict):
+        if 'mode' in model:
+            flat['model_mode'] = model['mode']
+        if 'latent_size' in model:
+            flat['latent_size'] = model['latent_size']
+        if 'unit_size' in model:
+            flat['unit_size'] = model['unit_size']
+        if 'n_rnn_layer' in model:
+            flat['n_rnn_layer'] = model['n_rnn_layer']
+        if 'num_prop' in model:
+            flat['num_prop'] = model['num_prop']
+        if 'mean' in model:
+            flat['mean'] = model['mean']
+        if 'stddev' in model:
+            flat['stddev'] = model['stddev']
+
+    transformer = config_override.get('transformer')
+    if isinstance(transformer, dict):
+        if 'heads' in transformer:
+            flat['transformer_heads'] = transformer['heads']
+        if 'ff_size' in transformer:
+            flat['transformer_ff_size'] = transformer['ff_size']
+        if 'dropout' in transformer:
+            flat['transformer_dropout'] = transformer['dropout']
+
+    optimization = config_override.get('optimization')
+    if isinstance(optimization, dict):
+        if 'optimizer' in optimization:
+            flat['optimizer'] = optimization['optimizer']
+        if 'lr' in optimization:
+            flat['lr'] = optimization['lr']
+        if 'weight_decay' in optimization:
+            flat['weight_decay'] = optimization['weight_decay']
+        if 'grad_clip_norm' in optimization:
+            flat['grad_clip_norm'] = optimization['grad_clip_norm']
+        if 'use_amp' in optimization:
+            flat['use_amp'] = optimization['use_amp']
+        if 'amp_dtype' in optimization:
+            flat['amp_dtype'] = optimization['amp_dtype']
+
+    training = config_override.get('training')
+    if isinstance(training, dict):
+        if 'batch_size' in training:
+            flat['batch_size'] = training['batch_size']
+        if 'num_epochs' in training:
+            flat['num_epochs'] = training['num_epochs']
+        if 'save_dir' in training:
+            flat['save_dir'] = training['save_dir']
+        if 'save_every' in training:
+            flat['save_every'] = training['save_every']
+        if 'early_stopping_patience' in training:
+            flat['early_stopping_patience'] = training['early_stopping_patience']
+        if 'early_stopping_min_delta' in training:
+            flat['early_stopping_min_delta'] = training['early_stopping_min_delta']
+        if 'early_stopping_restore_best' in training:
+            flat['early_stopping_restore_best'] = training['early_stopping_restore_best']
+
+    scheduler = config_override.get('scheduler')
+    if isinstance(scheduler, dict):
+        if 'enabled' in scheduler:
+            flat['use_reduce_lr_on_plateau'] = scheduler['enabled']
+        if 'factor' in scheduler:
+            flat['lr_plateau_factor'] = scheduler['factor']
+        if 'patience' in scheduler:
+            flat['lr_plateau_patience'] = scheduler['patience']
+        if 'threshold' in scheduler:
+            flat['lr_plateau_threshold'] = scheduler['threshold']
+        if 'min_lr' in scheduler:
+            flat['lr_plateau_min_lr'] = scheduler['min_lr']
+
+    kl = config_override.get('kl')
+    if isinstance(kl, dict):
+        if 'enabled' in kl:
+            flat['kl_anneal_enabled'] = kl['enabled']
+        if 'start_beta' in kl:
+            flat['kl_anneal_start_beta'] = kl['start_beta']
+        if 'max_beta' in kl:
+            flat['kl_anneal_max_beta'] = kl['max_beta']
+        if 'hold_epochs' in kl:
+            flat['kl_anneal_hold_epochs'] = kl['hold_epochs']
+        if 'warmup_epochs' in kl:
+            flat['kl_anneal_warmup_epochs'] = kl['warmup_epochs']
+
+    diagnostics = config_override.get('diagnostics')
+    if isinstance(diagnostics, dict):
+        if 'every' in diagnostics:
+            flat['diagnostics_every'] = diagnostics['every']
+
+    return flat
+
+
+def _normalize_train_config(config_override:dict) -> dict:
+    config = get_train_config_defaults()
+    grouped = _flatten_grouped_train_config(config_override)
+    config.update(grouped)
+
+    # Flat keys still override grouped sections.
+    for key in config.keys():
+        if key in config_override:
+            config[key] = config_override[key]
+
+    # Legacy typo kept for backward compatibility.
+    if 'patience' in config_override and 'patientce' not in config_override:
+        config['patientce'] = config_override['patience']
+
+    config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
+    if config['model_mode'] not in ('lstm', 'transformer'):
+        raise ValueError("model_mode must be either 'lstm' or 'transformer'")
+    config['optimizer'] = str(config.get('optimizer', 'adam')).lower()
+    if config['optimizer'] not in ('adam', 'adamw'):
+        raise ValueError("optimizer must be either 'adam' or 'adamw'")
+    config['amp_dtype'] = str(config.get('amp_dtype', 'float16')).lower()
+    if config['amp_dtype'] not in ('float16', 'bfloat16'):
+        raise ValueError("amp_dtype must be either 'float16' or 'bfloat16'")
+
+    config['training_preset'] = str(config.get('training_preset', 'custom')).strip().lower()
+    config['batch_size'] = int(config['batch_size'])
+    config['latent_size'] = int(config['latent_size'])
+    config['unit_size'] = int(config['unit_size'])
+    config['n_rnn_layer'] = int(config['n_rnn_layer'])
+    config['seq_length'] = int(config['seq_length'])
+    config['prop_file'] = str(config['prop_file'])
+    config['mean'] = float(config['mean'])
+    config['stddev'] = float(config['stddev'])
+    config['num_epochs'] = int(config['num_epochs'])
+    config['lr'] = float(config['lr'])
+    config['grad_clip_norm'] = float(config.get('grad_clip_norm', 1.0))
+    if config.get('num_prop') is None:
+        config['num_prop'] = None
+    else:
+        config['num_prop'] = int(config['num_prop'])
+    config['save_dir'] = str(config['save_dir'])
+    config['save_every'] = int(config.get('save_every', 10))
+    config['patientce'] = int(config.get('patientce', config.get('early_stopping_patience', 10)))
+    config['weight_decay'] = float(config.get('weight_decay', 0.0))
+    config['use_amp'] = bool(config.get('use_amp', True))
+    config['use_reduce_lr_on_plateau'] = bool(config.get('use_reduce_lr_on_plateau', False))
+    config['lr_plateau_factor'] = float(config.get('lr_plateau_factor', 0.5))
+    config['lr_plateau_patience'] = int(config.get('lr_plateau_patience', 10))
+    config['lr_plateau_threshold'] = float(config.get('lr_plateau_threshold', 1e-4))
+    config['lr_plateau_min_lr'] = float(config.get('lr_plateau_min_lr', 1e-6))
+    config['early_stopping_patience'] = int(config.get('early_stopping_patience', config['patientce']))
+    config['early_stopping_min_delta'] = float(config.get('early_stopping_min_delta', 0.0))
+    config['early_stopping_restore_best'] = bool(config.get('early_stopping_restore_best', True))
+    config['transformer_heads'] = int(config['transformer_heads'])
+    config['transformer_ff_size'] = int(config['transformer_ff_size'])
+    config['transformer_dropout'] = float(config['transformer_dropout'])
+    config['train_ratio'] = float(config.get('train_ratio', 0.75))
+    config['diagnostics_every'] = int(config.get('diagnostics_every', 1))
+    config['kl_anneal_enabled'] = bool(config.get('kl_anneal_enabled', True))
+    config['kl_anneal_start_beta'] = float(config.get('kl_anneal_start_beta', 0.0))
+    config['kl_anneal_max_beta'] = float(config.get('kl_anneal_max_beta', 1.0))
+    config['kl_anneal_hold_epochs'] = int(config.get('kl_anneal_hold_epochs', 0))
+    config['kl_anneal_warmup_epochs'] = int(config.get('kl_anneal_warmup_epochs', 50))
+
+    return config
 
 
 def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
@@ -268,114 +459,28 @@ def get_train_config_defaults() -> dict:
 
 def compose_train_config(args) -> dict:
     """Compose training config from defaults + optional JSON + CLI overrides."""
-    config = get_train_config_defaults()
+    raw = {}
 
     config_file = getattr(args, 'config_file', None)
     if config_file:
         loaded = load_json(config_file)
-        config.update(loaded)
+        if isinstance(loaded, dict):
+            raw.update(loaded)
 
-    for key in config.keys():
-        if not hasattr(args, key):
-            continue
-        value = getattr(args, key)
-        if value is not None:
-            config[key] = value
+    for key in get_train_config_defaults().keys():
+        if hasattr(args, key):
+            value = getattr(args, key)
+            if value is not None:
+                raw[key] = value
 
-    config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
-    if config['model_mode'] not in ('lstm', 'transformer'):
-        raise ValueError("model_mode must be either 'lstm' or 'transformer'")
-    config['optimizer'] = str(config.get('optimizer', 'adam')).lower()
-    if config['optimizer'] not in ('adam', 'adamw'):
-        raise ValueError("optimizer must be either 'adam' or 'adamw'")
-    config['amp_dtype'] = str(config.get('amp_dtype', 'float16')).lower()
-    if config['amp_dtype'] not in ('float16', 'bfloat16'):
-        raise ValueError("amp_dtype must be either 'float16' or 'bfloat16'")
-
-    # normalize scalar types
-    config['batch_size'] = int(config['batch_size'])
-    config['latent_size'] = int(config['latent_size'])
-    config['unit_size'] = int(config['unit_size'])
-    config['n_rnn_layer'] = int(config['n_rnn_layer'])
-    config['seq_length'] = int(config['seq_length'])
-    config['prop_file'] = str(config['prop_file'])
-    config['mean'] = float(config['mean'])
-    config['stddev'] = float(config['stddev'])
-    config['num_epochs'] = int(config['num_epochs'])
-    config['lr'] = float(config['lr'])
-    config['grad_clip_norm'] = float(config.get('grad_clip_norm', 1.0))
-    if config.get('num_prop') is None:
-        config['num_prop'] = None
-    else:
-        config['num_prop'] = int(config['num_prop'])
-    config['save_dir'] = str(config['save_dir'])
-    config['patientce'] = int(config['patientce'])
-    config['weight_decay'] = float(config.get('weight_decay', 0.0))
-    config['use_amp'] = bool(config.get('use_amp', True))
-    config['use_reduce_lr_on_plateau'] = bool(config.get('use_reduce_lr_on_plateau', False))
-    config['lr_plateau_factor'] = float(config.get('lr_plateau_factor', 0.5))
-    config['lr_plateau_patience'] = int(config.get('lr_plateau_patience', 10))
-    config['lr_plateau_threshold'] = float(config.get('lr_plateau_threshold', 1e-4))
-    config['lr_plateau_min_lr'] = float(config.get('lr_plateau_min_lr', 1e-6))
-    config['early_stopping_patience'] = int(config.get('early_stopping_patience', config['patientce']))
-    config['early_stopping_min_delta'] = float(config.get('early_stopping_min_delta', 0.0))
-    config['early_stopping_restore_best'] = bool(config.get('early_stopping_restore_best', True))
-    config['transformer_heads'] = int(config['transformer_heads'])
-    config['transformer_ff_size'] = int(config['transformer_ff_size'])
-    config['transformer_dropout'] = float(config['transformer_dropout'])
-    config['amp_dtype'] = str(config.get('amp_dtype', 'float16')).lower()
-    config['train_ratio'] = float(config.get('train_ratio', 0.75))
-    return config
+    return _normalize_train_config(raw)
 
 
 def compose_train_config_from_dict(config_override:dict) -> dict:
     """Compose training config from defaults + in-file dict overrides."""
-    config = get_train_config_defaults()
-    config.update(config_override)
-
-    config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
-    if config['model_mode'] not in ('lstm', 'transformer'):
-        raise ValueError("model_mode must be either 'lstm' or 'transformer'")
-    config['optimizer'] = str(config.get('optimizer', 'adam')).lower()
-    if config['optimizer'] not in ('adam', 'adamw'):
-        raise ValueError("optimizer must be either 'adam' or 'adamw'")
-    config['amp_dtype'] = str(config.get('amp_dtype', 'float16')).lower()
-    if config['amp_dtype'] not in ('float16', 'bfloat16'):
-        raise ValueError("amp_dtype must be either 'float16' or 'bfloat16'")
-
-    config['batch_size'] = int(config['batch_size'])
-    config['latent_size'] = int(config['latent_size'])
-    config['unit_size'] = int(config['unit_size'])
-    config['n_rnn_layer'] = int(config['n_rnn_layer'])
-    config['seq_length'] = int(config['seq_length'])
-    config['prop_file'] = str(config['prop_file'])
-    config['mean'] = float(config['mean'])
-    config['stddev'] = float(config['stddev'])
-    config['num_epochs'] = int(config['num_epochs'])
-    config['lr'] = float(config['lr'])
-    config['grad_clip_norm'] = float(config.get('grad_clip_norm', 1.0))
-    if config.get('num_prop') is None:
-        config['num_prop'] = None
-    else:
-        config['num_prop'] = int(config['num_prop'])
-    config['save_dir'] = str(config['save_dir'])
-    config['patientce'] = int(config['patientce'])
-    config['weight_decay'] = float(config.get('weight_decay', 0.0))
-    config['use_amp'] = bool(config.get('use_amp', True))
-    config['use_reduce_lr_on_plateau'] = bool(config.get('use_reduce_lr_on_plateau', False))
-    config['lr_plateau_factor'] = float(config.get('lr_plateau_factor', 0.5))
-    config['lr_plateau_patience'] = int(config.get('lr_plateau_patience', 10))
-    config['lr_plateau_threshold'] = float(config.get('lr_plateau_threshold', 1e-4))
-    config['lr_plateau_min_lr'] = float(config.get('lr_plateau_min_lr', 1e-6))
-    config['early_stopping_patience'] = int(config.get('early_stopping_patience', config['patientce']))
-    config['early_stopping_min_delta'] = float(config.get('early_stopping_min_delta', 0.0))
-    config['early_stopping_restore_best'] = bool(config.get('early_stopping_restore_best', True))
-    config['transformer_heads'] = int(config['transformer_heads'])
-    config['transformer_ff_size'] = int(config['transformer_ff_size'])
-    config['transformer_dropout'] = float(config['transformer_dropout'])
-    config['amp_dtype'] = str(config.get('amp_dtype', 'float16')).lower()
-    config['train_ratio'] = float(config.get('train_ratio', 0.75))
-    return config
+    if config_override is None:
+        config_override = {}
+    return _normalize_train_config(config_override)
 
 
 def build_train_config(args) -> dict:

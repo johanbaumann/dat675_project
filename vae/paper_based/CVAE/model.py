@@ -187,6 +187,11 @@ class CVAE(nn.Module):
             return torch.autocast(device_type='cuda', dtype=self.amp_dtype)
         return contextlib.nullcontext()
 
+    def _transformer_fp32_context(self):
+        if self.amp_enabled:
+            return torch.autocast(device_type='cuda', enabled=False)
+        return contextlib.nullcontext()
+
     @staticmethod
     def _get_arg(args:dict, key:str):
         if isinstance(args, dict):
@@ -262,7 +267,11 @@ class CVAE(nn.Module):
             encoder_input = self.positional_encoding(encoder_input)
 
             src_padding_mask = self._build_padding_mask(l, x_emb.size(1), x.device)
-            h_seq = self.encoder(encoder_input, src_key_padding_mask=src_padding_mask)
+            with self._transformer_fp32_context():
+                h_seq = self.encoder(
+                    encoder_input.float(),
+                    src_key_padding_mask=src_padding_mask,
+                )
 
             last_indices = (l - 1).clamp(min=0)
             h_last = h_seq[torch.arange(h_seq.size(0), device=h_seq.device), last_indices]
@@ -289,17 +298,14 @@ class CVAE(nn.Module):
             decoder_input = self.positional_encoding(decoder_input)
 
             seq_len = x_emb.size(1)
-            tgt_padding_mask = None
-            if lengths is not None:
-                tgt_padding_mask = self._build_padding_mask(lengths, seq_len, x.device)
-
             memory = self.memory_proj(torch.cat([z, c], dim=-1)).unsqueeze(1)
-            y = self.decoder(
-                tgt=decoder_input,
-                memory=memory,
-                tgt_mask=self._causal_mask(seq_len, x.device),
-                tgt_key_padding_mask=tgt_padding_mask,
-            )
+            with self._transformer_fp32_context():
+                y = self.decoder(
+                    tgt=decoder_input.float(),
+                    memory=memory.float(),
+                    tgt_mask=self._causal_mask(seq_len, x.device),
+                    tgt_key_padding_mask=None,
+                )
             state = None
 
         logits = self.output_layer(y)
