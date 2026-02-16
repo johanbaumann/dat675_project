@@ -19,6 +19,7 @@ import argparse
 args = {
     'input_filename' : 'smiles.txt',
     'output_filename' : 'smiles_prop.txt',
+    "properties": ['MW', 'LogP', 'TPSA'], # properties to calculate (MW, LogP, TPSA, NumHBD, NumHBA)
     'ncpus' : 1
 }
 
@@ -28,9 +29,14 @@ args = {
 def cal_prop(s: str) -> tuple:
     m = Chem.MolFromSmiles(s)
     if m is None : return None
-    return Chem.MolToSmiles(m), ExactMolWt(m), MolLogP(m), CalcTPSA(m)
-    #return Chem.MolToSmiles(m), ExactMolWt(m), MolLogP(m), CalcNumHBD(m), CalcNumHBA(m), CalcTPSA(m)
-
+    props = []
+    if 'MW' in args['properties']:
+        props.append(ExactMolWt(m))
+    if 'LogP' in args['properties']:
+        props.append(MolLogP(m))
+    if 'TPSA' in args['properties']:
+        props.append(CalcTPSA(m))
+    return Chem.MolToSmiles(m), *props
 def read_smiles(filename: str) -> list:
     with open(filename) as f:
         smiles = f.read().split('\n')[:-1]

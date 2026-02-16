@@ -27,6 +27,10 @@ n_rnn_layer: number of RNN layers in encoder and decoder
 
 device - use GPU if available, otherwise use CPU
 embedding - embedding layer to convert input characters to dense vectors
+
+
+
+
 encoder - LSTM encoder that takes embedded input and properties, outputs latent vector
 decoder - LSTM decoder that takes latent vector, properties, and previous output, outputs next character
 
@@ -51,13 +55,20 @@ class CVAE(nn.Module):
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+        # embedding layer to convert input characters to dense vectors
+        # embedes using 
+        #NOTE: Embedding and encoder and decoder. 
+
         self.embedding = nn.Embedding(self.vocab_size, self.latent_size)
+
         self.encoder = nn.LSTM(
             input_size=self.latent_size + self.num_prop,
             hidden_size=self.unit_size,
             num_layers=self.n_rnn_layer,
             batch_first=True,
         )
+
+        # 2*latent_size because we concatenate mean and stddev to the latent vector for the decoder input
         self.decoder = nn.LSTM(
             input_size=(self.latent_size * 2) + self.num_prop,
             hidden_size=self.unit_size,
@@ -69,6 +80,15 @@ class CVAE(nn.Module):
         self.output_layer = nn.Linear(self.unit_size, self.vocab_size)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+
+        self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',
+            factor=0.5,
+            patience=10
+        )
+
+
         self.to(self.device)
         print('Network Ready')
 
@@ -115,10 +135,19 @@ class CVAE(nn.Module):
 
     @staticmethod
     def cal_latent_loss(mean:torch.Tensor, log_sigma:torch.Tensor) -> torch.Tensor:
+        # calculated KL divergence between the latent distribution and the prior distribution (N(mean, stddev))
+        # KL div: 0.5 * sum(1 + log(sigma^2) - mean^2 - sigma^2)
         return torch.mean(-0.5 * (1 + log_sigma - torch.square(mean) - torch.exp(log_sigma)))
 
     @staticmethod
     def _sequence_loss(logits:torch.Tensor, targets:torch.Tensor, lengths:torch.Tensor) -> torch.Tensor:
+        """
+        Method to cal reconstruction loss for a batch of sequences with different Lengths.
+        loss is calculated using cross entropy Loss for each token 
+
+        """
+
+
         batch_size, seq_length, vocab_size = logits.shape
         token_loss = F.cross_entropy(
             logits.reshape(-1, vocab_size),
@@ -140,6 +169,7 @@ class CVAE(nn.Module):
         probs, logits, _, mean, log_sigma = self.forward(x, c, l)
         reconstr_loss = self._sequence_loss(logits, y, l)
         latent_loss = self.cal_latent_loss(mean, log_sigma)
+        # NOTE: Elbo loss = reconstruction loss + KL divergence loss
         loss = reconstr_loss + latent_loss
         mol_pred = torch.argmax(probs, dim=2)
         return loss, reconstr_loss, latent_loss, mol_pred
@@ -186,7 +216,7 @@ class CVAE(nn.Module):
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = learning_rate
 
-    def get_latent_vector(self, x:np.ndarray, c:np.ndarray, l:np.ndarray):
+    def get_latent_vector(self, x:np.ndarray, c:np.ndarray, l:np.ndarray) -> np.ndarray:
         self.train(False)
         x_t = torch.as_tensor(x, dtype=torch.long, device=self.device)
         c_t = torch.as_tensor(c, dtype=torch.float32, device=self.device)
@@ -196,6 +226,19 @@ class CVAE(nn.Module):
         return z.detach().cpu().numpy()
 
     def sample(self, latent_vector:np.ndarray, c:np.ndarray, start_codon:np.ndarray, seq_length:int) -> np.ndarray:
+        """
+        NOTE: important!!!
+        Decoder is applied iterativley to generate seq of carachters until it generates an 'E' char or
+        reaches maximum length (120 in the original paper)
+
+        
+
+        """
+
+
+
+
+
         self.train(False)
         z = torch.as_tensor(latent_vector, dtype=torch.float32, device=self.device) # convert latent vector to tensor
         c_t = torch.as_tensor(c, dtype=torch.float32, device=self.device) # convert properties to tensor
