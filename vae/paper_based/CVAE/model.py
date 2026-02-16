@@ -44,7 +44,7 @@ until it generates a 'E' EOS character or reaches maximum length (120 in the ori
 Positional encoding for transformer model.
 
 Has:
-d_model: dimension of the model (unit_size)
+d_model: internal Transformer width (unit_size)
 dropout: dropout rate for the positional encoding
 max_len: maximum length of the input sequence (120 in the original paper)
 
@@ -116,11 +116,12 @@ class CVAE(nn.Module):
                 batch_first=True,
             )
         elif self.model_mode == 'transformer':
-            # Transformer uses d_model=unit_size internally.
-            self.embedding = nn.Embedding(self.vocab_size, self.unit_size)
+            # Transformer token embeddings use latent_size.
+            # Internal attention/FFN width (d_model) remains unit_size.
+            self.embedding = nn.Embedding(self.vocab_size, self.latent_size)
             self.positional_encoding = PositionalEncoding(self.unit_size, dropout=float(self.transformer_dropout))
 
-            self.encoder_input_proj = nn.Linear(self.unit_size + self.num_prop, self.unit_size)
+            self.encoder_input_proj = nn.Linear(self.latent_size + self.num_prop, self.unit_size)
             encoder_layer = nn.TransformerEncoderLayer(
                 d_model=self.unit_size,
                 nhead=int(self.transformer_heads),
@@ -131,7 +132,7 @@ class CVAE(nn.Module):
             )
             self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.n_rnn_layer)
 
-            self.decoder_input_proj = nn.Linear(self.unit_size + self.latent_size + self.num_prop, self.unit_size)
+            self.decoder_input_proj = nn.Linear((self.latent_size * 2) + self.num_prop, self.unit_size)
             self.memory_proj = nn.Linear(self.latent_size + self.num_prop, self.unit_size)
             decoder_layer = nn.TransformerDecoderLayer(
                 d_model=self.unit_size,

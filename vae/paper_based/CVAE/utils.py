@@ -369,7 +369,10 @@ def build_train_config(args) -> dict:
 
 
 def get_model_config(config:dict, vocab_size:Optional[int] = None) -> dict:
-    """Keep essential config values needed to recreate model architecture."""
+    """Keep essential config values needed to recreate model architecture.
+
+    Note: In transformer mode, token embedding size is derived from latent_size.
+    """
     model_config = {
         'batch_size': int(config['batch_size']),
         'latent_size': int(config['latent_size']),

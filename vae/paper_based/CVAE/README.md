@@ -63,10 +63,14 @@ For Transformer mode:
 
 ```python
 'model_mode': 'transformer',
+'latent_size': 200,      # token embedding width for Transformer
+'unit_size': 512,        # internal Transformer d_model width
 'transformer_heads': 8,
 'transformer_ff_size': 2048,
 'transformer_dropout': 0.1,
 ```
+
+In Transformer mode, embedding dimension is driven by `latent_size` (can be much smaller than `unit_size`).
 
 ### Run training
 

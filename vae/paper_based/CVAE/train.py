@@ -11,9 +11,9 @@ from copy import deepcopy
 # Edit values here directly; CLI arguments are intentionally disabled.
 config = {
     'batch_size': 128,
-    'latent_size': 200, # dimension of the latent space
-    'unit_size': 512, # dimension of the hidden units in the RNN layers
-    'n_rnn_layer': 3, # number of RNN layers in the encoder and decoder
+    'latent_size': 200, # latent vector size; also Transformer token embedding size
+    'unit_size': 512, # hidden size (LSTM) / internal Transformer d_model width
+    'n_rnn_layer': 2, # number of RNN layers in the encoder and decoder
     'seq_length': 120, # maximum length of the input and output sequences (smiles strings)
     'prop_file': 'prop_mw_logp.txt',
     'mean': 0.0,
@@ -36,7 +36,7 @@ config = {
     'lr_plateau_min_lr': 1e-6,
     'model_mode': 'transformer',  # 'lstm' or 'transformer'
     'transformer_heads': 8, # number of heads in the multi-head attention mechanism
-    'transformer_ff_size': 2048, # dimension of the feedforward network in the transformer layers
+    'transformer_ff_size': 768, # dimension of the feedforward network in the transformer layers
     'transformer_dropout': 0.15, # dropout rate for the transformer layers
     'train_ratio': 0.75, # ratio of data to use for training (the rest is used for testing)
 }
