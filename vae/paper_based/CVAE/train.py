@@ -38,7 +38,8 @@ config = {
     'num_epochs': 100,
     'lr': 0.0001,
     'num_prop': 3,
-    'save_dir': 'save/'
+    'save_dir': 'save/',
+    'patientce': 10
 }
 
 
@@ -74,7 +75,8 @@ history = {
     'train_loss': [],
     'test_loss': []
 }
-    
+
+
 for epoch in range(args.num_epochs):
 
     st = time.time()
@@ -86,9 +88,18 @@ for epoch in range(args.num_epochs):
  
     st = time.time()
     
-
-    #train
+    """
+    train:
+    n: random batch of data
+    x: input_smiles 
+    y: output_smiles, with added X(start token) and E(end-token) tokens
+    l: lenght of input smiles
+    c: properties (Conditions) of generation
+    
+    
+    """
     for iteration in range(len(train_molecules_input)//config['batch_size']):
+        
         n = np.random.randint(len(train_molecules_input), size = config['batch_size'])
         x = np.array([train_molecules_input[i] for i in n])
         y = np.array([train_molecules_output[i] for i in n])
@@ -107,10 +118,29 @@ for epoch in range(args.num_epochs):
         cost = model.test_batch(x, y, l, c)
         test_loss.append(cost)
     
+
     train_loss = np.mean(np.array(train_loss))        
     test_loss = np.mean(np.array(test_loss))    
     history['train_loss'].append(train_loss)
     history['test_loss'].append(test_loss)
+
+
+    # calculate how many epoch since best epoch (lowest test loss)
+    epochs_since_best = epoch - np.argmin(history['test_loss'])
+
+    #early stopping if no improvment for a while
+    # 
+    if epochs_since_best > config['patientce']:
+        print(f'early stop at epoch {epoch} since no improvement for {epochs_since_best} epochs')
+        
+        ckpt_path = config['save_dir']+'/model_'+'.ckpt'
+        model.save(ckpt_path, epoch)
+        history_df = pd.DataFrame(history)
+        history_df.to_csv(config['save_dir']+'/history.csv', index=False)
+        break
+        
+
+
     end = time.time()    
     if epoch==0:
         print ('epoch\ttrain_loss\ttest_loss\ttime (s)')
