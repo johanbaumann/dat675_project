@@ -1,0 +1,19 @@
+{
+  "prop_file": "smiles_prop.txt",
+  "save_dir": "save/smoke_cfg_transformer_fix",
+  "model_mode": "transformer",
+  "num_epochs": 1,
+  "batch_size": 32,
+  "latent_size": 32,
+  "unit_size": 64,
+  "n_rnn_layer": 1,
+  "seq_length": 120,
+  "lr": 0.0001,
+  "num_prop": 3,
+  "mean": 0.0,
+  "stddev": 1.0,
+  "patientce": 10,
+  "transformer_heads": 8,
+  "transformer_ff_size": 128,
+  "transformer_dropout": 0.1
+}

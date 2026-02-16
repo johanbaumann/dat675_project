@@ -1,8 +1,10 @@
 import os
+import inspect
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional
 
 
 
@@ -40,6 +42,24 @@ until it generates a 'E' EOS character or reaches maximum length (120 in the ori
 """
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 2048):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-np.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.pe[:, : x.size(1)]
+        return self.dropout(x)
+
+
 class CVAE(nn.Module):
     def __init__(self, vocab_size: int, args: dict):
         super().__init__()
@@ -52,6 +72,10 @@ class CVAE(nn.Module):
         self.mean = self._get_arg(args, 'mean')
         self.unit_size = self._get_arg(args, 'unit_size')
         self.n_rnn_layer = self._get_arg(args, 'n_rnn_layer')
+        self.model_mode = self._get_arg_or_default(args, 'model_mode', 'lstm').lower()
+        self.transformer_heads = self._get_arg_or_default(args, 'transformer_heads', 8)
+        self.transformer_ff_size = self._get_arg_or_default(args, 'transformer_ff_size', self.unit_size * 4)
+        self.transformer_dropout = self._get_arg_or_default(args, 'transformer_dropout', 0.1)
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -59,25 +83,56 @@ class CVAE(nn.Module):
         # embedes using 
         #NOTE: Embedding and encoder and decoder. 
 
-        self.embedding = nn.Embedding(self.vocab_size, self.latent_size)
+        if self.model_mode == 'lstm':
+            self.embedding = nn.Embedding(self.vocab_size, self.latent_size)
 
-        self.encoder = nn.LSTM(
-            input_size=self.latent_size + self.num_prop,
-            hidden_size=self.unit_size,
-            num_layers=self.n_rnn_layer,
-            batch_first=True,
-        )
+            self.encoder = nn.LSTM(
+                input_size=self.latent_size + self.num_prop,
+                hidden_size=self.unit_size,
+                num_layers=self.n_rnn_layer,
+                batch_first=True,
+            )
 
-        # 2*latent_size because we concatenate mean and stddev to the latent vector for the decoder input
-        self.decoder = nn.LSTM(
-            input_size=(self.latent_size * 2) + self.num_prop,
-            hidden_size=self.unit_size,
-            num_layers=self.n_rnn_layer,
-            batch_first=True,
-        )
-        self.out_mean = nn.Linear(self.unit_size, self.latent_size)
-        self.out_log_sigma = nn.Linear(self.unit_size, self.latent_size)
-        self.output_layer = nn.Linear(self.unit_size, self.vocab_size)
+            # 2*latent_size because we concatenate mean and stddev to the latent vector for the decoder input
+            self.decoder = nn.LSTM(
+                input_size=(self.latent_size * 2) + self.num_prop,
+                hidden_size=self.unit_size,
+                num_layers=self.n_rnn_layer,
+                batch_first=True,
+            )
+        elif self.model_mode == 'transformer':
+            # Transformer uses d_model=unit_size internally.
+            self.embedding = nn.Embedding(self.vocab_size, self.unit_size)
+            self.positional_encoding = PositionalEncoding(self.unit_size, dropout=float(self.transformer_dropout))
+
+            self.encoder_input_proj = nn.Linear(self.unit_size + self.num_prop, self.unit_size)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=self.unit_size,
+                nhead=int(self.transformer_heads),
+                dim_feedforward=int(self.transformer_ff_size),
+                dropout=float(self.transformer_dropout),
+                batch_first=True,
+                activation='gelu',
+            )
+            self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.n_rnn_layer)
+
+            self.decoder_input_proj = nn.Linear(self.unit_size + self.latent_size + self.num_prop, self.unit_size)
+            self.memory_proj = nn.Linear(self.latent_size + self.num_prop, self.unit_size)
+            decoder_layer = nn.TransformerDecoderLayer(
+                d_model=self.unit_size,
+                nhead=int(self.transformer_heads),
+                dim_feedforward=int(self.transformer_ff_size),
+                dropout=float(self.transformer_dropout),
+                batch_first=True,
+                activation='gelu',
+            )
+            self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=self.n_rnn_layer)
+        else:
+            raise ValueError(f"Unsupported model_mode='{self.model_mode}'. Use 'lstm' or 'transformer'.")
+
+        self.out_mean = nn.Linear(self.unit_size, self.latent_size) # output mean of the latent distribution
+        self.out_log_sigma = nn.Linear(self.unit_size, self.latent_size) # output log of variance of the latent distribution (log(sigma^2))
+        self.output_layer = nn.Linear(self.unit_size, self.vocab_size) # output layer to predict the next character in the sequence
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
 
@@ -90,7 +145,7 @@ class CVAE(nn.Module):
 
 
         self.to(self.device)
-        print('Network Ready')
+        print(f'Network Ready ({self.model_mode})')
 
     @staticmethod
     def _get_arg(args:dict, key:str):
@@ -98,19 +153,49 @@ class CVAE(nn.Module):
             return args[key]
         return getattr(args, key)
 
-    def encode(self, x:torch.Tensor, c:torch.Tensor, l:torch.Tensor) -> tuple:
-        x_emb = self.embedding(x)
-        c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
-        encoder_input = torch.cat([x_emb, c_seq], dim=-1)
+    @staticmethod
+    def _get_arg_or_default(args:dict, key:str, default):
+        if isinstance(args, dict):
+            return args.get(key, default)
+        return getattr(args, key, default)
 
-        packed = nn.utils.rnn.pack_padded_sequence(
-            encoder_input,
-            lengths=l.detach().cpu(),
-            batch_first=True,
-            enforce_sorted=False,
-        )
-        _, (h_n, _) = self.encoder(packed)
-        h_last = h_n[-1]
+    @staticmethod
+    def _build_padding_mask(lengths: torch.Tensor, seq_len: int, device: torch.device) -> torch.Tensor:
+        steps = torch.arange(seq_len, device=device).unsqueeze(0)
+        return steps >= lengths.unsqueeze(1)
+
+    @staticmethod
+    def _causal_mask(seq_len: int, device: torch.device) -> torch.Tensor:
+        # Bool mask keeps mask dtype consistent with key padding masks.
+        # True means the position is masked.
+        return torch.triu(torch.ones((seq_len, seq_len), device=device, dtype=torch.bool), diagonal=1)
+
+    def encode(self, x:torch.Tensor, c:torch.Tensor, l:torch.Tensor) -> tuple:
+        if self.model_mode == 'lstm':
+            x_emb = self.embedding(x)
+            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
+            encoder_input = torch.cat([x_emb, c_seq], dim=-1)
+
+            packed = nn.utils.rnn.pack_padded_sequence(
+                encoder_input,
+                lengths=l.detach().cpu(),
+                batch_first=True,
+                enforce_sorted=False,
+            )
+            _, (h_n, _) = self.encoder(packed)
+            h_last = h_n[-1]
+        else:
+            x_emb = self.embedding(x)
+            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
+            encoder_input = torch.cat([x_emb, c_seq], dim=-1)
+            encoder_input = self.encoder_input_proj(encoder_input)
+            encoder_input = self.positional_encoding(encoder_input)
+
+            src_padding_mask = self._build_padding_mask(l, x_emb.size(1), x.device)
+            h_seq = self.encoder(encoder_input, src_key_padding_mask=src_padding_mask)
+
+            last_indices = (l - 1).clamp(min=0)
+            h_last = h_seq[torch.arange(h_seq.size(0), device=h_seq.device), last_indices]
 
         mean = self.out_mean(h_last)
         log_sigma = self.out_log_sigma(h_last)
@@ -118,19 +203,42 @@ class CVAE(nn.Module):
         z = mean + torch.exp(log_sigma / 2.0) * eps
         return z, mean, log_sigma
 
-    def decode(self, x:torch.Tensor, z:torch.Tensor, c:torch.Tensor, initial_state=None) -> tuple:
-        x_emb = self.embedding(x)
-        z_seq = z.unsqueeze(1).expand(-1, x_emb.size(1), -1)
-        c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
-        decoder_input = torch.cat([z_seq, x_emb, c_seq], dim=-1)
-        y, state = self.decoder(decoder_input, initial_state)
+    def decode(self, x:torch.Tensor, z:torch.Tensor, c:torch.Tensor, initial_state=None, lengths:Optional[torch.Tensor]=None) -> tuple:
+        if self.model_mode == 'lstm':
+            x_emb = self.embedding(x)
+            z_seq = z.unsqueeze(1).expand(-1, x_emb.size(1), -1)
+            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
+            decoder_input = torch.cat([z_seq, x_emb, c_seq], dim=-1)
+            y, state = self.decoder(decoder_input, initial_state)
+        else:
+            x_emb = self.embedding(x)
+            z_seq = z.unsqueeze(1).expand(-1, x_emb.size(1), -1)
+            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
+            decoder_input = torch.cat([x_emb, z_seq, c_seq], dim=-1)
+            decoder_input = self.decoder_input_proj(decoder_input)
+            decoder_input = self.positional_encoding(decoder_input)
+
+            seq_len = x_emb.size(1)
+            tgt_padding_mask = None
+            if lengths is not None:
+                tgt_padding_mask = self._build_padding_mask(lengths, seq_len, x.device)
+
+            memory = self.memory_proj(torch.cat([z, c], dim=-1)).unsqueeze(1)
+            y = self.decoder(
+                tgt=decoder_input,
+                memory=memory,
+                tgt_mask=self._causal_mask(seq_len, x.device),
+                tgt_key_padding_mask=tgt_padding_mask,
+            )
+            state = None
+
         logits = self.output_layer(y)
         probs = F.softmax(logits, dim=-1)
         return probs, logits, state
 
     def forward(self, x:torch.Tensor, c:torch.Tensor, l:torch.Tensor) -> tuple:
         z, mean, log_sigma = self.encode(x, c, l)
-        probs, logits, _ = self.decode(x, z, c)
+        probs, logits, _ = self.decode(x, z, c, lengths=l)
         return probs, logits, z, mean, log_sigma
 
     @staticmethod
@@ -190,7 +298,7 @@ class CVAE(nn.Module):
             loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
         return float(loss.item())
 
-    def save(self, ckpt_path:str, global_step:int):
+    def save(self, ckpt_path:str, global_step:int, model_config:Optional[dict]=None):
         os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
         save_path = f'{ckpt_path}-{global_step}.pt'
         torch.save(
@@ -198,12 +306,17 @@ class CVAE(nn.Module):
                 'model_state_dict': self.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'global_step': global_step,
+                'model_config': model_config,
             },
             save_path,
         )
 
     def restore(self, ckpt_path:str):
-        checkpoint = torch.load(ckpt_path, map_location=self.device)
+        load_kwargs = {'map_location': self.device}
+        # Newer PyTorch supports weights_only; set it explicitly to avoid warning-prone implicit behavior.
+        if 'weights_only' in inspect.signature(torch.load).parameters:
+            load_kwargs['weights_only'] = True
+        checkpoint = torch.load(ckpt_path, **load_kwargs)
         if 'model_state_dict' in checkpoint:
             self.load_state_dict(checkpoint['model_state_dict'])
             if 'optimizer_state_dict' in checkpoint:
@@ -262,8 +375,12 @@ class CVAE(nn.Module):
         with torch.no_grad():
             # iteratively decode until EOS ('E') is generated or reaches maximum length
             for _ in range(seq_length):
-                _, logits, state = self.decode(x, z, c_t, initial_state=state)
-                next_x = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+                if self.model_mode == 'lstm':
+                    _, logits, state = self.decode(x, z, c_t, initial_state=state)
+                    next_x = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+                else:
+                    _, logits, _ = self.decode(x, z, c_t, lengths=None)
+                    next_x = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
 
                 # Once a sequence hits EOS, keep it at EOS for the remaining steps.
                 next_x = torch.where(
@@ -274,7 +391,10 @@ class CVAE(nn.Module):
 
                 preds.append(next_x)
                 finished |= next_x.squeeze(1).eq(e_index_t)
-                x = next_x
+                if self.model_mode == 'lstm':
+                    x = next_x
+                else:
+                    x = torch.cat([x, next_x], dim=1)
 
                 if finished.all():
                     break

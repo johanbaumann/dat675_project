@@ -1,7 +1,32 @@
 #import h5py
 import numpy as np
 from rdkit import Chem
-from typing import Optional
+from typing import Optional, Sequence, Union
+import json
+import os
+import importlib
+
+
+TRAIN_CONFIG_DEFAULTS = {
+    'batch_size': 128,
+    'latent_size': 200,
+    'unit_size': 512,
+    'n_rnn_layer': 3,
+    'seq_length': 120,
+    'prop_file': 'smiles_prop.txt',
+    'mean': 0.0,
+    'stddev': 1.0,
+    'num_epochs': 100,
+    'lr': 0.0001,
+    'num_prop': 3,
+    'save_dir': 'save/',
+    'patientce': 10,
+    'model_mode': 'lstm',
+    'transformer_heads': 8,
+    'transformer_ff_size': 2048,
+    'transformer_dropout': 0.1,
+    'train_ratio': 0.75,
+}
 
 
 def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
@@ -105,10 +130,10 @@ def stochastic_convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
 def one_hot_array(i:int, n:int) -> list:
     return list(map(int, [ix == i for ix in range(n)]))
 
-def one_hot_index(vec:np.ndarray, charset:str) -> list:
+def one_hot_index(vec:Union[np.ndarray, Sequence[str]], charset:str) -> list:
     return list(map(charset.index, vec))
 
-def from_one_hot_array(vec:np.ndarray) -> int:
+def from_one_hot_array(vec:np.ndarray) -> Optional[int]:
     oh = np.where(vec == 1)
     if oh[0].shape == (0, ):
         return None
@@ -118,6 +143,7 @@ def decode_smiles_from_indexes(vec:np.ndarray, charset:str) -> str:
     return "".join(map(lambda x: charset[x], vec)).strip()
 
 def load_dataset(filename:str, split:bool = True) -> tuple:
+    h5py = importlib.import_module('h5py')
     h5f = h5py.File(filename, 'r')
     if split:
         data_train = h5f['data_train'][:]
@@ -164,7 +190,12 @@ def interpolate(source_smiles:str, dest_smiles:str, steps:int, charset:str, mode
     return results
 
 def get_unique_mols(mol_list:list) -> list:
-    inchi_keys = [Chem.InchiToInchiKey(Chem.MolToInchi(m)) for m in mol_list]
+    inchi_keys = []
+    for mol in mol_list:
+        inchi = Chem.MolToInchi(mol)
+        if isinstance(inchi, tuple):
+            inchi = inchi[0]
+        inchi_keys.append(Chem.InchiToInchiKey(str(inchi)))
     u, indices = np.unique(inchi_keys, return_index=True)
     unique_mols = [[mol_list[i], inchi_keys[i]] for i in indices]
     return unique_mols
@@ -216,4 +247,138 @@ def load_data(n:str, seq_length:int) -> tuple:
     smiles_output = np.array([np.array(list(map(vocab.get, s)))for s in smiles_output])
     prop = np.array([l[1:] for l in lines], dtype=np.float32)
     return smiles_input, smiles_output, chars, vocab, prop, length 
+
+
+def get_train_config_defaults() -> dict:
+    return dict(TRAIN_CONFIG_DEFAULTS)
+
+
+def compose_train_config(args) -> dict:
+    """Compose training config from defaults + optional JSON + CLI overrides."""
+    config = get_train_config_defaults()
+
+    config_file = getattr(args, 'config_file', None)
+    if config_file:
+        loaded = load_json(config_file)
+        config.update(loaded)
+
+    for key in config.keys():
+        if not hasattr(args, key):
+            continue
+        value = getattr(args, key)
+        if value is not None:
+            config[key] = value
+
+    config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
+    if config['model_mode'] not in ('lstm', 'transformer'):
+        raise ValueError("model_mode must be either 'lstm' or 'transformer'")
+
+    # normalize scalar types
+    config['batch_size'] = int(config['batch_size'])
+    config['latent_size'] = int(config['latent_size'])
+    config['unit_size'] = int(config['unit_size'])
+    config['n_rnn_layer'] = int(config['n_rnn_layer'])
+    config['seq_length'] = int(config['seq_length'])
+    config['prop_file'] = str(config['prop_file'])
+    config['mean'] = float(config['mean'])
+    config['stddev'] = float(config['stddev'])
+    config['num_epochs'] = int(config['num_epochs'])
+    config['lr'] = float(config['lr'])
+    config['num_prop'] = int(config['num_prop'])
+    config['save_dir'] = str(config['save_dir'])
+    config['patientce'] = int(config['patientce'])
+    config['transformer_heads'] = int(config['transformer_heads'])
+    config['transformer_ff_size'] = int(config['transformer_ff_size'])
+    config['transformer_dropout'] = float(config['transformer_dropout'])
+    config['train_ratio'] = float(config.get('train_ratio', 0.75))
+    return config
+
+
+def compose_train_config_from_dict(config_override:dict) -> dict:
+    """Compose training config from defaults + in-file dict overrides."""
+    config = get_train_config_defaults()
+    config.update(config_override)
+
+    config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
+    if config['model_mode'] not in ('lstm', 'transformer'):
+        raise ValueError("model_mode must be either 'lstm' or 'transformer'")
+
+    config['batch_size'] = int(config['batch_size'])
+    config['latent_size'] = int(config['latent_size'])
+    config['unit_size'] = int(config['unit_size'])
+    config['n_rnn_layer'] = int(config['n_rnn_layer'])
+    config['seq_length'] = int(config['seq_length'])
+    config['prop_file'] = str(config['prop_file'])
+    config['mean'] = float(config['mean'])
+    config['stddev'] = float(config['stddev'])
+    config['num_epochs'] = int(config['num_epochs'])
+    config['lr'] = float(config['lr'])
+    config['num_prop'] = int(config['num_prop'])
+    config['save_dir'] = str(config['save_dir'])
+    config['patientce'] = int(config['patientce'])
+    config['transformer_heads'] = int(config['transformer_heads'])
+    config['transformer_ff_size'] = int(config['transformer_ff_size'])
+    config['transformer_dropout'] = float(config['transformer_dropout'])
+    config['train_ratio'] = float(config.get('train_ratio', 0.75))
+    return config
+
+
+def build_train_config(args) -> dict:
+    """Backward-compatible alias for compose_train_config."""
+    return compose_train_config(args)
+
+
+def get_model_config(config:dict, vocab_size:Optional[int] = None) -> dict:
+    """Keep essential config values needed to recreate model architecture."""
+    model_config = {
+        'batch_size': int(config['batch_size']),
+        'latent_size': int(config['latent_size']),
+        'unit_size': int(config['unit_size']),
+        'n_rnn_layer': int(config['n_rnn_layer']),
+        'seq_length': int(config['seq_length']),
+        'mean': float(config['mean']),
+        'stddev': float(config['stddev']),
+        'lr': float(config['lr']),
+        'num_prop': int(config['num_prop']),
+        'model_mode': str(config.get('model_mode', 'lstm')).lower(),
+        'transformer_heads': int(config.get('transformer_heads', 8)),
+        'transformer_ff_size': int(config.get('transformer_ff_size', int(config['unit_size']) * 4)),
+        'transformer_dropout': float(config.get('transformer_dropout', 0.1)),
+        'prop_file': str(config.get('prop_file', 'smiles_prop.txt')),
+    }
+    if vocab_size is not None:
+        model_config['vocab_size'] = int(vocab_size)
+    return model_config
+
+
+def save_json(path:str, payload:dict) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2)
+
+
+def load_json(path:str) -> dict:
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def save_training_config(config:dict, save_dir:str, filename:str = 'training_config.json') -> str:
+    path = os.path.join(save_dir, filename)
+    save_json(path, config)
+    return path
+
+
+def infer_training_config_path(ckpt_path:str, filename:str = 'training_config.json') -> str:
+    return os.path.join(os.path.dirname(ckpt_path), filename)
+
+
+def ensure_dir(path:str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def split_train_test(data:np.ndarray, train_ratio:float = 0.75) -> tuple:
+    num_train = int(len(data) * train_ratio)
+    return data[0:num_train], data[num_train:-1]
 

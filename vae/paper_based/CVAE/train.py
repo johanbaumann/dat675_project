@@ -1,74 +1,58 @@
 from model import CVAE
 from utils import *
 import numpy as np
-import os
-import torch
 import time
-import argparse
 import pandas as pd
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--batch_size', help='batch_size', type=int, default=128)
-parser.add_argument('--latent_size', help='latent_size', type=int, default=200)
-parser.add_argument('--unit_size', help='unit_size of rnn cell', type=int, default=512)
-parser.add_argument('--n_rnn_layer', help='number of rnn layer', type=int, default=3)
-parser.add_argument('--seq_length', help='max_seq_length', type=int, default=120)
-parser.add_argument('--prop_file', help='name of property file', type=str)
-parser.add_argument('--mean', help='mean of VAE', type=float, default=0.0)
-parser.add_argument('--stddev', help='stddev of VAE', type=float, default=1.0)
-parser.add_argument('--num_epochs', help='epochs', type=int, default=100)
-parser.add_argument('--lr', help='learning rate', type=float, default=0.0001)
-parser.add_argument('--num_prop', help='number of propertoes', type=int, default=3)
-parser.add_argument('--save_dir', help='save dir', type=str, default='save/')
-args = parser.parse_args()
-
-
-
-
+# Single source of truth for run configuration.
+# Edit values here directly; CLI arguments are intentionally disabled.
 config = {
     'batch_size': 128,
     'latent_size': 200,
     'unit_size': 512,
     'n_rnn_layer': 3,
     'seq_length': 120,
-    'prop_file': "smiles_prop.txt",
+    'prop_file': 'smiles_prop.txt',
     'mean': 0.0,
     'stddev': 1.0,
     'num_epochs': 100,
     'lr': 0.0001,
     'num_prop': 3,
     'save_dir': 'save/',
-    'patientce': 10
+    'patientce': 10,
+    'model_mode': 'lstm',  # 'lstm' or 'transformer'
+    'transformer_heads': 8,
+    'transformer_ff_size': 2048,
+    'transformer_dropout': 0.1,
+    'train_ratio': 0.75,
 }
+
+config = compose_train_config_from_dict(config)
 
 
 print (config)
 #convert smiles to numpy array
 molecules_input, molecules_output, char, vocab, labels, length = load_data(config['prop_file'], config['seq_length'])
 vocab_size = len(char)
+model_config = get_model_config(config, vocab_size=vocab_size)
 
 #make save_dir
-if not os.path.isdir(config['save_dir']):
-    os.mkdir(config['save_dir'])
+ensure_dir(config['save_dir'])
+
+# save a single source of truth for recreating the trained model
+training_config_path = save_training_config(model_config, config['save_dir'])
+print(f'saved training config to: {training_config_path}')
 
 #divide data into training and test set
 # can leak...
-num_train_data = int(len(molecules_input)*0.75)
-train_molecules_input = molecules_input[0:num_train_data]
-test_molecules_input = molecules_input[num_train_data:-1]
-
-train_molecules_output = molecules_output[0:num_train_data]
-test_molecules_output = molecules_output[num_train_data:-1]
-
-train_labels = labels[0:num_train_data]
-test_labels = labels[num_train_data:-1]
-
-train_length = length[0:num_train_data]
-test_length = length[num_train_data:-1]
+train_molecules_input, test_molecules_input = split_train_test(molecules_input, config['train_ratio'])
+train_molecules_output, test_molecules_output = split_train_test(molecules_output, config['train_ratio'])
+train_labels, test_labels = split_train_test(labels, config['train_ratio'])
+train_length, test_length = split_train_test(length, config['train_ratio'])
 
 model = CVAE(vocab_size,
-             args
+             model_config
              )
 print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
@@ -78,7 +62,7 @@ history = {
 }
 
 
-for epoch in range(args.num_epochs):
+for epoch in range(config['num_epochs']):
 
     st = time.time()
     # Learning rate scheduling 
@@ -135,7 +119,7 @@ for epoch in range(args.num_epochs):
         print(f'early stop at epoch {epoch} since no improvement for {epochs_since_best} epochs')
         
         ckpt_path = config['save_dir']+'/model_'+'.ckpt'
-        model.save(ckpt_path, epoch)
+        model.save(ckpt_path, epoch, model_config=model_config)
         history_df = pd.DataFrame(history)
         history_df.to_csv(config['save_dir']+'/history.csv', index=False)
         break
@@ -151,7 +135,7 @@ for epoch in range(args.num_epochs):
 
     if epoch == config['num_epochs']-1:
         ckpt_path = config['save_dir']+'/model_'+'.ckpt'
-        model.save(ckpt_path, epoch)
+        model.save(ckpt_path, epoch, model_config=model_config)
         #save history as csv file
         history_df = pd.DataFrame(history)
         history_df.to_csv(config['save_dir']+'/history.csv', index=False)

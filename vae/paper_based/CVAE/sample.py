@@ -15,7 +15,9 @@ from model import CVAE
 from utils import (
     collect_new_unique_from_raw,
     convert_to_smiles,
+    infer_training_config_path,
     load_data,
+    load_json,
     load_training_canonical_smiles,
 )
 
@@ -201,38 +203,47 @@ if __name__ == '__main__':
 
         start = t.time()
 
-        # Single source of truth for run configuration.
-        # Edit values here directly; CLI arguments are intentionally disabled.
+        # Runtime sampling options.
+        # Model architecture/training hyperparameters are loaded from training_config.json.
         config = {
-            'batch_size': 128,
+            'batch_size': None,
             'num_iteration': 10,  # number of batches to sample (old behavior)
-            'latent_size': 200,
-            'unit_size': 512,
-            'n_rnn_layer': 3,
-            'seq_length': 120,
-            'mean': 0.0,
-            'stddev': 1.0,
-            'num_prop': 3,
             'save_file': 'save/model_.ckpt-99.pt',
+            'training_config_file': None,
             'target_prop': '300.0 3.0 75.0',
-            'prop_file': 'smiles_prop.txt',
+            'prop_file': None,
+            'seq_length': None,
+            'mean': None,
+            'stddev': None,
             'result_filename': 'result.txt',
-            'lr': 0.0001,
             'num_unique': 1000,
             'max_batches': 5000,
             # If True, molecules already present in training/property file are rejected.
             'exclude_training': True,
         }
 
+        training_config_path = config['training_config_file']
+        if training_config_path is None:
+            training_config_path = infer_training_config_path(config['save_file'])
+
+        training_config = load_json(training_config_path)
+        print(f'loaded training config from: {training_config_path}')
+
+        # Allow a few runtime overrides when needed (batch_size/seq_length/mean/stddev/prop_file).
+        model_config = dict(training_config)
+        for key in ['batch_size', 'prop_file', 'seq_length', 'mean', 'stddev']:
+            if config.get(key) is not None:
+                model_config[key] = config[key]
+
         # Build vocabulary/charset from property file.
-        _, _, charset, vocab, _, _ = load_data(config['prop_file'], config['seq_length'])
+        _, _, charset, vocab, _, _ = load_data(model_config['prop_file'], int(model_config['seq_length']))
         vocab_size = len(charset)
 
         # Canonical training-set SMILES used for novelty filtering.
         if bool(config.get('exclude_training', True)):
             training_smiles = load_training_canonical_smiles(
-                config['prop_file'],
-                int(config['seq_length']),
+                model_config['prop_file'],
+                int(model_config['seq_length']),
             )
             print(f'training molecules available for exclusion: {len(training_smiles)}')
         else:
@@ -240,7 +251,7 @@ if __name__ == '__main__':
             print('training-set exclusion is disabled (exclude_training=False)')
 
         # Create and restore model.
-        model = CVAE(vocab_size, config)
+        model = CVAE(vocab_size, model_config)
         model.restore(config['save_file'])
         print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
@@ -253,10 +264,10 @@ if __name__ == '__main__':
                 'e.g. "300.0 3.0 75.0" for MW=300, LogP=3, TPSA=75'
             )
 
-        target_prop = np.array([target_row for _ in range(int(config['batch_size']))], dtype=np.float32)
+        target_prop = np.array([target_row for _ in range(int(model_config['batch_size']))], dtype=np.float32)
 
         # Start token: 'X'. In this dataset, 'X' is appended to the vocab in `load_data()`.
-        start_codon = np.array([np.array([vocab['X']]) for _ in range(int(config['batch_size']))])
+        start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
 
         if config['num_unique'] is not None:
             ms, smiles = generate_unique_molecules(
@@ -264,13 +275,13 @@ if __name__ == '__main__':
                 charset=charset,
                 target_prop=target_prop,
                 start_codon=start_codon,
-                seq_length=int(config['seq_length']),
+                seq_length=int(model_config['seq_length']),
                 num_unique=int(config['num_unique']),
                 max_batches=config['max_batches'],
-                mean=float(config['mean']),
-                stddev=float(config['stddev']),
-                batch_size=int(config['batch_size']),
-                latent_size=int(config['latent_size']),
+                mean=float(model_config['mean']),
+                stddev=float(model_config['stddev']),
+                batch_size=int(model_config['batch_size']),
+                latent_size=int(model_config['latent_size']),
                 training_smiles=training_smiles,
             )
         else:
@@ -279,12 +290,12 @@ if __name__ == '__main__':
                 charset=charset,
                 target_prop=target_prop,
                 start_codon=start_codon,
-                seq_length=int(config['seq_length']),
+                seq_length=int(model_config['seq_length']),
                 num_iteration=int(config['num_iteration']),
-                mean=float(config['mean']),
-                stddev=float(config['stddev']),
-                batch_size=int(config['batch_size']),
-                latent_size=int(config['latent_size']),
+                mean=float(model_config['mean']),
+                stddev=float(model_config['stddev']),
+                batch_size=int(model_config['batch_size']),
+                latent_size=int(model_config['latent_size']),
                 training_smiles=training_smiles,
             )
 
