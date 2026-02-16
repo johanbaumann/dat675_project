@@ -39,6 +39,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- `utils.py`: `compose_train_config_from_dict(...)` and `compose_train_config(...)` now preserve `num_prop=None` during initial config normalization, preventing a startup crash (`int(None)`) before `train.py` infers `num_prop` from the property file.
 - `model.py`: `CVAE.sample()` now stops decoding early once EOS (`'E'`) has been generated for all sequences in the batch, instead of always running the full `seq_length` loop. EOS index is inferred from the known vocab construction (`E = vocab_size - 2`).
 - `model.py`: Transformer decoding now uses an explicit boolean causal `tgt_mask` so mask dtypes are aligned with key padding masks and runtime behavior is stable across current PyTorch versions.
 - `model.py`: Checkpoint restore now uses explicit `weights_only` handling when supported by current PyTorch to avoid future-warning-prone implicit load behavior.

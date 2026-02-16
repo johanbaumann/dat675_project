@@ -297,7 +297,10 @@ def compose_train_config(args) -> dict:
     config['stddev'] = float(config['stddev'])
     config['num_epochs'] = int(config['num_epochs'])
     config['lr'] = float(config['lr'])
-    config['num_prop'] = int(config['num_prop'])
+    if config.get('num_prop') is None:
+        config['num_prop'] = None
+    else:
+        config['num_prop'] = int(config['num_prop'])
     config['save_dir'] = str(config['save_dir'])
     config['patientce'] = int(config['patientce'])
     config['weight_decay'] = float(config.get('weight_decay', 0.0))
@@ -338,7 +341,10 @@ def compose_train_config_from_dict(config_override:dict) -> dict:
     config['stddev'] = float(config['stddev'])
     config['num_epochs'] = int(config['num_epochs'])
     config['lr'] = float(config['lr'])
-    config['num_prop'] = int(config['num_prop'])
+    if config.get('num_prop') is None:
+        config['num_prop'] = None
+    else:
+        config['num_prop'] = int(config['num_prop'])
     config['save_dir'] = str(config['save_dir'])
     config['patientce'] = int(config['patientce'])
     config['weight_decay'] = float(config.get('weight_decay', 0.0))
