@@ -36,10 +36,21 @@ config = {
     'lr_plateau_min_lr': 1e-6,
     'model_mode': 'transformer',  # 'lstm' or 'transformer'
     'transformer_heads': 8, # number of heads in the multi-head attention mechanism
-    'transformer_ff_size': 768, # dimension of the feedforward network in the transformer layers
+    'transformer_ff_size': 1024, # dimension of the feedforward network in the transformer layers
     'transformer_dropout': 0.15, # dropout rate for the transformer layers
     'train_ratio': 0.75, # ratio of data to use for training (the rest is used for testing)
 }
+
+# check for gpu
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f'Using device: {device}')
+
+# check so attention heads divide unit size evenly for transformer model
+if config['model_mode'] == 'transformer':
+    if config['unit_size'] % config['transformer_heads'] != 0:
+        print(f"Possible values: unit_size={config['unit_size']}, transformer_heads={config['transformer_heads']}")
+        raise ValueError(f'For transformer model, unit_size ({config["unit_size"]}) must be divisible by transformer_heads ({config["transformer_heads"]}).')
+
 
 # convert config dict to a dataclass for better attribute access and type checking
 config = compose_train_config_from_dict(config)
