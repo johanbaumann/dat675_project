@@ -22,6 +22,7 @@ config = {
     'lr': 0.0001,
     'num_prop': None,
     'save_dir': 'save/',
+    'save_every': 10, # save a checkpoint every N epochs
     'patientce': 10,
     'early_stopping_patience': 10,
     'early_stopping_min_delta': 0.0,
@@ -180,7 +181,7 @@ for epoch in range(config['num_epochs']):
             model.load_state_dict(best_state_dict)
             print(f'restored best model weights from epoch {best_epoch}')
         
-        ckpt_path = config['save_dir']+'/model_'+'.ckpt'
+        ckpt_path = config['save_dir']+'/model_'+str(epoch)+'.ckpt'
         model.save(ckpt_path, epoch, model_config=model_config)
         history_df = pd.DataFrame(history)
         history_df.to_csv(config['save_dir']+'/history.csv', index=False)
@@ -207,11 +208,11 @@ for epoch in range(config['num_epochs']):
     # save model!
     # only save for the last epoch...
 
-    if epoch == config['num_epochs']-1:
+    if epoch == config['num_epochs']-1 or (epoch + 1) % config['save_every'] == 0:
         if config['early_stopping_restore_best'] and best_state_dict is not None:
             model.load_state_dict(best_state_dict)
             print(f'training ended; restored best model weights from epoch {best_epoch}')
-        ckpt_path = config['save_dir']+'/model_'+'.ckpt'
+        ckpt_path = config['save_dir']+'/model_'+str(epoch)+'.ckpt'
         model.save(ckpt_path, epoch, model_config=model_config)
         #save history as csv file
         history_df = pd.DataFrame(history)
