@@ -53,6 +53,7 @@ if not os.path.isdir(config['save_dir']):
     os.mkdir(config['save_dir'])
 
 #divide data into training and test set
+# can leak...
 num_train_data = int(len(molecules_input)*0.75)
 train_molecules_input = molecules_input[0:num_train_data]
 test_molecules_input = molecules_input[num_train_data:-1]

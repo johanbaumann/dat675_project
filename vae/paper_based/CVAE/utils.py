@@ -80,13 +80,13 @@ def interpolate(source_smiles, dest_smiles, steps, charset, model, latent_dim):
         results.append(decoded)
     return results
 
-def get_unique_mols(mol_list):
+def get_unique_mols(mol_list:list) -> list:
     inchi_keys = [Chem.InchiToInchiKey(Chem.MolToInchi(m)) for m in mol_list]
     u, indices = np.unique(inchi_keys, return_index=True)
     unique_mols = [[mol_list[i], inchi_keys[i]] for i in indices]
     return unique_mols
 
-def accuracy(arr1, arr2, length):
+def accuracy(arr1:np.ndarray, arr2:np.ndarray, length:np.ndarray) -> tuple:
     total = len(arr1)
     count1=0
     count2=0
