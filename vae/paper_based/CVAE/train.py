@@ -91,6 +91,7 @@ best_epoch = -1
 epochs_without_improvement = 0
 best_state_dict = None
 
+start_time = time.time()
 
 for epoch in range(config['num_epochs']):
 
@@ -186,7 +187,19 @@ for epoch in range(config['num_epochs']):
     end = time.time()    
     if epoch==0:
         print ('epoch\ttrain_loss\ttest_loss\tlr\ttime (s)')
-    print ("%s\t%.3f\t%.3f\t%.6f\t%.3f" %(epoch, train_loss, test_loss, current_lr, end-st))
+    #print ("%s\t%.3f\t%.3f\t%.6f\t%.3f" %(epoch, train_loss, test_loss, current_lr, end-st))
+
+    passed_time = end - st
+    
+    # logic to calculate expected time remaining, based on time taken and epochs
+    
+    if epoch > 0:
+        time_per_epoch = (end - start_time) / (epoch + 1)
+        expected_time_remaining = time_per_epoch * (config['num_epochs'] - epoch - 1)
+        print(f'{epoch}\t{train_loss:.3f}\t{test_loss:.3f}\t{current_lr:.6f}\t{passed_time:.3f}\tETA: {expected_time_remaining/60:.2f} min')
+
+   
+
     # save model!
     # only save for the last epoch...
 
