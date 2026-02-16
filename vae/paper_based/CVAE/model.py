@@ -160,7 +160,10 @@ class CVAE(nn.Module):
         self.output_layer = nn.Linear(self.unit_size, self.vocab_size) # output layer to predict the next character in the sequence
 
         if self.optimizer_name == 'adamw':
-            self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+            if self.weight_decay > 0:
+                self.optimizer = torch.optim.AdamW(self._build_adamw_param_groups(), lr=self.lr)
+            else:
+                self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=0.0)
         elif self.optimizer_name == 'adam':
             self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         else:
@@ -206,6 +209,36 @@ class CVAE(nn.Module):
         # Bool mask keeps mask dtype consistent with key padding masks.
         # True means the position is masked.
         return torch.triu(torch.ones((seq_len, seq_len), device=device, dtype=torch.bool), diagonal=1)
+
+    @staticmethod
+    def _is_no_decay_param(param_name: str, param: torch.nn.Parameter) -> bool:
+        lname = param_name.lower()
+        if param.ndim == 1:
+            return True
+        if lname.endswith('bias'):
+            return True
+        if 'norm' in lname:
+            return True
+        if 'embedding' in lname:
+            return True
+        if lname.startswith('out_mean') or lname.startswith('out_log_sigma'):
+            return True
+        return False
+
+    def _build_adamw_param_groups(self) -> list:
+        decay_params = []
+        no_decay_params = []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            if self._is_no_decay_param(name, param):
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+        return [
+            {'params': decay_params, 'weight_decay': self.weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0},
+        ]
 
     def encode(self, x:torch.Tensor, c:torch.Tensor, l:torch.Tensor) -> tuple:
         if self.model_mode == 'lstm':
@@ -288,9 +321,11 @@ class CVAE(nn.Module):
         log_sigma_f = torch.clamp(log_sigma.float(), min=-20.0, max=20.0)
         return torch.mean(-0.5 * (1 + log_sigma_f - torch.square(mean_f) - torch.exp(log_sigma_f)))
 
-    def _clip_gradients(self) -> None:
+    def _clip_gradients(self) -> float:
         if self.grad_clip_norm > 0:
-            nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.grad_clip_norm)
+            total_norm = nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.grad_clip_norm)
+            return float(total_norm)
+        return 0.0
 
     @staticmethod
     def _sequence_loss(logits:torch.Tensor, targets:torch.Tensor, lengths:torch.Tensor) -> torch.Tensor:
@@ -319,39 +354,56 @@ class CVAE(nn.Module):
         c_t = torch.as_tensor(c, dtype=torch.float32, device=self.device)
         return x_t, y_t, l_t, c_t
 
-    def _compute_losses(self, x:torch.Tensor, y:torch.Tensor, l:torch.Tensor, c:torch.Tensor) -> tuple:
+    def _compute_losses(self, x:torch.Tensor, y:torch.Tensor, l:torch.Tensor, c:torch.Tensor, beta:float = 1.0) -> tuple:
         probs, logits, _, mean, log_sigma = self.forward(x, c, l)
         reconstr_loss = self._sequence_loss(logits, y, l)
         latent_loss = self.cal_latent_loss(mean, log_sigma)
         # NOTE: Elbo loss = reconstruction loss + KL divergence loss
-        loss = reconstr_loss + latent_loss
+        loss = reconstr_loss + (float(beta) * latent_loss)
         mol_pred = torch.argmax(probs, dim=2)
-        return loss, reconstr_loss, latent_loss, mol_pred
+        stats = {
+            'recon_loss': float(reconstr_loss.detach().item()),
+            'kl_loss': float(latent_loss.detach().item()),
+            'mean_abs': float(mean.detach().abs().mean().item()),
+            'log_sigma_mean': float(log_sigma.detach().mean().item()),
+            'log_sigma_min': float(log_sigma.detach().min().item()),
+            'log_sigma_max': float(log_sigma.detach().max().item()),
+            'beta': float(beta),
+        }
+        return loss, reconstr_loss, latent_loss, mol_pred, stats
 
-    def train_batch(self, x:np.ndarray, y:np.ndarray, l:np.ndarray, c:np.ndarray) -> float:
+    def train_batch(self, x:np.ndarray, y:np.ndarray, l:np.ndarray, c:np.ndarray, beta:float = 1.0, return_metrics:bool = False):
         self.train(True)
         x_t, y_t, l_t, c_t = self._to_tensor_batch(x, y, l, c)
         self.optimizer.zero_grad()
         with self._autocast_context():
-            loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
+            loss, _, _, _, stats = self._compute_losses(x_t, y_t, l_t, c_t, beta=beta)
+        grad_norm = 0.0
         if self.use_grad_scaler:
             self.grad_scaler.scale(loss).backward()
             self.grad_scaler.unscale_(self.optimizer)
-            self._clip_gradients()
+            grad_norm = self._clip_gradients()
             self.grad_scaler.step(self.optimizer)
             self.grad_scaler.update()
         else:
             loss.backward()
-            self._clip_gradients()
+            grad_norm = self._clip_gradients()
             self.optimizer.step()
+        if return_metrics:
+            stats['grad_norm'] = float(grad_norm)
+            stats['total_loss'] = float(loss.detach().item())
+            return stats
         return float(loss.item())
 
-    def test_batch(self, x:np.ndarray, y:np.ndarray, l:np.ndarray, c:np.ndarray) -> float:
+    def test_batch(self, x:np.ndarray, y:np.ndarray, l:np.ndarray, c:np.ndarray, beta:float = 1.0, return_metrics:bool = False):
         self.train(False)
         x_t, y_t, l_t, c_t = self._to_tensor_batch(x, y, l, c)
         with torch.no_grad():
             with self._autocast_context():
-                loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
+                loss, _, _, _, stats = self._compute_losses(x_t, y_t, l_t, c_t, beta=beta)
+        if return_metrics:
+            stats['total_loss'] = float(loss.detach().item())
+            return stats
         return float(loss.item())
 
     def save(self, ckpt_path:str, global_step:int, model_config:Optional[dict]=None):

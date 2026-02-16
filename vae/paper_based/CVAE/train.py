@@ -13,9 +13,50 @@ def log_cuda_mem(prefix: str = "") -> None:
         reserved = torch.cuda.memory_reserved() / (1024**2)
         print(f"{prefix} cuda_mem_allocated={alloc:.1f} MiB reserved={reserved:.1f} MiB")
 
+
+def get_kl_beta(epoch:int, cfg:dict) -> float:
+    if not bool(cfg.get('kl_anneal_enabled', False)):
+        return 1.0
+    start_beta = float(cfg.get('kl_anneal_start_beta', 0.0))
+    max_beta = float(cfg.get('kl_anneal_max_beta', 1.0))
+    hold_epochs = int(cfg.get('kl_anneal_hold_epochs', 0))
+    warmup_epochs = max(1, int(cfg.get('kl_anneal_warmup_epochs', 20)))
+    if epoch < hold_epochs:
+        return start_beta
+    progress = (epoch - hold_epochs) / float(warmup_epochs)
+    progress = min(max(progress, 0.0), 1.0)
+    beta = start_beta + (max_beta - start_beta) * progress
+    return float(beta)
+
+
+def apply_training_preset(cfg:dict) -> dict:
+    preset = str(cfg.get('training_preset', 'custom')).strip().lower()
+    if preset in ('', 'custom', 'none'):
+        print('training preset: custom (no automatic overrides)')
+        return cfg
+
+    if preset == 'stable_transformer':
+        cfg.update({
+            'model_mode': 'transformer',
+            'optimizer': 'adamw',
+            'weight_decay': 0.0,
+            'use_amp': False,
+            'kl_anneal_enabled': True,
+            'kl_anneal_start_beta': 0.0,
+            'kl_anneal_max_beta': 1.0,
+            'kl_anneal_hold_epochs': 2,
+            'kl_anneal_warmup_epochs': 20,
+            'diagnostics_every': 1,
+        })
+        print('training preset: stable_transformer (applied)')
+        return cfg
+
+    raise ValueError("training_preset must be one of: 'custom', 'stable_transformer'")
+
 # Single source of truth for run configuration.
 # Edit values here directly; CLI arguments are intentionally disabled.
 config = {
+    'training_preset': 'stable_transformer',  # 'custom' or 'stable_transformer'
     'batch_size': 128,
     'latent_size': 200, # latent vector size; also Transformer token embedding size
     'unit_size': 512, # hidden size (LSTM) / internal Transformer d_model width
@@ -25,7 +66,7 @@ config = {
     'mean': 0.0,
     'stddev': 1.0,
     'num_epochs': 100,
-    'lr': 0.001,
+    'lr': 0.0001,
     'num_prop': None,
     'save_dir': 'save/',
     'save_every': 10, # save a checkpoint every N epochs
@@ -34,10 +75,10 @@ config = {
     'early_stopping_min_delta': 0.0,
     'early_stopping_restore_best': True,
     'optimizer': 'adamw',  # 'adam' or 'adamw'
-    'weight_decay': 0.01,
-    'use_amp': True,
-    'amp_dtype': 'float16',  # 'float16' or 'bfloat16'
-    'grad_clip_norm': 1.0,
+    'weight_decay': 0.0,
+    'use_amp': False,
+    'amp_dtype': 'bfloat16',  # 'float16' or 'bfloat16'
+    'grad_clip_norm': 8.0, # max norm for gradient clipping (to prevent exploding gradients)
     'use_reduce_lr_on_plateau': True,
     'lr_plateau_factor': 0.5,
     'lr_plateau_patience': 5,
@@ -48,7 +89,15 @@ config = {
     'transformer_ff_size': 1024, # dimension of the feedforward network in the transformer layers
     'transformer_dropout': 0.15, # dropout rate for the transformer layers
     'train_ratio': 0.75, # ratio of data to use for training (the rest is used for testing)
+    'kl_anneal_enabled': True,
+    'kl_anneal_start_beta': 0.0,
+    'kl_anneal_max_beta': 1.0,
+    'kl_anneal_hold_epochs': 2,
+    'kl_anneal_warmup_epochs': 20,
+    'diagnostics_every': 1,
 }
+
+config = apply_training_preset(config)
 
 # check for gpu
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -139,6 +188,18 @@ for epoch in range(config['num_epochs']):
     # optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'])
     train_loss = []
     test_loss = []
+    train_recon = []
+    train_kl = []
+    train_mean_abs = []
+    train_log_sigma_mean = []
+    train_log_sigma_min = []
+    train_log_sigma_max = []
+    train_grad_norm = []
+
+    test_recon = []
+    test_kl = []
+
+    beta = get_kl_beta(epoch, config)
     
  
     st = time.time()
@@ -153,25 +214,35 @@ for epoch in range(config['num_epochs']):
     
     
     """
-    for iteration in range(len(train_molecules_input)//config['batch_size']):
-        
-        n = np.random.randint(len(train_molecules_input), size = config['batch_size'])
-        x = np.array([train_molecules_input[i] for i in n])
-        y = np.array([train_molecules_output[i] for i in n])
-        l = np.array([train_length[i] for i in n])
-        c = np.array([train_labels[i] for i in n])
-        cost = model.train_batch(x, y, l, c)
-        train_loss.append(cost)
+    train_perm = np.random.permutation(len(train_molecules_input))
+    for start in range(0, len(train_perm), config['batch_size']):
+        batch_idx = train_perm[start:start + config['batch_size']]
+        x = train_molecules_input[batch_idx]
+        y = train_molecules_output[batch_idx]
+        l = train_length[batch_idx]
+        c = train_labels[batch_idx]
+        metrics = model.train_batch(x, y, l, c, beta=beta, return_metrics=True)
+        train_loss.append(metrics['total_loss'])
+        train_recon.append(metrics['recon_loss'])
+        train_kl.append(metrics['kl_loss'])
+        train_mean_abs.append(metrics['mean_abs'])
+        train_log_sigma_mean.append(metrics['log_sigma_mean'])
+        train_log_sigma_min.append(metrics['log_sigma_min'])
+        train_log_sigma_max.append(metrics['log_sigma_max'])
+        train_grad_norm.append(metrics['grad_norm'])
     # test on test set..
     # there is data leakage here, but we just want to see the trend of loss, not the actual performance of the model.
-    for iteration in range(len(test_molecules_input)//config['batch_size']):
-        n = np.random.randint(len(test_molecules_input), size = config['batch_size'])
-        x = np.array([test_molecules_input[i] for i in n])
-        y = np.array([test_molecules_output[i] for i in n])
-        l = np.array([test_length[i] for i in n])
-        c = np.array([test_labels[i] for i in n])
-        cost = model.test_batch(x, y, l, c)
-        test_loss.append(cost)
+    test_perm = np.random.permutation(len(test_molecules_input))
+    for start in range(0, len(test_perm), config['batch_size']):
+        batch_idx = test_perm[start:start + config['batch_size']]
+        x = test_molecules_input[batch_idx]
+        y = test_molecules_output[batch_idx]
+        l = test_length[batch_idx]
+        c = test_labels[batch_idx]
+        metrics = model.test_batch(x, y, l, c, beta=beta, return_metrics=True)
+        test_loss.append(metrics['total_loss'])
+        test_recon.append(metrics['recon_loss'])
+        test_kl.append(metrics['kl_loss'])
     
 
     train_loss = np.mean(np.array(train_loss))
@@ -220,22 +291,35 @@ for epoch in range(config['num_epochs']):
         history_df = pd.DataFrame(history)
         history_df.to_csv(config['save_dir']+'/history.csv', index=False)
         break
-        
-
-
-    end = time.time()    
-    if epoch==0:
-        print ('epoch\ttrain_loss\ttest_loss\tlr\ttime (s)')
-    #print ("%s\t%.3f\t%.3f\t%.6f\t%.3f" %(epoch, train_loss, test_loss, current_lr, end-st))
-
+            
+    end = time.time()  
     passed_time = end - st
+
+    time_per_epoch = (end - start_time) / (epoch + 1)
+    expected_time_remaining = time_per_epoch * (config['num_epochs'] - epoch - 1)
+
+      
+    if epoch==0:
+        print(f"{'Epoch':<10}{'Train Loss':<15}{'Test Loss':<15}{'Learning Rate':<15}{'Time (s)':<10}{'ETA (min)':<10}")
+    print(f"{epoch:<10}{train_loss:<15.3f}{test_loss:<15.3f}{current_lr:<15.6f}{passed_time:<10.3f}{expected_time_remaining/60:<10.2f}")
+    if epoch % int(config.get('diagnostics_every', 1)) == 0:
+        print(
+            f"diag epoch={epoch} beta={beta:.3f} "
+            f"train_recon={np.mean(train_recon):.4f} train_kl={np.mean(train_kl):.4f} "
+            f"test_recon={np.mean(test_recon):.4f} test_kl={np.mean(test_kl):.4f} "
+            f"mean_abs={np.mean(train_mean_abs):.4f} "
+            f"log_sigma(mean/min/max)={np.mean(train_log_sigma_mean):.4f}/"
+            f"{np.mean(train_log_sigma_min):.4f}/{np.mean(train_log_sigma_max):.4f} "
+            f"grad_norm={np.mean(train_grad_norm):.4f}"
+        )
+
+    
     
     # logic to calculate expected time remaining, based on time taken and epochs
     
-    if epoch > 0:
-        time_per_epoch = (end - start_time) / (epoch + 1)
-        expected_time_remaining = time_per_epoch * (config['num_epochs'] - epoch - 1)
-        print(f'{epoch}\t{train_loss:.3f}\t{test_loss:.3f}\t{current_lr:.6f}\t{passed_time:.3f}\tETA: {expected_time_remaining/60:.2f} min')
+    #if epoch > 0:
+
+    #    print(f'{epoch}\t{train_loss:.3f}\t{test_loss:.3f}\t{current_lr:.6f}\t{passed_time:.3f}\tETA: {expected_time_remaining/60:.2f} min')
 
    
 

@@ -443,5 +443,5 @@ def ensure_dir(path:str) -> None:
 
 def split_train_test(data:np.ndarray, train_ratio:float = 0.75) -> tuple:
     num_train = int(len(data) * train_ratio)
-    return data[0:num_train], data[num_train:-1]
+    return data[0:num_train], data[num_train:]
 

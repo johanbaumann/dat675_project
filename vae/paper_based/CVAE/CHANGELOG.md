@@ -22,6 +22,9 @@ All notable changes to this project are documented in this file.
 - `sample.py`: Added generation quality reporting with total generated count, accepted count, not-ok share, and breakdown (`invalid_or_empty`, `in_training`, `duplicate`).
 - `utils.py`: Added `load_training_canonical_smiles(...)` and `collect_new_unique_from_raw(...)` helper utilities.
 - `sample.py`: Added config flag `exclude_training` to enable/disable filtering out molecules present in training data.
+- `train.py`: Added configurable KL annealing controls (`kl_anneal_enabled`, `kl_anneal_start_beta`, `kl_anneal_max_beta`, `kl_anneal_hold_epochs`, `kl_anneal_warmup_epochs`) and per-epoch diagnostics logging.
+- `model.py`: Added optional detailed batch metrics from `train_batch(...)` / `test_batch(...)` (reconstruction loss, KL loss, latent stats, gradient norm) used for stability debugging.
+- `train.py`: Added one-click training preset switch via `training_preset`, including `stable_transformer` mode that auto-applies safer anti-divergence settings.
 
 ### Changed
 
@@ -39,6 +42,10 @@ All notable changes to this project are documented in this file.
 - `sample.py`: Now excludes molecules present in the training/property file from accepted generated results.
 - `README.md`: Rewritten usage guide with dedicated sections for LSTM/Transformer training commands, JSON config workflow, and a clear "differences from original paper" explanation.
 - `README.md`: Training instructions now emphasize in-file `train.py` config editing as the default/primary workflow.
+- `train.py`: Training now uses shuffled per-epoch batching without replacement instead of random sampling with replacement, reducing unstable repeated updates.
+- `train.py`: Default debug-safe Transformer training settings now start with `use_amp=False` and `weight_decay=0.0` while keeping both features configurable.
+- `model.py`: AdamW optimizer now uses parameter groups so weight decay is not applied to biases, norm parameters, embeddings, and VAE posterior heads (`out_mean`, `out_log_sigma`).
+- `model.py`: ELBO now supports a KL weight (`beta`) for warm-up/annealing while preserving old behavior when `beta=1.0`.
 
 ### Fixed
 
@@ -49,6 +56,8 @@ All notable changes to this project are documented in this file.
 - `model.py`: Checkpoint restore now uses explicit `weights_only` handling when supported by current PyTorch to avoid future-warning-prone implicit load behavior.
 - `utils.py`: Fixed latent utility issues discovered during validation (`load_dataset` now imports `h5py` locally, `from_one_hot_array` now returns `Optional[int]`, and one-hot/inchi helper typing edge cases were hardened).
 - `model.py`: Replaced fixed Adam optimizer with configurable optimizer selection (`adam`/`adamw`) and weight decay support.
+- `train.py` / `model.py`: Addressed Transformer divergence pattern (epoch-1 loss explosion) by adding KL warm-up, safer optimizer decay behavior, and explicit diagnostics to identify exploding terms.
+- Compatibility: LSTM path and existing APIs remain functional; stability additions are opt-in via config or backward-compatible defaults.
 
 ### Tested
 
