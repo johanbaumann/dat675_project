@@ -15,7 +15,7 @@ config = {
     'unit_size': 512, # dimension of the hidden units in the RNN layers
     'n_rnn_layer': 3, # number of RNN layers in the encoder and decoder
     'seq_length': 120, # maximum length of the input and output sequences (smiles strings)
-    'prop_file': 'smiles_prop.txt',
+    'prop_file': 'prop_mw_logp.txt',
     'mean': 0.0,
     'stddev': 1.0,
     'num_epochs': 100,
