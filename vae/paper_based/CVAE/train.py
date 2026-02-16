@@ -20,7 +20,7 @@ config = {
     'stddev': 1.0,
     'num_epochs': 100,
     'lr': 0.0001,
-    'num_prop': 3,
+    'num_prop': None,
     'save_dir': 'save/',
     'patientce': 10,
     'early_stopping_patience': 10,
@@ -49,6 +49,10 @@ print (config)
 # we will have two version of output, one with start and end token, one without. the one with start and end token is used for training, the one without is used for testing.
 molecules_input, molecules_output, char, vocab, labels, length = load_data(config['prop_file'], config['seq_length'])
 vocab_size = len(char)
+if labels.ndim != 2 or labels.shape[1] == 0:
+    raise ValueError('Property file must contain at least one numeric conditioning column after SMILES.')
+config['num_prop'] = int(labels.shape[1])
+print(f'inferred num_prop from {config["prop_file"]}: {config["num_prop"]}')
 model_config = get_model_config(config, vocab_size=vocab_size)
 
 #make save_dir

@@ -5,7 +5,6 @@ from rdkit.Chem.rdMolDescriptors import CalcNumHBA
 from rdkit.Chem.rdMolDescriptors import CalcTPSA
 from rdkit import Chem
 from multiprocessing import Pool
-import argparse
 
 #parser = argparse.ArgumentParser()
 #parser.add_argument('--input_filename', help='filename for smiles', type=str, default='smiles.txt')
@@ -18,31 +17,49 @@ import argparse
 
 args = {
     'input_filename' : 'smiles.txt',
-    'output_filename' : 'smiles_prop.txt',
-    "properties": ['MW', 'LogP', 'TPSA'], # properties to calculate (MW, LogP, TPSA, NumHBD, NumHBA)
+    'output_filename' : 'prop_mw_logp.txt',
+    # order matters: this defines the conditioning column order for train/sample.
+    "properties": ['MW', 'LogP'], # any subset/order of: MW, LogP, TPSA, NumHBD, NumHBA
     'ncpus' : 1
 }
+
+
+PROPERTY_FUNCTIONS = {
+    'MW': ExactMolWt,
+    'LogP': MolLogP,
+    'TPSA': CalcTPSA,
+    'NumHBD': CalcNumHBD,
+    'NumHBA': CalcNumHBA,
+}
+
+
+def _validate_properties(selected: list) -> None:
+    if len(selected) == 0:
+        raise ValueError('args["properties"] must contain at least one descriptor name.')
+    unknown = [p for p in selected if p not in PROPERTY_FUNCTIONS]
+    if unknown:
+        supported = ', '.join(PROPERTY_FUNCTIONS.keys())
+        raise ValueError(f'Unknown property names: {unknown}. Supported: {supported}')
 
 
 
 
 def cal_prop(s: str) -> tuple:
     m = Chem.MolFromSmiles(s)
-    if m is None : return None
-    props = []
-    if 'MW' in args['properties']:
-        props.append(ExactMolWt(m))
-    if 'LogP' in args['properties']:
-        props.append(MolLogP(m))
-    if 'TPSA' in args['properties']:
-        props.append(CalcTPSA(m))
+    if m is None:
+        return None
+    props = [PROPERTY_FUNCTIONS[name](m) for name in args['properties']]
     return Chem.MolToSmiles(m), *props
+
+
 def read_smiles(filename: str) -> list:
     with open(filename) as f:
         smiles = f.read().split('\n')[:-1]
     return smiles
 
+
 if __name__ == '__main__':
+    _validate_properties(args['properties'])
     smiles = read_smiles(args['input_filename'])
     
     pool = Pool(args['ncpus'])
@@ -52,13 +69,11 @@ if __name__ == '__main__':
     data = r.get()
     pool.close()
     pool.join()
-    w = open(args['output_filename'], 'w')
-
-    for i, d in enumerate(data):
-        if d is None:
-            continue
-        w.write(d[0] + '\t' + str(d[1]) + '\t'+ str(d[2]) + '\t'+ str(d[3]) + '\n')
-        if i % 1000 == 0:
-            print('Processed %d molecules...' % i)
-    w.close()
+    with open(args['output_filename'], 'w') as w:
+        for i, d in enumerate(data):
+            if d is None:
+                continue
+            w.write('\t'.join(map(str, d)) + '\n')
+            if i % 1000 == 0:
+                print('Processed %d molecules...' % i)
 

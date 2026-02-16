@@ -16,8 +16,7 @@ batch_size: number of samples in each training batch
 latent_size: dimention of latent vector
 lr: learning rate
 num_prop: number of properties to condition on (e.g. MW, LogP, TPSA)
-    - will be modified to only use a subset of properties in the future
-    - currently using all 3 properties (MW, LogP, TPSA)
+    - supports any subset/order based on the property file used for training
 
 NOTE: prior z  
 z = N(mean, stddev)

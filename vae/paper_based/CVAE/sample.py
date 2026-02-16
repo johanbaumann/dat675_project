@@ -210,7 +210,7 @@ if __name__ == '__main__':
             'num_iteration': 10,  # number of batches to sample (old behavior)
             'save_file': 'save/model_.ckpt-99.pt',
             'training_config_file': None,
-            'target_prop': '300.0 3.0 75.0',
+            'target_prop': '300.0 3.0',
             'prop_file': None,
             'seq_length': None,
             'mean': None,
@@ -236,8 +236,16 @@ if __name__ == '__main__':
                 model_config[key] = config[key]
 
         # Build vocabulary/charset from property file.
-        _, _, charset, vocab, _, _ = load_data(model_config['prop_file'], int(model_config['seq_length']))
+        _, _, charset, vocab, loaded_labels, _ = load_data(model_config['prop_file'], int(model_config['seq_length']))
         vocab_size = len(charset)
+        inferred_num_prop = int(loaded_labels.shape[1])
+        trained_num_prop = int(model_config.get('num_prop', inferred_num_prop))
+        if trained_num_prop != inferred_num_prop:
+            raise ValueError(
+                f"Mismatch between training config num_prop ({trained_num_prop}) and "
+                f"property file columns ({inferred_num_prop})."
+            )
+        model_config['num_prop'] = inferred_num_prop
 
         # Canonical training-set SMILES used for novelty filtering.
         if bool(config.get('exclude_training', True)):
@@ -261,7 +269,13 @@ if __name__ == '__main__':
         except Exception:
             raise ValueError(
                 'target_prop should be a string of space separated values. '
-                'e.g. "300.0 3.0 75.0" for MW=300, LogP=3, TPSA=75'
+                'e.g. "300.0 3.0" for two properties (MW, LogP)'
+            )
+
+        if len(target_row) != int(model_config['num_prop']):
+            raise ValueError(
+                f"target_prop has {len(target_row)} values, but model expects "
+                f"{int(model_config['num_prop'])} properties."
             )
 
         target_prop = np.array([target_row for _ in range(int(model_config['batch_size']))], dtype=np.float32)

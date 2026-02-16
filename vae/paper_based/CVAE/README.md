@@ -25,8 +25,25 @@ Your modifications in this repo include:
 Input: one SMILES per line in `smiles.txt`.
 
 ```bash
-python cal_prop.py --input_filename=smiles.txt --output_filename=smiles_prop.txt
+python cal_prop.py
 ```
+
+Set input/output filenames in the `args` dict at the top of `cal_prop.py`.
+
+`cal_prop.py` is now modular via a descriptor registry. Configure properties in the in-file `args` dict:
+
+```python
+"properties": ['MW', 'LogP']
+```
+
+Supported descriptor names:
+- `MW`
+- `LogP`
+- `TPSA`
+- `NumHBD`
+- `NumHBA`
+
+You can use any subset/order. The selected order becomes the conditioning-column order in `smiles_prop.txt` and must match `sample.py` `target_prop` order.
 
 ## 2) Train model
 
@@ -59,6 +76,8 @@ python -u train.py
 
 No external config file is required to start training.
 
+`train.py` now infers `num_prop` directly from `smiles_prop.txt` (number of numeric columns after SMILES), so you do not need to hardcode it.
+
 ### Training outputs
 
 Each run saves:
@@ -70,9 +89,17 @@ Each run saves:
 
 `sample.py` now uses an internal config block. Set:
 - `save_file` to a trained checkpoint path,
-- `target_prop` to desired `MW LogP TPSA`.
+- `target_prop` to desired property values in the same order as `cal_prop.py` `args["properties"]`.
 
 By default, it auto-loads `training_config.json` from the same folder as `save_file`.
+
+For MW + LogP training, use:
+
+```python
+'target_prop': '300.0 3.0'
+```
+
+`sample.py` validates that the number of values in `target_prop` matches the trained model/property-file dimensionality.
 
 Example:
 
