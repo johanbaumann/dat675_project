@@ -166,7 +166,14 @@ class CVAE(nn.Module):
         else:
             raise ValueError(f"Unsupported optimizer='{self.optimizer_name}'. Use 'adam' or 'adamw'.")
 
-        self.grad_scaler = torch.cuda.amp.GradScaler(enabled=self.use_grad_scaler)
+        # Prefer the newer torch.amp API when available (PyTorch 2.x), but keep
+        # compatibility with older versions and type stubs.
+        amp_mod = getattr(torch, 'amp', None)
+        grad_scaler_cls = getattr(amp_mod, 'GradScaler', None) if amp_mod is not None else None
+        if grad_scaler_cls is not None:
+            self.grad_scaler = grad_scaler_cls('cuda', enabled=self.use_grad_scaler)
+        else:
+            self.grad_scaler = torch.cuda.amp.GradScaler(enabled=self.use_grad_scaler)
 
         self.to(self.device)
         amp_status = f"enabled dtype={self.amp_dtype_name}" if self.amp_enabled else "disabled"
@@ -263,7 +270,9 @@ class CVAE(nn.Module):
             state = None
 
         logits = self.output_layer(y)
-        probs = F.softmax(logits, dim=-1)
+        # Softmax is not needed for the CE loss (we use logits). When it is used (argmax/sampling),
+        # computing it in fp32 avoids fp16 overflow -> NaNs.
+        probs = torch.softmax(logits.float(), dim=-1)
         return probs, logits, state
 
     def forward(self, x:torch.Tensor, c:torch.Tensor, l:torch.Tensor) -> tuple:
@@ -291,10 +300,11 @@ class CVAE(nn.Module):
 
         """
 
-
         batch_size, seq_length, vocab_size = logits.shape
+        # Compute CE in fp32 for numerical stability under AMP.
+        logits_f = logits.float()
         token_loss = F.cross_entropy(
-            logits.reshape(-1, vocab_size),
+            logits_f.reshape(-1, vocab_size),
             targets.reshape(-1),
             reduction='none',
         ).reshape(batch_size, seq_length)

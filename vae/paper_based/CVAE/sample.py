@@ -280,6 +280,15 @@ if __name__ == '__main__':
 
         target_prop = np.array([target_row for _ in range(int(model_config['batch_size']))], dtype=np.float32)
 
+        # If training used standardized properties, apply the same transform here.
+        prop_norm_mean = model_config.get('prop_norm_mean')
+        prop_norm_std = model_config.get('prop_norm_std')
+        if prop_norm_mean is not None and prop_norm_std is not None:
+            mean_arr = np.array(prop_norm_mean, dtype=np.float32)
+            std_arr = np.array(prop_norm_std, dtype=np.float32)
+            std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+            target_prop = (target_prop - mean_arr) / std_arr
+
         # Start token: 'X'. In this dataset, 'X' is appended to the vocab in `load_data()`.
         start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
 

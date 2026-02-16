@@ -74,14 +74,6 @@ if labels.ndim != 2 or labels.shape[1] == 0:
     raise ValueError('Property file must contain at least one numeric conditioning column after SMILES.')
 config['num_prop'] = int(labels.shape[1])
 print(f'inferred num_prop from {config["prop_file"]}: {config["num_prop"]}')
-model_config = get_model_config(config, vocab_size=vocab_size)
-
-#make save_dir
-ensure_dir(config['save_dir'])
-
-# save a single source of truth for recreating the trained model
-training_config_path = save_training_config(model_config, config['save_dir'])
-print(f'saved training config to: {training_config_path}')
 
 #divide data into training and test set
 # can leak...
@@ -90,6 +82,26 @@ train_molecules_input, test_molecules_input = split_train_test(molecules_input, 
 train_molecules_output, test_molecules_output = split_train_test(molecules_output, config['train_ratio'])
 train_labels, test_labels = split_train_test(labels, config['train_ratio'])
 train_length, test_length = split_train_test(length, config['train_ratio'])
+
+# Normalize conditioning properties (MW/LogP/etc). Unnormalized properties can be large and
+# are a common cause of fp16 overflow -> NaN loss (especially with Transformer + AMP).
+prop_mean = np.mean(train_labels, axis=0)
+prop_std = np.std(train_labels, axis=0)
+prop_std = np.where(prop_std < 1e-8, 1.0, prop_std)
+train_labels = (train_labels - prop_mean) / prop_std
+test_labels = (test_labels - prop_mean) / prop_std
+print(f'property normalization: mean={prop_mean.tolist()} std={prop_std.tolist()}')
+
+model_config = get_model_config(config, vocab_size=vocab_size)
+model_config['prop_norm_mean'] = prop_mean.astype(np.float32).tolist()
+model_config['prop_norm_std'] = prop_std.astype(np.float32).tolist()
+
+#make save_dir
+ensure_dir(config['save_dir'])
+
+# save a single source of truth for recreating the trained model (including prop normalization)
+training_config_path = save_training_config(model_config, config['save_dir'])
+print(f'saved training config to: {training_config_path}')
 
 model = CVAE(vocab_size, model_config)
 print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
