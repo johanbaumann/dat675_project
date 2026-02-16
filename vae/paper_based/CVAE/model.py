@@ -231,6 +231,11 @@ class CVAE(nn.Module):
         Decoder is applied iterativley to generate seq of carachters until it generates an 'E' char or
         reaches maximum length (120 in the original paper)
 
+        latent_vector: numpy array of shape (batch_size, latent_size) sampled from the prior distribution
+        c: numpy array of shape (batch_size, num_prop) properties to condition on
+        start_codon: numpy array of shape (batch_size, 1) containing the index of the start token (e.g. 'X') in the vocab
+        seq_length: maximum length of the generated sequence (120 in the original paper)
+
         
 
         """
@@ -240,16 +245,38 @@ class CVAE(nn.Module):
 
 
         self.train(False)
-        z = torch.as_tensor(latent_vector, dtype=torch.float32, device=self.device) # convert latent vector to tensor
-        c_t = torch.as_tensor(c, dtype=torch.float32, device=self.device) # convert properties to tensor
-        x = torch.as_tensor(start_codon, dtype=torch.long, device=self.device) # start codon (e.g. 'X') to tensor
+
+        # `load_data()` builds the vocabulary by appending 'E' then 'X' at the end.
+        # So EOS='E' is always vocab_size-2 and SOS='X' is always vocab_size-1.
+        e_index = self.vocab_size - 2
+
+        z = torch.as_tensor(latent_vector, dtype=torch.float32, device=self.device)  # latent vector
+        c_t = torch.as_tensor(c, dtype=torch.float32, device=self.device)  # properties
+        x = torch.as_tensor(start_codon, dtype=torch.long, device=self.device)  # start token indices
 
         state = None
-        preds: list = []
+        preds = []
+        finished = torch.zeros(x.shape[0], dtype=torch.bool, device=self.device)
+        e_index_t = torch.tensor(e_index, dtype=torch.long, device=self.device)
+
         with torch.no_grad():
+            # iteratively decode until EOS ('E') is generated or reaches maximum length
             for _ in range(seq_length):
                 _, logits, state = self.decode(x, z, c_t, initial_state=state)
-                x = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-                preds.append(x)
+                next_x = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+
+                # Once a sequence hits EOS, keep it at EOS for the remaining steps.
+                next_x = torch.where(
+                    finished.unsqueeze(1),
+                    e_index_t.view(1, 1).expand_as(next_x),
+                    next_x,
+                )
+
+                preds.append(next_x)
+                finished |= next_x.squeeze(1).eq(e_index_t)
+                x = next_x
+
+                if finished.all():
+                    break
 
         return torch.cat(preds, dim=1).cpu().numpy().astype(int)

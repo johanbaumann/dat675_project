@@ -1,6 +1,89 @@
 #import h5py
 import numpy as np
 from rdkit import Chem
+from typing import Optional
+
+
+def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
+    """Load canonical SMILES set from the training/property file.
+
+    This follows the same length filter used in `load_data` so the exclusion set
+    matches what the model was trained on.
+    """
+    canonical = set()
+    with open(prop_file) as f:
+        lines = f.read().split('\n')[:-1]
+
+    lines = [l.split() for l in lines]
+    lines = [l for l in lines if len(l) > 0 and len(l[0]) < seq_length - 2]
+
+    for row in lines:
+        smi = row[0]
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        can = Chem.MolToSmiles(mol)
+        if can:
+            canonical.add(can)
+    return canonical
+
+
+def collect_new_unique_from_raw(
+    raw_strings:list,
+    seen_smiles:set,
+    training_smiles:Optional[set] = None,
+    eos_token:str = 'E',
+) -> tuple:
+    """Filter decoded strings into new unique molecules + quality stats.
+
+    Returns:
+      - accepted: list of (canonical_smiles, mol)
+      - stats: dict with counters for quality reporting
+    """
+    accepted = []
+    stats = {
+        'total_generated': 0,
+        'accepted': 0,
+        'invalid_or_empty': 0,
+        'in_training': 0,
+        'duplicate': 0,
+    }
+
+    if training_smiles is None:
+        training_smiles = set()
+
+    for s in raw_strings:
+        stats['total_generated'] += 1
+
+        # Drop everything after EOS/padding.
+        s = s.split(eos_token)[0].strip()
+        if not s:
+            stats['invalid_or_empty'] += 1
+            continue
+
+        mol = Chem.MolFromSmiles(s)
+        if mol is None:
+            stats['invalid_or_empty'] += 1
+            continue
+
+        can = Chem.MolToSmiles(mol)
+        if not can:
+            stats['invalid_or_empty'] += 1
+            continue
+
+        if can in training_smiles:
+            stats['in_training'] += 1
+            continue
+
+        if can in seen_smiles:
+            stats['duplicate'] += 1
+            continue
+
+        seen_smiles.add(can)
+        accepted.append((can, mol))
+        stats['accepted'] += 1
+
+    return accepted, stats
 
 def convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
     list_char = list(char)
