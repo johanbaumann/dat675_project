@@ -19,6 +19,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'num_epochs': 100,
     'lr': 0.0001,
     'num_prop': 3,
+    'grad_clip_norm': 1.0,
     'save_dir': 'save/',
     'patientce': 10,
     'model_mode': 'lstm',
@@ -302,6 +303,7 @@ def compose_train_config(args) -> dict:
     config['stddev'] = float(config['stddev'])
     config['num_epochs'] = int(config['num_epochs'])
     config['lr'] = float(config['lr'])
+    config['grad_clip_norm'] = float(config.get('grad_clip_norm', 1.0))
     if config.get('num_prop') is None:
         config['num_prop'] = None
     else:
@@ -351,6 +353,7 @@ def compose_train_config_from_dict(config_override:dict) -> dict:
     config['stddev'] = float(config['stddev'])
     config['num_epochs'] = int(config['num_epochs'])
     config['lr'] = float(config['lr'])
+    config['grad_clip_norm'] = float(config.get('grad_clip_norm', 1.0))
     if config.get('num_prop') is None:
         config['num_prop'] = None
     else:
@@ -395,6 +398,7 @@ def get_model_config(config:dict, vocab_size:Optional[int] = None) -> dict:
         'stddev': float(config['stddev']),
         'lr': float(config['lr']),
         'num_prop': int(config['num_prop']),
+        'grad_clip_norm': float(config.get('grad_clip_norm', 1.0)),
         'model_mode': str(config.get('model_mode', 'lstm')).lower(),
         'optimizer': str(config.get('optimizer', 'adam')).lower(),
         'weight_decay': float(config.get('weight_decay', 0.0)),

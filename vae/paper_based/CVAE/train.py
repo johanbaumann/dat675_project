@@ -16,7 +16,7 @@ def log_cuda_mem(prefix: str = "") -> None:
 # Single source of truth for run configuration.
 # Edit values here directly; CLI arguments are intentionally disabled.
 config = {
-    'batch_size': 64,
+    'batch_size': 128,
     'latent_size': 200, # latent vector size; also Transformer token embedding size
     'unit_size': 512, # hidden size (LSTM) / internal Transformer d_model width
     'n_rnn_layer': 2, # number of RNN layers in the encoder and decoder
@@ -25,7 +25,7 @@ config = {
     'mean': 0.0,
     'stddev': 1.0,
     'num_epochs': 100,
-    'lr': 0.0001,
+    'lr': 0.001,
     'num_prop': None,
     'save_dir': 'save/',
     'save_every': 10, # save a checkpoint every N epochs
@@ -37,6 +37,7 @@ config = {
     'weight_decay': 0.01,
     'use_amp': True,
     'amp_dtype': 'float16',  # 'float16' or 'bfloat16'
+    'grad_clip_norm': 1.0,
     'use_reduce_lr_on_plateau': True,
     'lr_plateau_factor': 0.5,
     'lr_plateau_patience': 5,

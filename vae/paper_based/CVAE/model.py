@@ -91,6 +91,7 @@ class CVAE(nn.Module):
         self.weight_decay = float(self._get_arg_or_default(args, 'weight_decay', 0.0))
         self.use_amp = bool(self._get_arg_or_default(args, 'use_amp', True))
         self.amp_dtype_name = str(self._get_arg_or_default(args, 'amp_dtype', 'float16')).lower()
+        self.grad_clip_norm = float(self._get_arg_or_default(args, 'grad_clip_norm', 1.0))
         self.transformer_heads = self._get_arg_or_default(args, 'transformer_heads', 8)
         self.transformer_ff_size = self._get_arg_or_default(args, 'transformer_ff_size', self.unit_size * 4)
         self.transformer_dropout = self._get_arg_or_default(args, 'transformer_dropout', 0.1)
@@ -227,7 +228,7 @@ class CVAE(nn.Module):
             h_last = h_seq[torch.arange(h_seq.size(0), device=h_seq.device), last_indices]
 
         mean = self.out_mean(h_last)
-        log_sigma = self.out_log_sigma(h_last)
+        log_sigma = torch.clamp(self.out_log_sigma(h_last), min=-20.0, max=20.0)
         eps = (torch.randn_like(mean) * self.stddev) + self.mean
         z = mean + torch.exp(log_sigma / 2.0) * eps
         return z, mean, log_sigma
@@ -274,7 +275,13 @@ class CVAE(nn.Module):
     def cal_latent_loss(mean:torch.Tensor, log_sigma:torch.Tensor) -> torch.Tensor:
         # calculated KL divergence between the latent distribution and the prior distribution (N(mean, stddev))
         # KL div: 0.5 * sum(1 + log(sigma^2) - mean^2 - sigma^2)
-        return torch.mean(-0.5 * (1 + log_sigma - torch.square(mean) - torch.exp(log_sigma)))
+        mean_f = mean.float()
+        log_sigma_f = torch.clamp(log_sigma.float(), min=-20.0, max=20.0)
+        return torch.mean(-0.5 * (1 + log_sigma_f - torch.square(mean_f) - torch.exp(log_sigma_f)))
+
+    def _clip_gradients(self) -> None:
+        if self.grad_clip_norm > 0:
+            nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.grad_clip_norm)
 
     @staticmethod
     def _sequence_loss(logits:torch.Tensor, targets:torch.Tensor, lengths:torch.Tensor) -> torch.Tensor:
@@ -319,10 +326,13 @@ class CVAE(nn.Module):
             loss, _, _, _ = self._compute_losses(x_t, y_t, l_t, c_t)
         if self.use_grad_scaler:
             self.grad_scaler.scale(loss).backward()
+            self.grad_scaler.unscale_(self.optimizer)
+            self._clip_gradients()
             self.grad_scaler.step(self.optimizer)
             self.grad_scaler.update()
         else:
             loss.backward()
+            self._clip_gradients()
             self.optimizer.step()
         return float(loss.item())
 
