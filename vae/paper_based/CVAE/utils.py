@@ -2,13 +2,13 @@
 import numpy as np
 from rdkit import Chem
 
-def convert_to_smiles(vector, char):
+def convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
     list_char = list(char)
     #list_char = char.tolist()
     vector = vector.astype(int)
     return "".join(map(lambda x: list_char[x], vector)).strip()
 
-def stochastic_convert_to_smiles(vector, char):
+def stochastic_convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
     list_char = char.tolist()
     s = ""
     for i in range(len(vector)):
@@ -19,22 +19,22 @@ def stochastic_convert_to_smiles(vector, char):
         s+=list_char[index[0]]
     return s
 
-def one_hot_array(i, n):
+def one_hot_array(i:int, n:int) -> list:
     return list(map(int, [ix == i for ix in range(n)]))
 
-def one_hot_index(vec, charset):
+def one_hot_index(vec:np.ndarray, charset:str) -> list:
     return list(map(charset.index, vec))
 
-def from_one_hot_array(vec):
+def from_one_hot_array(vec:np.ndarray) -> int:
     oh = np.where(vec == 1)
     if oh[0].shape == (0, ):
         return None
     return int(oh[0][0])
 
-def decode_smiles_from_indexes(vec, charset):
+def decode_smiles_from_indexes(vec:np.ndarray, charset:str) -> str:
     return "".join(map(lambda x: charset[x], vec)).strip()
 
-def load_dataset(filename, split = True):
+def load_dataset(filename:str, split:bool = True) -> tuple:
     h5f = h5py.File(filename, 'r')
     if split:
         data_train = h5f['data_train'][:]
@@ -48,28 +48,28 @@ def load_dataset(filename, split = True):
     else:
         return data_test, charset
 
-def encode_smiles(smiles, model, charset):
+def encode_smiles(smiles:str, model, charset:str) -> np.ndarray:
     cropped = list(smiles.ljust(120))
     preprocessed = np.array([list(map(lambda x: one_hot_array(x, len(charset)), one_hot_index(cropped, charset)))])
     latent = model.encoder.predict(preprocessed)
     return latent
 
-def smiles_to_onehot(smiles, charset):
+def smiles_to_onehot(smiles:str, charset:str) -> np.ndarray:
     cropped = list(smiles.ljust(120))
     preprocessed = np.array([list(map(lambda x: one_hot_array(x, len(charset)), one_hot_index(cropped, charset)))])
     return preprocessed
 
-def smiles_to_vector(smiles, vocab, max_length):
+def smiles_to_vector(smiles:str, vocab:dict, max_length:int) -> list:
     while len(smiles)<max_length:
         smiles +=" "
-    return [vocab.index(str(x)) for x in smiles]
+    return [vocab[str(x)] for x in smiles]
 
-def decode_latent_molecule(latent, model, charset, latent_dim):
+def decode_latent_molecule(latent:np.ndarray, model, charset:str, latent_dim:int) -> str:
     decoded = model.decoder.predict(latent.reshape(1, latent_dim)).argmax(axis=2)[0]
     smiles = decode_smiles_from_indexes(decoded, charset)
     return smiles
 
-def interpolate(source_smiles, dest_smiles, steps, charset, model, latent_dim):
+def interpolate(source_smiles:str, dest_smiles:str, steps:int, charset:str, model, latent_dim:int) -> list:
     source_latent = encode_smiles(source_smiles, model, charset)
     dest_latent = encode_smiles(dest_smiles, model, charset)
     step = (dest_latent - source_latent) / float(steps)
@@ -105,7 +105,7 @@ def accuracy(arr1:np.ndarray, arr2:np.ndarray, length:np.ndarray) -> tuple:
 
 
 
-def load_data(n, seq_length):
+def load_data(n:str, seq_length:int) -> tuple:
     import collections
     f = open(n)
     lines = f.read().split('\n')[:-1]

@@ -5,8 +5,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+
+"""
+CVAE model for molecule generation.
+
+vocab_size: number of unique characters (atoms) in the dataset
+batch_size: number of samples in each training batch
+latent_size: dimention of latent vector
+lr: learning rate
+num_prop: number of properties to condition on (e.g. MW, LogP, TPSA)
+    - will be modified to only use a subset of properties in the future
+    - currently using all 3 properties (MW, LogP, TPSA)
+
+NOTE: prior z  
+z = N(mean, stddev)
+stddev: standard deviation for sampling latent vector (1.0 in the original paper)
+mean: mean for sampling latent vector (0.0 in the original paper)
+
+
+
+
+"""
+
+
 class CVAE(nn.Module):
-    def __init__(self, vocab_size: int, args):
+    def __init__(self, vocab_size: int, args: dict):
         super().__init__()
         self.vocab_size = vocab_size
         self.batch_size = self._get_arg(args, 'batch_size')
