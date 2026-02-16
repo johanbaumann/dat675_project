@@ -22,6 +22,16 @@ TRAIN_CONFIG_DEFAULTS = {
     'save_dir': 'save/',
     'patientce': 10,
     'model_mode': 'lstm',
+    'optimizer': 'adam',
+    'weight_decay': 0.0,
+    'use_reduce_lr_on_plateau': False,
+    'lr_plateau_factor': 0.5,
+    'lr_plateau_patience': 10,
+    'lr_plateau_threshold': 1e-4,
+    'lr_plateau_min_lr': 1e-6,
+    'early_stopping_patience': 10,
+    'early_stopping_min_delta': 0.0,
+    'early_stopping_restore_best': True,
     'transformer_heads': 8,
     'transformer_ff_size': 2048,
     'transformer_dropout': 0.1,
@@ -272,6 +282,9 @@ def compose_train_config(args) -> dict:
     config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
     if config['model_mode'] not in ('lstm', 'transformer'):
         raise ValueError("model_mode must be either 'lstm' or 'transformer'")
+    config['optimizer'] = str(config.get('optimizer', 'adam')).lower()
+    if config['optimizer'] not in ('adam', 'adamw'):
+        raise ValueError("optimizer must be either 'adam' or 'adamw'")
 
     # normalize scalar types
     config['batch_size'] = int(config['batch_size'])
@@ -287,6 +300,15 @@ def compose_train_config(args) -> dict:
     config['num_prop'] = int(config['num_prop'])
     config['save_dir'] = str(config['save_dir'])
     config['patientce'] = int(config['patientce'])
+    config['weight_decay'] = float(config.get('weight_decay', 0.0))
+    config['use_reduce_lr_on_plateau'] = bool(config.get('use_reduce_lr_on_plateau', False))
+    config['lr_plateau_factor'] = float(config.get('lr_plateau_factor', 0.5))
+    config['lr_plateau_patience'] = int(config.get('lr_plateau_patience', 10))
+    config['lr_plateau_threshold'] = float(config.get('lr_plateau_threshold', 1e-4))
+    config['lr_plateau_min_lr'] = float(config.get('lr_plateau_min_lr', 1e-6))
+    config['early_stopping_patience'] = int(config.get('early_stopping_patience', config['patientce']))
+    config['early_stopping_min_delta'] = float(config.get('early_stopping_min_delta', 0.0))
+    config['early_stopping_restore_best'] = bool(config.get('early_stopping_restore_best', True))
     config['transformer_heads'] = int(config['transformer_heads'])
     config['transformer_ff_size'] = int(config['transformer_ff_size'])
     config['transformer_dropout'] = float(config['transformer_dropout'])
@@ -302,6 +324,9 @@ def compose_train_config_from_dict(config_override:dict) -> dict:
     config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
     if config['model_mode'] not in ('lstm', 'transformer'):
         raise ValueError("model_mode must be either 'lstm' or 'transformer'")
+    config['optimizer'] = str(config.get('optimizer', 'adam')).lower()
+    if config['optimizer'] not in ('adam', 'adamw'):
+        raise ValueError("optimizer must be either 'adam' or 'adamw'")
 
     config['batch_size'] = int(config['batch_size'])
     config['latent_size'] = int(config['latent_size'])
@@ -316,6 +341,15 @@ def compose_train_config_from_dict(config_override:dict) -> dict:
     config['num_prop'] = int(config['num_prop'])
     config['save_dir'] = str(config['save_dir'])
     config['patientce'] = int(config['patientce'])
+    config['weight_decay'] = float(config.get('weight_decay', 0.0))
+    config['use_reduce_lr_on_plateau'] = bool(config.get('use_reduce_lr_on_plateau', False))
+    config['lr_plateau_factor'] = float(config.get('lr_plateau_factor', 0.5))
+    config['lr_plateau_patience'] = int(config.get('lr_plateau_patience', 10))
+    config['lr_plateau_threshold'] = float(config.get('lr_plateau_threshold', 1e-4))
+    config['lr_plateau_min_lr'] = float(config.get('lr_plateau_min_lr', 1e-6))
+    config['early_stopping_patience'] = int(config.get('early_stopping_patience', config['patientce']))
+    config['early_stopping_min_delta'] = float(config.get('early_stopping_min_delta', 0.0))
+    config['early_stopping_restore_best'] = bool(config.get('early_stopping_restore_best', True))
     config['transformer_heads'] = int(config['transformer_heads'])
     config['transformer_ff_size'] = int(config['transformer_ff_size'])
     config['transformer_dropout'] = float(config['transformer_dropout'])
@@ -341,6 +375,8 @@ def get_model_config(config:dict, vocab_size:Optional[int] = None) -> dict:
         'lr': float(config['lr']),
         'num_prop': int(config['num_prop']),
         'model_mode': str(config.get('model_mode', 'lstm')).lower(),
+        'optimizer': str(config.get('optimizer', 'adam')).lower(),
+        'weight_decay': float(config.get('weight_decay', 0.0)),
         'transformer_heads': int(config.get('transformer_heads', 8)),
         'transformer_ff_size': int(config.get('transformer_ff_size', int(config['unit_size']) * 4)),
         'transformer_dropout': float(config.get('transformer_dropout', 0.1)),

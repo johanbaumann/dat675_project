@@ -41,6 +41,16 @@ until it generates a 'E' EOS character or reaches maximum length (120 in the ori
 
 """
 
+"""
+Positional encoding for transformer model.
+
+Has:
+d_model: dimension of the model (unit_size)
+dropout: dropout rate for the positional encoding
+max_len: maximum length of the input sequence (120 in the original paper)
+
+
+"""
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 2048):
@@ -49,7 +59,11 @@ class PositionalEncoding(nn.Module):
 
         position = torch.arange(max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2) * (-np.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, d_model)
+        
+        # pe is calculated using the formula:
+        # PE(pos, 2i) = sin(pos / (10000^(2i/d_model)))
+        pe = torch.zeros(max_len, d_model) # shape (max_len, d_model)
+        
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)
@@ -73,6 +87,8 @@ class CVAE(nn.Module):
         self.unit_size = self._get_arg(args, 'unit_size')
         self.n_rnn_layer = self._get_arg(args, 'n_rnn_layer')
         self.model_mode = self._get_arg_or_default(args, 'model_mode', 'lstm').lower()
+        self.optimizer_name = self._get_arg_or_default(args, 'optimizer', 'adam').lower()
+        self.weight_decay = float(self._get_arg_or_default(args, 'weight_decay', 0.0))
         self.transformer_heads = self._get_arg_or_default(args, 'transformer_heads', 8)
         self.transformer_ff_size = self._get_arg_or_default(args, 'transformer_ff_size', self.unit_size * 4)
         self.transformer_dropout = self._get_arg_or_default(args, 'transformer_dropout', 0.1)
@@ -134,14 +150,12 @@ class CVAE(nn.Module):
         self.out_log_sigma = nn.Linear(self.unit_size, self.latent_size) # output log of variance of the latent distribution (log(sigma^2))
         self.output_layer = nn.Linear(self.unit_size, self.vocab_size) # output layer to predict the next character in the sequence
 
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-
-        self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer,
-            mode='min',
-            factor=0.5,
-            patience=10
-        )
+        if self.optimizer_name == 'adamw':
+            self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        elif self.optimizer_name == 'adam':
+            self.optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        else:
+            raise ValueError(f"Unsupported optimizer='{self.optimizer_name}'. Use 'adam' or 'adamw'.")
 
 
         self.to(self.device)
