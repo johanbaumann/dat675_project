@@ -455,7 +455,16 @@ class CVAE(nn.Module):
             z, _, _ = self.encode(x_t, c_t, l_t)
         return z.detach().cpu().numpy()
 
-    def sample(self, latent_vector:np.ndarray, c:np.ndarray, start_codon:np.ndarray, seq_length:int) -> np.ndarray:
+    def sample(
+        self,
+        latent_vector: np.ndarray,
+        c: np.ndarray,
+        start_codon: np.ndarray,
+        seq_length: int,
+        do_sample: bool = True,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+    ) -> np.ndarray:
         """
         NOTE: important!!!
         Decoder is applied iterativley to generate seq of carachters until it generates an 'E' char or
@@ -489,15 +498,57 @@ class CVAE(nn.Module):
         finished = torch.zeros(x.shape[0], dtype=torch.bool, device=self.device)
         e_index_t = torch.tensor(e_index, dtype=torch.long, device=self.device)
 
+        def _sample_next_from_logits(
+            logits_last: torch.Tensor,
+            *,
+            do_sample: bool,
+            temperature: float,
+            top_k: Optional[int],
+        ) -> torch.Tensor:
+            # logits_last: (batch, vocab)
+            if not do_sample:
+                return torch.argmax(logits_last, dim=-1, keepdim=True)
+
+            logits_f = logits_last.float()
+            temp = float(temperature)
+            if temp <= 0:
+                raise ValueError('temperature must be > 0')
+            if temp != 1.0:
+                logits_f = logits_f / temp
+
+            k = int(top_k) if top_k is not None else 0
+            if k > 0 and k < logits_f.size(-1):
+                top_vals, _ = torch.topk(logits_f, k, dim=-1)
+                kth = top_vals[:, -1].unsqueeze(-1)
+                logits_f = torch.where(
+                    logits_f < kth,
+                    torch.full_like(logits_f, -1e9),
+                    logits_f,
+                )
+
+            probs = torch.softmax(logits_f, dim=-1)
+            # multinomial expects probs >= 0 and rows summing to 1; softmax guarantees that.
+            return torch.multinomial(probs, num_samples=1)
+
         with torch.no_grad():
             # iteratively decode until EOS ('E') is generated or reaches maximum length
             for _ in range(seq_length):
                 if self.model_mode == 'lstm':
                     _, logits, state = self.decode(x, z, c_t, initial_state=state)
-                    next_x = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+                    next_x = _sample_next_from_logits(
+                        logits[:, -1, :],
+                        do_sample=bool(do_sample),
+                        temperature=float(temperature),
+                        top_k=top_k,
+                    )
                 else:
                     _, logits, _ = self.decode(x, z, c_t, lengths=None)
-                    next_x = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+                    next_x = _sample_next_from_logits(
+                        logits[:, -1, :],
+                        do_sample=bool(do_sample),
+                        temperature=float(temperature),
+                        top_k=top_k,
+                    )
 
                 # Once a sequence hits EOS, keep it at EOS for the remaining steps.
                 next_x = torch.where(

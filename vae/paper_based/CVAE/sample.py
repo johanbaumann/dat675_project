@@ -7,6 +7,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from rdkit import Chem
+from rdkit import RDLogger
 from rdkit.Chem.Crippen import MolLogP
 from rdkit.Chem.Descriptors import ExactMolWt
 from rdkit.Chem.rdMolDescriptors import CalcTPSA
@@ -34,10 +35,21 @@ def _sample_batch_strings(
     stddev: float,
     batch_size: int,
     latent_size: int,
+    do_sample: bool,
+    temperature: float,
+    top_k: Optional[int],
 ) -> list[str]:
     """Sample one batch and return decoded strings (still containing 'E' padding)."""
     latent_vector = np.random.normal(mean, stddev, (batch_size, latent_size))
-    generated = model.sample(latent_vector, target_prop, start_codon, seq_length)
+    generated = model.sample(
+        latent_vector,
+        target_prop,
+        start_codon,
+        seq_length,
+        do_sample=bool(do_sample),
+        temperature=float(temperature),
+        top_k=top_k,
+    )
     return [convert_to_smiles(generated[i], charset) for i in range(len(generated))]
 
 
@@ -88,6 +100,9 @@ def generate_unique_molecules(
     batch_size: int,
     latent_size: int,
     training_smiles: set,
+    do_sample: bool,
+    temperature: float,
+    top_k: Optional[int],
 ) -> tuple[list[Chem.Mol], list[str]]:
     """Generate molecules until `num_unique` unique valid molecules are collected."""
     if num_unique <= 0:
@@ -116,6 +131,9 @@ def generate_unique_molecules(
             stddev=stddev,
             batch_size=batch_size,
             latent_size=latent_size,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
         )
         total_trials += len(raw)
         batches += 1
@@ -138,6 +156,10 @@ def generate_unique_molecules(
                 f"Progress: {len(unique_mols_by_smiles)}/{num_unique} unique molecules "
                 f"after {batches} batches ({total_trials} trials)"
             )
+            print(
+                f"  batch quality -> accepted: {batch_stats['accepted']}, invalid_or_empty: {batch_stats['invalid_or_empty']}, "
+                f"in_training: {batch_stats['in_training']}, duplicate: {batch_stats['duplicate']}"
+            )
 
     _print_quality_stats(total_stats)
 
@@ -159,6 +181,9 @@ def generate_fixed_iterations(
     batch_size: int,
     latent_size: int,
     training_smiles: set,
+    do_sample: bool,
+    temperature: float,
+    top_k: Optional[int],
 ) -> tuple[list[Chem.Mol], list[str]]:
     """Old behavior: run for a fixed number of iterations, then deduplicate."""
     unique_mols_by_smiles: dict[str, Chem.Mol] = {}
@@ -177,6 +202,9 @@ def generate_fixed_iterations(
             stddev=stddev,
             batch_size=batch_size,
             latent_size=latent_size,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
         )
         total_trials += len(raw)
         accepted, batch_stats = collect_new_unique_from_raw(
@@ -201,144 +229,156 @@ def generate_fixed_iterations(
 
 if __name__ == '__main__':
 
+    # Silence RDKit parse error spam (we still count invalid SMILES).
+    RDLogger.DisableLog('rdApp.*')
 
-        start = t.time()
+    start = t.time()
 
-        # Runtime sampling options.
-        # Model architecture/training hyperparameters are loaded from training_config.json.
-        config = {
-            'batch_size': None,
-            'num_iteration': 10,  # number of batches to sample (old behavior)
-            'save_file': 'save/model_.ckpt-99.pt',
-            'training_config_file': None,
-            'target_prop': '300.0 3.0',
-            'prop_file': None,
-            'seq_length': None,
-            'mean': None,
-            'stddev': None,
-            'result_filename': 'result.txt',
-            'num_unique': 1000,
-            'max_batches': 5000,
-            # If True, molecules already present in training/property file are rejected.
-            'exclude_training': True,
-        }
+    # Runtime sampling options.
+    # Model architecture/training hyperparameters are loaded from training_config.json.
+    config = {
+        'batch_size': 64,
+        'num_iteration': 10,  # number of batches to sample (old behavior)
+        'save_file': 'save/model_9.ckpt-9.pt',
+        'training_config_file': None,
+        'target_prop': '300.0 3.0',
+        'prop_file': None,
+        'seq_length': None,
+        'mean': None,
+        'stddev': None,
+        'result_filename': 'result.txt',
+        'num_unique': 1000,
+        'max_batches': 5000,
+        # Sampling controls. Greedy decoding (do_sample=False) often collapses to 1 molecule.
+        'do_sample': True,
+        'temperature': 0.8,
+        'top_k': 50,
+        # If True, molecules already present in training/property file are rejected.
+        'exclude_training': True,
+    }
 
-        training_config_path = config['training_config_file']
-        if training_config_path is None:
-            training_config_path = infer_training_config_path(config['save_file'])
+    training_config_path = config['training_config_file']
+    if training_config_path is None:
+        training_config_path = infer_training_config_path(config['save_file'])
 
-        training_config = load_json(training_config_path)
-        print(f'loaded training config from: {training_config_path}')
+    training_config = load_json(training_config_path)
+    print(f'loaded training config from: {training_config_path}')
 
-        # Support both grouped and legacy flat training config formats.
-        model_config = compose_train_config_from_dict(training_config)
+    # Support both grouped and legacy flat training config formats.
+    model_config = compose_train_config_from_dict(training_config)
 
-        # Allow a few runtime overrides when needed (batch_size/seq_length/mean/stddev/prop_file).
-        for key in ['batch_size', 'prop_file', 'seq_length', 'mean', 'stddev']:
-            if config.get(key) is not None:
-                model_config[key] = config[key]
+    # Allow a few runtime overrides when needed (batch_size/seq_length/mean/stddev/prop_file).
+    for key in ['batch_size', 'prop_file', 'seq_length', 'mean', 'stddev']:
+        if config.get(key) is not None:
+            model_config[key] = config[key]
 
-        # Build vocabulary/charset from property file.
-        _, _, charset, vocab, loaded_labels, _ = load_data(model_config['prop_file'], int(model_config['seq_length']))
-        vocab_size = len(charset)
-        inferred_num_prop = int(loaded_labels.shape[1])
-        trained_num_prop = int(model_config.get('num_prop', inferred_num_prop))
-        if trained_num_prop != inferred_num_prop:
-            raise ValueError(
-                f"Mismatch between training config num_prop ({trained_num_prop}) and "
-                f"property file columns ({inferred_num_prop})."
-            )
-        model_config['num_prop'] = inferred_num_prop
+    # Build vocabulary/charset from property file.
+    _, _, charset, vocab, loaded_labels, _ = load_data(model_config['prop_file'], int(model_config['seq_length']))
+    vocab_size = len(charset)
+    inferred_num_prop = int(loaded_labels.shape[1])
+    trained_num_prop = int(model_config.get('num_prop', inferred_num_prop))
+    if trained_num_prop != inferred_num_prop:
+        raise ValueError(
+            f"Mismatch between training config num_prop ({trained_num_prop}) and "
+            f"property file columns ({inferred_num_prop})."
+        )
+    model_config['num_prop'] = inferred_num_prop
 
-        # Canonical training-set SMILES used for novelty filtering.
-        if bool(config.get('exclude_training', True)):
-            training_smiles = load_training_canonical_smiles(
-                model_config['prop_file'],
-                int(model_config['seq_length']),
-            )
-            print(f'training molecules available for exclusion: {len(training_smiles)}')
-        else:
-            training_smiles = set()
-            print('training-set exclusion is disabled (exclude_training=False)')
+    # Canonical training-set SMILES used for novelty filtering.
+    if bool(config.get('exclude_training', True)):
+        training_smiles = load_training_canonical_smiles(
+            model_config['prop_file'],
+            int(model_config['seq_length']),
+        )
+        print(f'training molecules available for exclusion: {len(training_smiles)}')
+    else:
+        training_smiles = set()
+        print('training-set exclusion is disabled (exclude_training=False)')
 
-        # Create and restore model.
-        model = CVAE(vocab_size, model_config)
-        model.restore(config['save_file'])
-        print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
+    # Create and restore model.
+    model = CVAE(vocab_size, model_config)
+    model.restore(config['save_file'])
+    print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
-        # Target property conditioning: replicate the target row for the whole batch.
-        try:
-            target_row = [float(p) for p in str(config['target_prop']).split()]
-        except Exception:
-            raise ValueError(
-                'target_prop should be a string of space separated values. '
-                'e.g. "300.0 3.0" for two properties (MW, LogP)'
-            )
+    # Target property conditioning: replicate the target row for the whole batch.
+    try:
+        target_row = [float(p) for p in str(config['target_prop']).split()]
+    except Exception:
+        raise ValueError(
+            'target_prop should be a string of space separated values. '
+            'e.g. "300.0 3.0" for two properties (MW, LogP)'
+        )
 
-        if len(target_row) != int(model_config['num_prop']):
-            raise ValueError(
-                f"target_prop has {len(target_row)} values, but model expects "
-                f"{int(model_config['num_prop'])} properties."
-            )
+    if len(target_row) != int(model_config['num_prop']):
+        raise ValueError(
+            f"target_prop has {len(target_row)} values, but model expects "
+            f"{int(model_config['num_prop'])} properties."
+        )
 
-        target_prop = np.array([target_row for _ in range(int(model_config['batch_size']))], dtype=np.float32)
+    target_prop = np.array([target_row for _ in range(int(model_config['batch_size']))], dtype=np.float32)
 
-        # If training used standardized properties, apply the same transform here.
-        prop_norm_mean = model_config.get('prop_norm_mean')
-        prop_norm_std = model_config.get('prop_norm_std')
-        if prop_norm_mean is not None and prop_norm_std is not None:
-            mean_arr = np.array(prop_norm_mean, dtype=np.float32)
-            std_arr = np.array(prop_norm_std, dtype=np.float32)
-            std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
-            target_prop = (target_prop - mean_arr) / std_arr
+    # If training used standardized properties, apply the same transform here.
+    prop_norm_mean = model_config.get('prop_norm_mean')
+    prop_norm_std = model_config.get('prop_norm_std')
+    if prop_norm_mean is not None and prop_norm_std is not None:
+        mean_arr = np.array(prop_norm_mean, dtype=np.float32)
+        std_arr = np.array(prop_norm_std, dtype=np.float32)
+        std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+        target_prop = (target_prop - mean_arr) / std_arr
 
-        # Start token: 'X'. In this dataset, 'X' is appended to the vocab in `load_data()`.
-        start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
+    # Start token: 'X'. In this dataset, 'X' is appended to the vocab in `load_data()`.
+    start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
 
-        if config['num_unique'] is not None:
-            ms, smiles = generate_unique_molecules(
-                model=model,
-                charset=charset,
-                target_prop=target_prop,
-                start_codon=start_codon,
-                seq_length=int(model_config['seq_length']),
-                num_unique=int(config['num_unique']),
-                max_batches=config['max_batches'],
-                mean=float(model_config['mean']),
-                stddev=float(model_config['stddev']),
-                batch_size=int(model_config['batch_size']),
-                latent_size=int(model_config['latent_size']),
-                training_smiles=training_smiles,
-            )
-        else:
-            ms, smiles = generate_fixed_iterations(
-                model=model,
-                charset=charset,
-                target_prop=target_prop,
-                start_codon=start_codon,
-                seq_length=int(model_config['seq_length']),
-                num_iteration=int(config['num_iteration']),
-                mean=float(model_config['mean']),
-                stddev=float(model_config['stddev']),
-                batch_size=int(model_config['batch_size']),
-                latent_size=int(model_config['latent_size']),
-                training_smiles=training_smiles,
-            )
+    if config['num_unique'] is not None:
+        ms, smiles = generate_unique_molecules(
+            model=model,
+            charset=charset,
+            target_prop=target_prop,
+            start_codon=start_codon,
+            seq_length=int(model_config['seq_length']),
+            num_unique=int(config['num_unique']),
+            max_batches=config['max_batches'],
+            mean=float(model_config['mean']),
+            stddev=float(model_config['stddev']),
+            batch_size=int(model_config['batch_size']),
+            latent_size=int(model_config['latent_size']),
+            training_smiles=training_smiles,
+            do_sample=bool(config.get('do_sample', True)),
+            temperature=float(config.get('temperature', 1.0)),
+            top_k=(None if config.get('top_k') is None else int(config.get('top_k'))),
+        )
+    else:
+        ms, smiles = generate_fixed_iterations(
+            model=model,
+            charset=charset,
+            target_prop=target_prop,
+            start_codon=start_codon,
+            seq_length=int(model_config['seq_length']),
+            num_iteration=int(config['num_iteration']),
+            mean=float(model_config['mean']),
+            stddev=float(model_config['stddev']),
+            batch_size=int(model_config['batch_size']),
+            latent_size=int(model_config['latent_size']),
+            training_smiles=training_smiles,
+            do_sample=bool(config.get('do_sample', True)),
+            temperature=float(config.get('temperature', 1.0)),
+            top_k=(None if config.get('top_k') is None else int(config.get('top_k'))),
+        )
 
-        print('number of valid smiles : ', len(ms))
+    print('number of valid smiles : ', len(ms))
 
-        # Compute properties and write results.
-        if len(ms) == 0:
-            df = pd.DataFrame({'smiles': [], 'MW': [], 'LogP': [], 'TPSA': []})
-        else:
-            mw = [ExactMolWt(m) for m in ms]
-            logp = [MolLogP(m) for m in ms]
-            tpsa = [CalcTPSA(m) for m in ms]
-            df = pd.DataFrame({'smiles': smiles, 'MW': mw, 'LogP': logp, 'TPSA': tpsa})
+    # Compute properties and write results.
+    if len(ms) == 0:
+        df = pd.DataFrame({'smiles': [], 'MW': [], 'LogP': [], 'TPSA': []})
+    else:
+        mw = [ExactMolWt(m) for m in ms]
+        logp = [MolLogP(m) for m in ms]
+        tpsa = [CalcTPSA(m) for m in ms]
+        df = pd.DataFrame({'smiles': smiles, 'MW': mw, 'LogP': logp, 'TPSA': tpsa})
 
-        print(df.describe())
-        df.to_csv(config['result_filename'], index=False)
+    print(df.describe())
+    df.to_csv(config['result_filename'], index=False)
 
-        end_time = t.time()
-        print(f'time to run: {end_time - start}')
+    end_time = t.time()
+    print(f'time to run: {end_time - start}')
 
