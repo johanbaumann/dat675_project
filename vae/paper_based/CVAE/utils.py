@@ -1,10 +1,12 @@
 #import h5py
 import numpy as np
 from rdkit import Chem
-from typing import Optional, Sequence, Union
+from typing import Callable, Optional, Sequence, Union
 import json
 import os
 import importlib
+import gzip
+import pickle
 
 
 TRAIN_CONFIG_DEFAULTS = {
@@ -239,6 +241,21 @@ def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
     This follows the same length filter used in `load_data` so the exclusion set
     matches what the model was trained on.
     """
+    # Cache to avoid re-canonicalizing large training files on every run.
+    cache_path = f"{prop_file}.canon_seq{int(seq_length)}.pkl.gz"
+    try:
+        if os.path.exists(cache_path):
+            cache_mtime = os.path.getmtime(cache_path)
+            src_mtime = os.path.getmtime(prop_file)
+            if cache_mtime >= src_mtime:
+                with gzip.open(cache_path, 'rb') as f:
+                    cached = pickle.load(f)
+                if isinstance(cached, set):
+                    return cached
+    except Exception:
+        # Cache is best-effort; fall back to recompute.
+        pass
+
     canonical = set()
     with open(prop_file) as f:
         lines = f.read().split('\n')[:-1]
@@ -254,6 +271,12 @@ def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
         can = Chem.MolToSmiles(mol)
         if can:
             canonical.add(can)
+
+    try:
+        with gzip.open(cache_path, 'wb') as f:
+            pickle.dump(canonical, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        pass
     return canonical
 
 
@@ -262,6 +285,7 @@ def collect_new_unique_from_raw(
     seen_smiles:set,
     training_smiles:Optional[set] = None,
     eos_token:str = 'E',
+    accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
 ) -> tuple:
     """Filter decoded strings into new unique molecules + quality stats.
 
@@ -276,6 +300,7 @@ def collect_new_unique_from_raw(
         'invalid_or_empty': 0,
         'in_training': 0,
         'duplicate': 0,
+        'rejected_by_filter': 0,
     }
 
     if training_smiles is None:
@@ -307,6 +332,15 @@ def collect_new_unique_from_raw(
         if can in seen_smiles:
             stats['duplicate'] += 1
             continue
+
+        if accept_predicate is not None:
+            try:
+                ok = bool(accept_predicate(can, mol))
+            except Exception:
+                ok = False
+            if not ok:
+                stats['rejected_by_filter'] += 1
+                continue
 
         seen_smiles.add(can)
         accepted.append((can, mol))

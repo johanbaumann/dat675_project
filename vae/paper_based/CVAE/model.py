@@ -299,12 +299,15 @@ class CVAE(nn.Module):
 
             seq_len = x_emb.size(1)
             memory = self.memory_proj(torch.cat([z, c], dim=-1)).unsqueeze(1)
+            tgt_padding_mask = None
+            if lengths is not None:
+                tgt_padding_mask = self._build_padding_mask(lengths, seq_len, x.device)
             with self._transformer_fp32_context():
                 y = self.decoder(
                     tgt=decoder_input.float(),
                     memory=memory.float(),
                     tgt_mask=self._causal_mask(seq_len, x.device),
-                    tgt_key_padding_mask=None,
+                    tgt_key_padding_mask=tgt_padding_mask,
                 )
             state = None
 

@@ -211,6 +211,9 @@ for epoch in range(config['num_epochs']):
     beta = get_kl_beta(epoch, config)
 
     train_perm = np.random.permutation(len(train_molecules_input))
+
+
+    # TRAIN LOOP:
     for start in range(0, len(train_perm), config['batch_size']):
         batch_idx = train_perm[start:start + config['batch_size']]
         x = train_molecules_input[batch_idx]
@@ -228,6 +231,8 @@ for epoch in range(config['num_epochs']):
         train_log_sigma_min.append(metrics['log_sigma_min'])
         train_log_sigma_max.append(metrics['log_sigma_max'])
         train_grad_norm.append(metrics['grad_norm'])
+
+    #    
     # test on test set (trend monitoring).
     test_perm = np.random.permutation(len(test_molecules_input))
     for start in range(0, len(test_perm), config['batch_size']):

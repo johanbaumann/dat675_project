@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time as t
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -60,6 +60,7 @@ def _new_stats() -> dict:
         'invalid_or_empty': 0,
         'in_training': 0,
         'duplicate': 0,
+        'rejected_by_filter': 0,
     }
 
 
@@ -74,6 +75,7 @@ def _print_quality_stats(stats: dict) -> None:
     invalid_or_empty = int(stats['invalid_or_empty'])
     in_training = int(stats['in_training'])
     duplicate = int(stats['duplicate'])
+    rejected_by_filter = int(stats.get('rejected_by_filter', 0))
     not_ok = total_generated - accepted
     not_ok_share = (float(not_ok) / float(total_generated)) if total_generated > 0 else 0.0
 
@@ -84,6 +86,49 @@ def _print_quality_stats(stats: dict) -> None:
         f'not ok breakdown -> invalid_or_empty: {invalid_or_empty}, '
         f'in_training: {in_training}, duplicate: {duplicate}'
     )
+    if rejected_by_filter:
+        print(f'additional rejected_by_filter: {rejected_by_filter}')
+
+
+def _build_accept_predicate(*, config: dict, target_row: list[float]):
+    mw_tol = config.get('mw_tolerance')
+    logp_tol = config.get('logp_tolerance')
+    min_tpsa = config.get('min_tpsa')
+    max_heavy_atoms = config.get('max_heavy_atoms')
+    max_canonical_len = config.get('max_canonical_smiles_len')
+
+    # If no constraints set, return None (no extra filtering).
+    if all(v is None for v in [mw_tol, logp_tol, min_tpsa, max_heavy_atoms, max_canonical_len]):
+        return None
+
+    mw_target = float(target_row[0])
+    logp_target = float(target_row[1])
+
+    def predicate(can: str, mol: Chem.Mol) -> bool:
+        if max_canonical_len is not None and len(can) > int(max_canonical_len):
+            return False
+
+        if max_heavy_atoms is not None and int(mol.GetNumHeavyAtoms()) > int(max_heavy_atoms):
+            return False
+
+        if mw_tol is not None:
+            mw = float(ExactMolWt(mol))
+            if abs(mw - mw_target) > float(mw_tol):
+                return False
+
+        if logp_tol is not None:
+            lp = float(MolLogP(mol))
+            if abs(lp - logp_target) > float(logp_tol):
+                return False
+
+        if min_tpsa is not None:
+            tpsa = float(CalcTPSA(mol))
+            if tpsa < float(min_tpsa):
+                return False
+
+        return True
+
+    return predicate
 
 
 def generate_unique_molecules(
@@ -103,6 +148,7 @@ def generate_unique_molecules(
     do_sample: bool,
     temperature: float,
     top_k: Optional[int],
+    accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
 ) -> tuple[list[Chem.Mol], list[str]]:
     """Generate molecules until `num_unique` unique valid molecules are collected."""
     if num_unique <= 0:
@@ -143,6 +189,7 @@ def generate_unique_molecules(
             seen_smiles=seen_smiles,
             training_smiles=training_smiles,
             eos_token='E',
+            accept_predicate=accept_predicate,
         )
         _accumulate_stats(total_stats, batch_stats)
 
@@ -158,7 +205,7 @@ def generate_unique_molecules(
             )
             print(
                 f"  batch quality -> accepted: {batch_stats['accepted']}, invalid_or_empty: {batch_stats['invalid_or_empty']}, "
-                f"in_training: {batch_stats['in_training']}, duplicate: {batch_stats['duplicate']}"
+                f"in_training: {batch_stats['in_training']}, duplicate: {batch_stats['duplicate']}, rejected_by_filter: {batch_stats.get('rejected_by_filter', 0)}"
             )
 
     _print_quality_stats(total_stats)
@@ -184,6 +231,7 @@ def generate_fixed_iterations(
     do_sample: bool,
     temperature: float,
     top_k: Optional[int],
+    accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
 ) -> tuple[list[Chem.Mol], list[str]]:
     """Old behavior: run for a fixed number of iterations, then deduplicate."""
     unique_mols_by_smiles: dict[str, Chem.Mol] = {}
@@ -212,6 +260,7 @@ def generate_fixed_iterations(
             seen_smiles=seen_smiles,
             training_smiles=training_smiles,
             eos_token='E',
+            accept_predicate=accept_predicate,
         )
         _accumulate_stats(total_stats, batch_stats)
 
@@ -230,7 +279,8 @@ def generate_fixed_iterations(
 if __name__ == '__main__':
 
     # Silence RDKit parse error spam (we still count invalid SMILES).
-    RDLogger.DisableLog('rdApp.*')
+    RDLogger.DisableLog('rdApp.error')
+    RDLogger.DisableLog('rdApp.warning')
 
     start = t.time()
 
@@ -251,8 +301,21 @@ if __name__ == '__main__':
         'max_batches': 5000,
         # Sampling controls. Greedy decoding (do_sample=False) often collapses to 1 molecule.
         'do_sample': True,
-        'temperature': 0.8,
-        'top_k': 50,
+        # Sweep for this checkpoint suggests ~temperature=0.6, top_k=20 gives much higher unique+novel acceptance.
+        'temperature': 0.6, # higher temperature -> more random, lower temperature -> more valid, less diverse
+        'top_k': 20, # limits sampling to the top_k most probable tokens at each step. Can help improve validity at low temperatures.
+
+        # Optional constraints to keep outputs close to target properties.
+        # These values assume target_prop is MW then LogP.
+        # If you set them to None, sampling accepts any valid/novel molecule.
+        'mw_tolerance': 200.0,
+        'logp_tolerance': 5.0,
+        # Optional: enforce polarity so TPSA isn't ~0.0 for hydrocarbon-only molecules.
+        'min_tpsa': None,
+        # Hard caps (optional) to prevent very large molecules due to halogen-heavy strings.
+        'max_heavy_atoms': 60,
+        # Canonical SMILES can be longer than seq_length because RDKit may insert brackets.
+        'max_canonical_smiles_len': None,
         # If True, molecules already present in training/property file are rejected.
         'exclude_training': True,
     }
@@ -317,6 +380,18 @@ if __name__ == '__main__':
 
     target_prop = np.array([target_row for _ in range(int(model_config['batch_size']))], dtype=np.float32)
 
+    # Build additional acceptance filter based on *original* (unnormalized) target_row.
+    accept_predicate = _build_accept_predicate(config=config, target_row=target_row)
+    if accept_predicate is None:
+        print('acceptance constraints: disabled (no extra filtering)')
+    else:
+        print(
+            'acceptance constraints: '
+            f"mw_tol={config.get('mw_tolerance')} logp_tol={config.get('logp_tolerance')} "
+            f"min_tpsa={config.get('min_tpsa')} max_heavy_atoms={config.get('max_heavy_atoms')} "
+            f"max_canonical_smiles_len={config.get('max_canonical_smiles_len')}"
+        )
+
     # If training used standardized properties, apply the same transform here.
     prop_norm_mean = model_config.get('prop_norm_mean')
     prop_norm_std = model_config.get('prop_norm_std')
@@ -346,6 +421,7 @@ if __name__ == '__main__':
             do_sample=bool(config.get('do_sample', True)),
             temperature=float(config.get('temperature', 1.0)),
             top_k=(None if config.get('top_k') is None else int(config.get('top_k'))),
+                accept_predicate=accept_predicate,
         )
     else:
         ms, smiles = generate_fixed_iterations(
@@ -363,6 +439,7 @@ if __name__ == '__main__':
             do_sample=bool(config.get('do_sample', True)),
             temperature=float(config.get('temperature', 1.0)),
             top_k=(None if config.get('top_k') is None else int(config.get('top_k'))),
+                accept_predicate=accept_predicate,
         )
 
     print('number of valid smiles : ', len(ms))

@@ -118,11 +118,112 @@ python sample.py
 
 Output is written to `result_filename` (default `result.txt`).
 
+### Sampling controls (diversity vs validity)
+
+This repo uses token-by-token decoding for SMILES generation. If you decode with greedy `argmax` at every step, the model can *collapse* and output the same molecule repeatedly (even with different latent vectors). To avoid this, `model.sample()` now supports stochastic decoding and `sample.py` exposes these knobs:
+
+- `do_sample`: if `True`, samples the next token from the model distribution; if `False`, uses greedy decoding.
+- `temperature`: scales logits before sampling. Lower values generally improve validity but reduce diversity.
+- `top_k`: restricts sampling to the `k` most probable tokens per step (often improves validity).
+
+The defaults in `sample.py` are set for faster unique generation (tune as needed for your checkpoint/dataset).
+
+### Training-set novelty filter cache
+
+When `exclude_training=True`, `sample.py` loads canonical SMILES from the training/property file so it can reject molecules already seen during training. For large files, canonicalization is expensive, so the loader now writes a cache next to the property file:
+
+- `prop_mw_logp.txt.canon_seq120.pkl.gz`
+
+The cache is best-effort and automatically invalidated if the property file is newer or the `seq_length` changes.
+
+### Sweep results (this checkpoint)
+
+To quantify which settings work well for a given checkpoint, run:
+
+```bash
+python sweep_sampling.py
+```
+
+It runs a small grid over `temperature` and `top_k` and reports the fraction of samples that become **unique + novel + RDKit-valid** after filtering (plus invalid/duplicate rates). For `save/model_9.ckpt-9.pt` with 25 batches (1600 samples) per setting and target properties MW=300, LogP=3, the sweep produced:
+
+| temperature | top_k | samples | accepted (unique+novel) | accepted_rate | invalid_rate | dup_rate | in_training_rate |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0.6 | 20 | 1600 | 526 | 32.88% | 56.88% | 10.25% | 0.00% |
+| 0.6 | 100 | 1600 | 521 | 32.56% | 58.06% | 9.38% | 0.00% |
+| 0.6 | 50 | 1600 | 518 | 32.38% | 57.56% | 10.06% | 0.00% |
+| 0.6 | 10 | 1600 | 501 | 31.31% | 59.44% | 9.25% | 0.00% |
+| 0.7 | 100 | 1600 | 289 | 18.06% | 81.44% | 0.50% | 0.00% |
+| 0.7 | 20 | 1600 | 275 | 17.19% | 82.31% | 0.50% | 0.00% |
+| 0.7 | 50 | 1600 | 270 | 16.88% | 83.06% | 0.06% | 0.00% |
+| 0.7 | 10 | 1600 | 267 | 16.69% | 83.00% | 0.31% | 0.00% |
+| 0.8 | 50 | 1600 | 108 | 6.75% | 93.25% | 0.00% | 0.00% |
+| 0.8 | 20 | 1600 | 104 | 6.50% | 93.44% | 0.06% | 0.00% |
+| 0.8 | 10 | 1600 | 102 | 6.38% | 93.56% | 0.06% | 0.00% |
+| 0.8 | 100 | 1600 | 95 | 5.94% | 93.94% | 0.12% | 0.00% |
+| 0.9 | 100 | 1600 | 51 | 3.19% | 96.69% | 0.12% | 0.00% |
+| 0.9 | 50 | 1600 | 51 | 3.19% | 96.75% | 0.06% | 0.00% |
+| 0.9 | 10 | 1600 | 43 | 2.69% | 97.19% | 0.12% | 0.00% |
+| 0.9 | 20 | 1600 | 42 | 2.62% | 97.31% | 0.06% | 0.00% |
+| 1.0 | 10 | 1600 | 38 | 2.38% | 97.31% | 0.31% | 0.00% |
+| 1.0 | 20 | 1600 | 36 | 2.25% | 97.62% | 0.12% | 0.00% |
+| 1.0 | 50 | 1600 | 33 | 2.06% | 97.81% | 0.12% | 0.00% |
+| 1.0 | 100 | 1600 | 20 | 1.25% | 98.44% | 0.31% | 0.00% |
+
+Interpretation:
+
+- For this checkpoint, `temperature=0.6` with `top_k` in the 10–100 range produced the highest unique+novel acceptance rate.
+- Higher temperatures greatly increased invalid SMILES rate for this model.
+
 ## Numerical stability notes
 
-- Transformer decoder no longer receives `tgt_key_padding_mask`; reconstruction masking is handled by sequence-length loss masking.
 - Transformer encoder/decoder blocks run in fp32 under AMP (`selective autocast`) to avoid fp16 softmax/masked-attention NaNs.
+- Reconstruction loss is length-masked (padded tokens do not contribute to CE).
+- If you see instability/NaNs with Transformer, try disabling AMP (`use_amp=False`) until the model is stable.
 - KL annealing defaults are set to safer values for early training: `start_beta=0.01`, `hold_epochs=0`, `warmup_epochs=50`.
+
+## Transformer implementation notes
+
+### Dataset padding + length convention
+
+`utils.load_data()` constructs training pairs using:
+
+- input sequence: `'X' + smiles`, padded with `'E'` to `seq_length`
+- target sequence: `smiles`, padded with `'E'` to `seq_length`
+- length: `len(smiles) + 1` (includes the leading `'X'` step)
+
+This means the model learns to predict the first SMILES token given `'X'`, and also learns to predict the terminal `'E'` right after the last SMILES character.
+
+### Why `tgt_key_padding_mask` is required (Transformer)
+
+Even if the reconstruction loss ignores padded positions, a Transformer decoder can still attend to padded `'E'` tokens in the target sequence during self-attention unless `tgt_key_padding_mask` is provided. That leakage can cause degenerate behavior (e.g., predicting only `'E'`), especially early in training.
+
+This repo now passes `tgt_key_padding_mask` in the Transformer decoder when `lengths` are available (training). During autoregressive sampling, `lengths` is not known ahead of time and the mask is omitted.
+
+### Reconstruction loss masking
+
+Reconstruction loss is computed token-wise and masked by `lengths` so that positions `>= length` do not contribute.
+
+## Known failure modes
+
+- Symptom: model predicts only padding (`'E'`) for most positions
+	- Cause: missing `tgt_key_padding_mask` and/or reconstruction loss not masked by sequence length
+- Symptom: unstable training / NaN loss (Transformer)
+	- Cause: AMP fp16 overflow in attention/softmax or extreme latent log-variance; try `use_amp=False` and/or check `log_sigma` clamp
+
+## Architecture overview (Transformer mode)
+
+- Encoder
+	- Token embedding (`latent_size`)
+	- Concatenate conditioning properties per time step
+	- Linear projection to `d_model=unit_size` + positional encoding
+	- `TransformerEncoder` with `src_key_padding_mask`
+	- Pool last valid state (by `lengths`) to latent mean/log-variance
+- Decoder
+	- Token embedding (`latent_size`)
+	- Concatenate latent `z` and conditioning properties per time step
+	- Linear projection to `d_model=unit_size` + positional encoding
+	- `TransformerDecoder` with causal mask + `tgt_key_padding_mask`
+	- Linear projection to vocabulary logits
 
 ## Notes
 
