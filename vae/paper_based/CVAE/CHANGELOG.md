@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- `sample.py` / `debug_sampling.py`: Sampling now prefers the `model_config` embedded in the checkpoint (`.pt`) payload. This prevents a subtle failure mode where `save/training_config.json` gets overwritten by later training runs (often Transformer experiments), causing sampling to use the wrong `prop_file` / `seq_length` / `num_prop` and especially the wrong `prop_norm_mean/std` (=> invalid SMILES and/or near-zero acceptance).
+- `sample.py`: Default decoding is stochastic again (`do_sample=True`). During Transformer refactors the default was set to greedy decoding, which commonly collapses to a single repeated molecule ("not unique") and can also reduce validity.
+
+### Changed
+
+- `train.py`: Restored LSTM-friendly default training hyperparameters (Adam, `lr=1e-4`, `weight_decay=0`, AMP off, grad-clip back to 1.0). The Transformer preset still opts into AdamW/AMP/KL warmup when explicitly selected.
+
 ### Changed
 
 - `train.py` / `utils.py`: Training config now supports grouped sections (`data`, `model`, `transformer`, `optimization`, `training`, `scheduler`, `kl`, `diagnostics`) while remaining backward compatible with legacy flat keys.

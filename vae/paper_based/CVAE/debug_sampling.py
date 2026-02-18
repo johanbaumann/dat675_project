@@ -8,6 +8,7 @@ from utils import (
     compose_train_config_from_dict,
     convert_to_smiles,
     infer_training_config_path,
+    load_checkpoint_model_config,
     load_data,
     load_json,
     load_training_canonical_smiles,
@@ -31,13 +32,16 @@ def main() -> None:
     }
 
     training_config_path = config["training_config_file"]
-    if training_config_path is None:
-        training_config_path = infer_training_config_path(config["save_file"])
 
-    training_config = load_json(training_config_path)
-    print(f"loaded training config from: {training_config_path}")
-
-    model_config = compose_train_config_from_dict(training_config)
+    model_config = load_checkpoint_model_config(config["save_file"])
+    if model_config is not None:
+        print("loaded model config from checkpoint metadata")
+    else:
+        if training_config_path is None:
+            training_config_path = infer_training_config_path(config["save_file"])
+        training_config = load_json(training_config_path)
+        print(f"loaded training config from: {training_config_path}")
+        model_config = compose_train_config_from_dict(training_config)
     for key in ["batch_size", "seq_length", "mean", "stddev"]:
         if config.get(key) is not None:
             model_config[key] = config[key]

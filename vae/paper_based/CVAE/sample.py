@@ -19,6 +19,7 @@ from utils import (
     convert_to_smiles,
     infer_training_config_path,
     load_data,
+    load_checkpoint_model_config,
     load_json,
     load_training_canonical_smiles,
 )
@@ -321,14 +322,18 @@ if __name__ == '__main__':
     }
 
     training_config_path = config['training_config_file']
-    if training_config_path is None:
-        training_config_path = infer_training_config_path(config['save_file'])
 
-    training_config = load_json(training_config_path)
-    print(f'loaded training config from: {training_config_path}')
-
-    # Support both grouped and legacy flat training config formats.
-    model_config = compose_train_config_from_dict(training_config)
+    # Prefer checkpoint-embedded model_config (most reliable).
+    model_config = load_checkpoint_model_config(config['save_file'])
+    if model_config is not None:
+        print('loaded model config from checkpoint metadata')
+    else:
+        if training_config_path is None:
+            training_config_path = infer_training_config_path(config['save_file'])
+        training_config = load_json(training_config_path)
+        print(f'loaded training config from: {training_config_path}')
+        # Support both grouped and legacy flat training config formats.
+        model_config = compose_train_config_from_dict(training_config)
 
     # Allow a few runtime overrides when needed (batch_size/seq_length/mean/stddev/prop_file).
     for key in ['batch_size', 'prop_file', 'seq_length', 'mean', 'stddev']:
@@ -404,6 +409,9 @@ if __name__ == '__main__':
     # Start token: 'X'. In this dataset, 'X' is appended to the vocab in `load_data()`.
     start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
 
+    top_k_val = config.get('top_k')
+    top_k = (None if top_k_val is None else int(top_k_val))
+
     if config['num_unique'] is not None:
         ms, smiles = generate_unique_molecules(
             model=model,
@@ -420,8 +428,8 @@ if __name__ == '__main__':
             training_smiles=training_smiles,
             do_sample=bool(config.get('do_sample', True)),
             temperature=float(config.get('temperature', 1.0)),
-            top_k=(None if config.get('top_k') is None else int(config.get('top_k'))),
-                accept_predicate=accept_predicate,
+            top_k=top_k,
+            accept_predicate=accept_predicate,
         )
     else:
         ms, smiles = generate_fixed_iterations(
@@ -438,8 +446,8 @@ if __name__ == '__main__':
             training_smiles=training_smiles,
             do_sample=bool(config.get('do_sample', True)),
             temperature=float(config.get('temperature', 1.0)),
-            top_k=(None if config.get('top_k') is None else int(config.get('top_k'))),
-                accept_predicate=accept_predicate,
+            top_k=top_k,
+            accept_predicate=accept_predicate,
         )
 
     print('number of valid smiles : ', len(ms))

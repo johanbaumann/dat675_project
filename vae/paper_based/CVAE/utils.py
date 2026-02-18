@@ -1,7 +1,7 @@
 #import h5py
 import numpy as np
 from rdkit import Chem
-from typing import Callable, Optional, Sequence, Union
+from typing import Any, Callable, Optional, Sequence, Union
 import json
 import os
 import importlib
@@ -559,6 +559,29 @@ def save_json(path:str, payload:dict) -> None:
         os.makedirs(parent, exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2)
+
+
+def load_checkpoint_model_config(ckpt_path: str) -> Optional[dict]:
+    """Load `model_config` embedded in a `.pt` checkpoint, if present.
+
+    This is more reliable than relying on `save/training_config.json`, which can
+    be overwritten by later training runs and silently mismatch the checkpoint.
+    """
+    try:
+        import torch
+        import inspect
+
+        kwargs: dict[str, Any] = {'map_location': 'cpu'}
+        if 'weights_only' in inspect.signature(torch.load).parameters:
+            # Keep this safe-loader path; it still supports dict/list/str/float payloads.
+            kwargs['weights_only'] = True
+        checkpoint = torch.load(ckpt_path, **kwargs)
+        if isinstance(checkpoint, dict):
+            cfg = checkpoint.get('model_config')
+            return cfg if isinstance(cfg, dict) else None
+    except Exception:
+        return None
+    return None
 
 
 def load_json(path:str) -> dict:

@@ -63,10 +63,10 @@ config = {
         'train_ratio': 0.75,
     },
     'model': {
-        'mode': 'transformer',  # 'lstm' or 'transformer'
+        'mode': 'lstm',  # 'lstm' or 'transformer'
         'latent_size': 200,
         'unit_size': 512,
-        'n_rnn_layer': 2,
+        'n_rnn_layer': 3,
         'mean': 0.0,
         'stddev': 1.0,
         'num_prop': None,  # inferred from property file
@@ -77,15 +77,15 @@ config = {
         'dropout': 0.15,
     },
     'optimization': {
-        'optimizer': 'adamw',
+        'optimizer': 'adam',
         'lr': 0.0001,
         'weight_decay': 0.0,
-        'use_amp': True,
+        'use_amp': False,
         'amp_dtype': 'float16',
-        'grad_clip_norm': 8.0,
+        'grad_clip_norm': 4.0,
     },
     'training': {
-        'batch_size': 64,
+        'batch_size': 128,
         'num_epochs': 100,
         'save_dir': 'save/',
         'save_every': 10,
@@ -101,8 +101,8 @@ config = {
         'min_lr': 1e-6,
     },
     'kl': {
-        'enabled': True,
-        'start_beta': 0.01,
+        'enabled': False,
+        'start_beta': 0.0,
         'max_beta': 1.0,
         'hold_epochs': 0,
         'warmup_epochs': 50,
