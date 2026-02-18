@@ -78,7 +78,7 @@ config = {
     },
     'optimization': {
         'optimizer': 'adam',
-        'lr': 0.0001,
+        'lr': 0.0001, # 10e-4
         'weight_decay': 0.0,
         'use_amp': False,
         'amp_dtype': 'float16',
