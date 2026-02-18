@@ -21,6 +21,8 @@ This repository now contains an extended implementation that supports both:
 - Dual architecture switch in one `CVAE` class: `model_mode = lstm | transformer`.
 - Saved training/model recreation config (`training_config.json`) during training.
 - Sampling that can auto-load training config from the checkpoint folder (no manual architecture retyping).
+- Added $\beta$-annealing to prevent posterior collapse.
+  - So this is now a $\beta$-CVAE
 - A bunch of "tricks of the trade such as:"
   - Lr adjustment on platue
   - dropouts
@@ -28,6 +30,7 @@ This repository now contains an extended implementation that supports both:
   - Ability to use both adam and adamW for optimizer
   - kl annealing holdout and warmup (it can be goofy af in the begining of training)
   - AMP for increased training speed.
+  - Early stopping to prevent overfitting
   - 
 - Modular config helpers in `utils.py` for defaults, JSON load/save, and compose-from-overrides.
 - Improved generation filtering/reporting in sampling (`unique`, `invalid`, `duplicates`, `in_training`).

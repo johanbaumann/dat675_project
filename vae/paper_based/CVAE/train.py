@@ -5,6 +5,8 @@ import time
 import pandas as pd
 import torch
 from copy import deepcopy
+import os
+import glob
 
 
 def log_cuda_mem(prefix: str = "") -> None:
@@ -97,7 +99,7 @@ config = {
         'enabled': True,
         'factor': 0.5,
         'patience': 5,
-        'threshold': 1e-4,
+        'threshold': 1e-5,
         'min_lr': 1e-6,
     },
     'kl': {
@@ -147,6 +149,7 @@ train_length, test_length = split_train_test(length, config['train_ratio'])
 
 # Normalize conditioning properties (MW/LogP/etc). Unnormalized properties can be large and
 # are a common cause of fp16 overflow -> NaN loss (especially with Transformer + AMP).
+# this was also done in paper...
 prop_mean = np.mean(train_labels, axis=0)
 prop_std = np.std(train_labels, axis=0)
 prop_std = np.where(prop_std < 1e-8, 1.0, prop_std)
@@ -190,13 +193,72 @@ best_epoch = -1
 epochs_without_improvement = 0
 best_state_dict = None
 
+
+def save_history_csv(*, config: dict, history: dict) -> None:
+    history_df = pd.DataFrame(history)
+    history_df.to_csv(config['save_dir'] + '/history.csv', index=False)
+
+
+def save_current_checkpoint(*, epoch: int, config: dict, model: CVAE, model_config: dict, suffix: str = "") -> None:
+    """Save current in-memory model weights with epoch in filename."""
+    ckpt_path = config['save_dir'] + f'/model_{epoch}{suffix}.ckpt'
+    model.save(ckpt_path, epoch, model_config=model_config)
+
+
+def _delete_previous_best_checkpoints(save_dir: str) -> None:
+    """Keep only one rolling best checkpoint file on disk."""
+    patterns = [
+        os.path.join(save_dir, 'model_best.ckpt-*.pt'),
+        os.path.join(save_dir, 'model_*best*.ckpt-*.pt'),
+    ]
+    deleted = set()
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            if path in deleted:
+                continue
+            try:
+                os.remove(path)
+                deleted.add(path)
+            except OSError:
+                continue
+
+
+def save_best_checkpoint(
+    *,
+    epoch: int,
+    config: dict,
+    model: CVAE,
+    model_config: dict,
+    best_state_dict,
+    best_epoch: int,
+) -> None:
+    """Save a single rolling best checkpoint named model_best.ckpt-<best_epoch>.pt."""
+    if best_state_dict is None:
+        return
+
+    _delete_previous_best_checkpoints(config['save_dir'])
+
+    restore_after = deepcopy(model.state_dict())
+    model.load_state_dict(best_state_dict)
+    print(f'saving new best model from epoch {best_epoch} (found at epoch {epoch})')
+    model.save(config['save_dir'] + '/model_best.ckpt', best_epoch, model_config=model_config)
+    model.load_state_dict(restore_after)
+
+
+
+# For logging time:
 start_time = time.time()
+
+# Main train loop. Will save checkpoints and history csv at the end of every epoch, and also on early stopping.
 
 for epoch in range(config['num_epochs']):
 
     st = time.time()
     train_loss = []
     test_loss = []
+    # reconstruction and KL losses logged to keep track of training dynam
+    # KL loss != overall loss.
+
     train_recon = []
     train_kl = []
     train_mean_abs = []
@@ -216,11 +278,12 @@ for epoch in range(config['num_epochs']):
     # TRAIN LOOP:
     for start in range(0, len(train_perm), config['batch_size']):
         batch_idx = train_perm[start:start + config['batch_size']]
-        x = train_molecules_input[batch_idx]
-        y = train_molecules_output[batch_idx]
-        l = train_length[batch_idx]
-        c = train_labels[batch_idx]
+        x = train_molecules_input[batch_idx] # input with X start and E end token
+        y = train_molecules_output[batch_idx] # output with only E end token (no start token, shifted by one position compared to input)
+        l = train_length[batch_idx] # length of each sequence (without padding)
+        c = train_labels[batch_idx] # conditioning properties (normalized)
         metrics = model.train_batch(x, y, l, c, beta=beta, return_metrics=True)
+        # check that metrics is a dict and contains expected keys
         if not isinstance(metrics, dict):
             raise TypeError('train_batch(return_metrics=True) must return a metrics dict.')
         train_loss.append(metrics['total_loss'])
@@ -237,10 +300,10 @@ for epoch in range(config['num_epochs']):
     test_perm = np.random.permutation(len(test_molecules_input))
     for start in range(0, len(test_perm), config['batch_size']):
         batch_idx = test_perm[start:start + config['batch_size']]
-        x = test_molecules_input[batch_idx]
-        y = test_molecules_output[batch_idx]
-        l = test_length[batch_idx]
-        c = test_labels[batch_idx]
+        x = test_molecules_input[batch_idx] # input with X start and E end token
+        y = test_molecules_output[batch_idx] # output with only E end token (no start token, shifted by one position compared to input)
+        l = test_length[batch_idx] # length of each sequence (without padding)
+        c = test_labels[batch_idx] # conditioning properties (normalized)
         metrics = model.test_batch(x, y, l, c, beta=beta, return_metrics=True)
         if not isinstance(metrics, dict):
             raise TypeError('test_batch(return_metrics=True) must return a metrics dict.')
@@ -252,8 +315,9 @@ for epoch in range(config['num_epochs']):
     train_loss = np.mean(np.array(train_loss))
     test_loss = np.mean(np.array(test_loss))
     
-    log_cuda_mem(prefix=f"[epoch {epoch}]")
+    #log_cuda_mem(prefix=f"[epoch {epoch}]")
 
+    #stability check, stop train if non-finite loss..
     if not np.isfinite(train_loss) or not np.isfinite(test_loss):
         print(f'non-finite loss detected at epoch {epoch} (train={train_loss}, test={test_loss}), stopping early')
         break
@@ -267,7 +331,10 @@ for epoch in range(config['num_epochs']):
     history['test_loss'].append(test_loss)
     history['lr'].append(current_lr)
 
-    # robust early stopping with min_delta
+    # robust early stopping with:
+    # min_delta: least improvment to count as an improvment.
+    # patience: number of epochs to wait for improvment before stopping.
+    # restore_best: whether to restore model weights from the epoch with the best test loss at the end of training.
     improved = float(test_loss) < (best_test_loss - float(config['early_stopping_min_delta']))
     if improved:
         best_test_loss = float(test_loss)
@@ -275,25 +342,37 @@ for epoch in range(config['num_epochs']):
         epochs_without_improvement = 0
         if config['early_stopping_restore_best']:
             best_state_dict = deepcopy(model.state_dict())
+            save_best_checkpoint(
+                epoch=epoch,
+                config=config,
+                model=model,
+                model_config=model_config,
+                best_state_dict=best_state_dict,
+                best_epoch=best_epoch,
+            )
     else:
         epochs_without_improvement += 1
+        print(f"epochs without improvement: {epochs_without_improvement}/{config['early_stopping_patience']} (best epoch: {best_epoch}, best test loss: {best_test_loss:.6f})")
 
+
+    #NOTE: Early stopping will trigger if no improvement  
     if epochs_without_improvement >= config['early_stopping_patience']:
         print(
             f'early stop at epoch {epoch} since no improvement for '
             f'{epochs_without_improvement} epochs (best epoch: {best_epoch}, best test loss: {best_test_loss:.6f})'
         )
 
-        if config['early_stopping_restore_best'] and best_state_dict is not None:
-            model.load_state_dict(best_state_dict)
-            print(f'restored best model weights from epoch {best_epoch}')
-        
-        ckpt_path = config['save_dir']+'/model_'+str(epoch)+'.ckpt'
-        model.save(ckpt_path, epoch, model_config=model_config)
-        history_df = pd.DataFrame(history)
-        history_df.to_csv(config['save_dir']+'/history.csv', index=False)
+        # Save the current weights at early-stop epoch for traceability.
+        save_current_checkpoint(
+            epoch=epoch,
+            config=config,
+            model=model,
+            model_config=model_config,
+            suffix='_early_stop',
+        )
+        save_history_csv(config=config, history=history)
         break
-            
+    # end time for epoch
     end = time.time()  
     passed_time = end - st
 
@@ -315,13 +394,28 @@ for epoch in range(config['num_epochs']):
             f"grad_norm={np.mean(train_grad_norm):.4f}"
         )
 
-    if epoch == config['num_epochs']-1 or (epoch + 1) % config['save_every'] == 0:
-        if config['early_stopping_restore_best'] and best_state_dict is not None:
-            model.load_state_dict(best_state_dict)
-            print(f'training ended; restored best model weights from epoch {best_epoch}')
-        ckpt_path = config['save_dir']+'/model_'+str(epoch)+'.ckpt'
-        model.save(ckpt_path, epoch, model_config=model_config)
-        #save history as csv file
-        history_df = pd.DataFrame(history)
-        history_df.to_csv(config['save_dir']+'/history.csv', index=False)
+    is_last_epoch = epoch == (config['num_epochs'] - 1)
+    save_epoch = (epoch + 1) % config['save_every'] == 0
+
+    # Occaisonal_checkpointing
+    if is_last_epoch:
+        # Always save current weights for the last epoch if training reaches it.
+        save_current_checkpoint(
+            epoch=epoch,
+            config=config,
+            model=model,
+            model_config=model_config,
+            suffix='_final',
+        )
+        save_history_csv(config=config, history=history)
+    elif save_epoch:
+        # Occasional save of current epoch weights.
+        save_current_checkpoint(
+            epoch=epoch,
+            config=config,
+            model=model,
+            model_config=model_config,
+            suffix='_periodic',
+        )
+        save_history_csv(config=config, history=history)
 

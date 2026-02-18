@@ -12,14 +12,15 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - `train.py`: Restored LSTM-friendly default training hyperparameters (Adam, `lr=1e-4`, `weight_decay=0`, AMP off, grad-clip back to 1.0). The Transformer preset still opts into AdamW/AMP/KL warmup when explicitly selected.
+- `train.py`: Checkpointing logic is now explicit and split by purpose: a single rolling best checkpoint (`model_best.ckpt-<best_epoch>.pt`, replacing previous `*best*` checkpoints on each improvement), periodic current checkpoints every `save_every` epochs (`model_<epoch>_periodic.ckpt-<epoch>.pt`), a final current checkpoint when the last epoch is reached (`model_<epoch>_final.ckpt-<epoch>.pt`), and an early-stop current checkpoint (`model_<epoch>_early_stop.ckpt-<epoch>.pt`).
 
-### Changed
+### Changed (Config & Presets)
 
 - `train.py` / `utils.py`: Training config now supports grouped sections (`data`, `model`, `transformer`, `optimization`, `training`, `scheduler`, `kl`, `diagnostics`) while remaining backward compatible with legacy flat keys.
 - `train.py`: Simplified default config and aligned KL annealing defaults to safer startup values (`start_beta=0.01`, `hold_epochs=0`, `warmup_epochs=50`).
 - `train.py`: `stable_transformer` preset now keeps AMP enabled and applies the safer KL schedule.
 
-### Fixed
+### Fixed (Transformer Stability)
 
 - `model.py`: Transformer decoder path no longer passes `tgt_key_padding_mask`, avoiding all-masked-query NaN behavior.
 - `model.py`: Under AMP, Transformer encoder/decoder attention blocks now execute in fp32 via selective autocast disable, reducing fp16/bf16 attention-softmax instability.
@@ -46,7 +47,7 @@ All notable changes to this project are documented in this file.
 - `model.py`: Added optional detailed batch metrics from `train_batch(...)` / `test_batch(...)` (reconstruction loss, KL loss, latent stats, gradient norm) used for stability debugging.
 - `train.py`: Added one-click training preset switch via `training_preset`, including `stable_transformer` mode that auto-applies safer anti-divergence settings.
 
-### Changed
+### Changed (Workflow & Checkpointing)
 
 - `sample.py`: Model initialization now loads training/model hyperparameters from `training_config.json` (in checkpoint folder by default), so manual retyping of architecture config is no longer required.
 - `sample.py`: Added clean runtime override behavior for `batch_size`, `prop_file`, `seq_length`, `mean`, and `stddev` on top of loaded training config.
@@ -67,7 +68,7 @@ All notable changes to this project are documented in this file.
 - `model.py`: AdamW optimizer now uses parameter groups so weight decay is not applied to biases, norm parameters, embeddings, and VAE posterior heads (`out_mean`, `out_log_sigma`).
 - `model.py`: ELBO now supports a KL weight (`beta`) for warm-up/annealing while preserving old behavior when `beta=1.0`.
 
-### Fixed
+### Fixed (Compatibility & Reliability)
 
 - `model.py`: In `transformer` mode, token embedding width now uses `latent_size` (instead of `unit_size`), so embedding can be significantly smaller while keeping Transformer internal width controlled by `unit_size`.
 - `utils.py`: `compose_train_config_from_dict(...)` and `compose_train_config(...)` now preserve `num_prop=None` during initial config normalization, preventing a startup crash (`int(None)`) before `train.py` infers `num_prop` from the property file.
