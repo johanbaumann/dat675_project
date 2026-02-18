@@ -6,22 +6,34 @@ Reference paper:
 
 - https://jcheminf.biomedcentral.com/articles/10.1186/s13321-018-0286-7
 - https://arxiv.org/abs/1806.05805
+- 
 
 This repository now contains an extended implementation that supports both:
 
 - `lstm` CVAE (paper-style baseline), and
-- `transformer` CVAE (your extension).
+- `transformer` CVAE (an extension).
 
 ## What is different from the original paper implementation
 
-Your modifications in this repo include:
+ Modifications in this repo include:
 
+- Changed from Tensorflow to Pytorch!
 - Dual architecture switch in one `CVAE` class: `model_mode = lstm | transformer`.
 - Saved training/model recreation config (`training_config.json`) during training.
 - Sampling that can auto-load training config from the checkpoint folder (no manual architecture retyping).
+- A bunch of "tricks of the trade such as:"
+  - Lr adjustment on platue
+  - dropouts
+  - weight decay
+  - Ability to use both adam and adamW for optimizer
+  - kl annealing holdout and warmup (it can be goofy af in the begining of training)
+  - AMP for increased training speed.
+  - 
 - Modular config helpers in `utils.py` for defaults, JSON load/save, and compose-from-overrides.
 - Improved generation filtering/reporting in sampling (`unique`, `invalid`, `duplicates`, `in_training`).
-- EOS-aware early stopping in decode loop for faster generation.
+- EOS-aware early stopping in decode loop for faster generation. So it does not go trough everything multiple times
+- Ability to use only a subset of parameters for conditions compared to the origonal papers which had: MW,LogP, TPSA, HBD, HBA
+- 
 
 ## 1) Prepare SMILES property file
 
@@ -105,7 +117,7 @@ By default, it auto-loads `training_config.json` from the same folder as `save_f
 For MW + LogP training, use:
 
 ```python
-'target_prop': '300.0 3.0'
+'target_prop': '300.0 3.0' which corresponds to MW = 300, logP = 3.0!
 ```
 
 `sample.py` validates that the number of values in `target_prop` matches the trained model/property-file dimensionality.
@@ -147,27 +159,27 @@ python sweep_sampling.py
 It runs a small grid over `temperature` and `top_k` and reports the fraction of samples that become **unique + novel + RDKit-valid** after filtering (plus invalid/duplicate rates). For `save/model_9.ckpt-9.pt` with 25 batches (1600 samples) per setting and target properties MW=300, LogP=3, the sweep produced:
 
 | temperature | top_k | samples | accepted (unique+novel) | accepted_rate | invalid_rate | dup_rate | in_training_rate |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0.6 | 20 | 1600 | 526 | 32.88% | 56.88% | 10.25% | 0.00% |
-| 0.6 | 100 | 1600 | 521 | 32.56% | 58.06% | 9.38% | 0.00% |
-| 0.6 | 50 | 1600 | 518 | 32.38% | 57.56% | 10.06% | 0.00% |
-| 0.6 | 10 | 1600 | 501 | 31.31% | 59.44% | 9.25% | 0.00% |
-| 0.7 | 100 | 1600 | 289 | 18.06% | 81.44% | 0.50% | 0.00% |
-| 0.7 | 20 | 1600 | 275 | 17.19% | 82.31% | 0.50% | 0.00% |
-| 0.7 | 50 | 1600 | 270 | 16.88% | 83.06% | 0.06% | 0.00% |
-| 0.7 | 10 | 1600 | 267 | 16.69% | 83.00% | 0.31% | 0.00% |
-| 0.8 | 50 | 1600 | 108 | 6.75% | 93.25% | 0.00% | 0.00% |
-| 0.8 | 20 | 1600 | 104 | 6.50% | 93.44% | 0.06% | 0.00% |
-| 0.8 | 10 | 1600 | 102 | 6.38% | 93.56% | 0.06% | 0.00% |
-| 0.8 | 100 | 1600 | 95 | 5.94% | 93.94% | 0.12% | 0.00% |
-| 0.9 | 100 | 1600 | 51 | 3.19% | 96.69% | 0.12% | 0.00% |
-| 0.9 | 50 | 1600 | 51 | 3.19% | 96.75% | 0.06% | 0.00% |
-| 0.9 | 10 | 1600 | 43 | 2.69% | 97.19% | 0.12% | 0.00% |
-| 0.9 | 20 | 1600 | 42 | 2.62% | 97.31% | 0.06% | 0.00% |
-| 1.0 | 10 | 1600 | 38 | 2.38% | 97.31% | 0.31% | 0.00% |
-| 1.0 | 20 | 1600 | 36 | 2.25% | 97.62% | 0.12% | 0.00% |
-| 1.0 | 50 | 1600 | 33 | 2.06% | 97.81% | 0.12% | 0.00% |
-| 1.0 | 100 | 1600 | 20 | 1.25% | 98.44% | 0.31% | 0.00% |
+| ----------: | ----: | ------: | ----------------------: | ------------: | -----------: | -------: | ---------------: |
+|         0.6 |    20 |    1600 |                     526 |        32.88% |       56.88% |   10.25% |            0.00% |
+|         0.6 |   100 |    1600 |                     521 |        32.56% |       58.06% |    9.38% |            0.00% |
+|         0.6 |    50 |    1600 |                     518 |        32.38% |       57.56% |   10.06% |            0.00% |
+|         0.6 |    10 |    1600 |                     501 |        31.31% |       59.44% |    9.25% |            0.00% |
+|         0.7 |   100 |    1600 |                     289 |        18.06% |       81.44% |    0.50% |            0.00% |
+|         0.7 |    20 |    1600 |                     275 |        17.19% |       82.31% |    0.50% |            0.00% |
+|         0.7 |    50 |    1600 |                     270 |        16.88% |       83.06% |    0.06% |            0.00% |
+|         0.7 |    10 |    1600 |                     267 |        16.69% |       83.00% |    0.31% |            0.00% |
+|         0.8 |    50 |    1600 |                     108 |         6.75% |       93.25% |    0.00% |            0.00% |
+|         0.8 |    20 |    1600 |                     104 |         6.50% |       93.44% |    0.06% |            0.00% |
+|         0.8 |    10 |    1600 |                     102 |         6.38% |       93.56% |    0.06% |            0.00% |
+|         0.8 |   100 |    1600 |                      95 |         5.94% |       93.94% |    0.12% |            0.00% |
+|         0.9 |   100 |    1600 |                      51 |         3.19% |       96.69% |    0.12% |            0.00% |
+|         0.9 |    50 |    1600 |                      51 |         3.19% |       96.75% |    0.06% |            0.00% |
+|         0.9 |    10 |    1600 |                      43 |         2.69% |       97.19% |    0.12% |            0.00% |
+|         0.9 |    20 |    1600 |                      42 |         2.62% |       97.31% |    0.06% |            0.00% |
+|         1.0 |    10 |    1600 |                      38 |         2.38% |       97.31% |    0.31% |            0.00% |
+|         1.0 |    20 |    1600 |                      36 |         2.25% |       97.62% |    0.12% |            0.00% |
+|         1.0 |    50 |    1600 |                      33 |         2.06% |       97.81% |    0.12% |            0.00% |
+|         1.0 |   100 |    1600 |                      20 |         1.25% |       98.44% |    0.31% |            0.00% |
 
 Interpretation:
 
@@ -206,24 +218,24 @@ Reconstruction loss is computed token-wise and masked by `lengths` so that posit
 ## Known failure modes
 
 - Symptom: model predicts only padding (`'E'`) for most positions
-	- Cause: missing `tgt_key_padding_mask` and/or reconstruction loss not masked by sequence length
+  - Cause: missing `tgt_key_padding_mask` and/or reconstruction loss not masked by sequence length
 - Symptom: unstable training / NaN loss (Transformer)
-	- Cause: AMP fp16 overflow in attention/softmax or extreme latent log-variance; try `use_amp=False` and/or check `log_sigma` clamp
+  - Cause: AMP fp16 overflow in attention/softmax or extreme latent log-variance; try `use_amp=False` and/or check `log_sigma` clamp
 
 ## Architecture overview (Transformer mode)
 
 - Encoder
-	- Token embedding (`latent_size`)
-	- Concatenate conditioning properties per time step
-	- Linear projection to `d_model=unit_size` + positional encoding
-	- `TransformerEncoder` with `src_key_padding_mask`
-	- Pool last valid state (by `lengths`) to latent mean/log-variance
+  - Token embedding (`latent_size`)
+  - Concatenate conditioning properties per time step
+  - Linear projection to `d_model=unit_size` + positional encoding
+  - `TransformerEncoder` with `src_key_padding_mask`
+  - Pool last valid state (by `lengths`) to latent mean/log-variance
 - Decoder
-	- Token embedding (`latent_size`)
-	- Concatenate latent `z` and conditioning properties per time step
-	- Linear projection to `d_model=unit_size` + positional encoding
-	- `TransformerDecoder` with causal mask + `tgt_key_padding_mask`
-	- Linear projection to vocabulary logits
+  - Token embedding (`latent_size`)
+  - Concatenate latent `z` and conditioning properties per time step
+  - Linear projection to `d_model=unit_size` + positional encoding
+  - `TransformerDecoder` with causal mask + `tgt_key_padding_mask`
+  - Linear projection to vocabulary logits
 
 ## Notes
 
