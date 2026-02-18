@@ -288,20 +288,23 @@ if __name__ == '__main__':
     # Runtime sampling options.
     # Model architecture/training hyperparameters are loaded from training_config.json.
     config = {
-        'batch_size': 64,
+        #'batch_size': 64, # for Transformer,
+        'batch_size': 128, # for C-VAE (paper used 256, but that may cause OOM on smaller GPUs)
         'num_iteration': 10,  # number of batches to sample (old behavior)
-        'save_file': 'save/model_9.ckpt-9.pt',
+        'save_file': 'save/model_best.ckpt-37.pt', #for C-VAE
+        #"save_file": 'save/best_model_trans.pt', # for transformer!
+        #'training_config_file': 'trans_config', # for transformer!
         'training_config_file': None,
         'target_prop': '300.0 3.0',
         'prop_file': None,
         'seq_length': None,
         'mean': None,
         'stddev': None,
-        'result_filename': 'result.txt',
+        'result_filename': 'CVAE_result.txt',
         'num_unique': 1000,
         'max_batches': 5000,
         # Sampling controls. Greedy decoding (do_sample=False) often collapses to 1 molecule.
-        'do_sample': True,
+        'do_sample': False,
         # Sweep for this checkpoint suggests ~temperature=0.6, top_k=20 gives much higher unique+novel acceptance.
         'temperature': 0.6, # higher temperature -> more random, lower temperature -> more valid, less diverse
         'top_k': 20, # limits sampling to the top_k most probable tokens at each step. Can help improve validity at low temperatures.
