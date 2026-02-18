@@ -91,7 +91,7 @@ config = {
         'num_epochs': 100,
         'save_dir': 'save/',
         'save_every': 10,
-        'early_stopping_patience': 10,
+        'early_stopping_patience': 20,
         'early_stopping_min_delta': 0.0,
         'early_stopping_restore_best': True,
     },
