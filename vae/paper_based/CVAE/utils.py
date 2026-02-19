@@ -8,6 +8,11 @@ import importlib
 import gzip
 import pickle
 
+try:
+    from rdkit.Chem.MolStandardize import rdMolStandardize
+except Exception:
+    rdMolStandardize = None
+
 
 TRAIN_CONFIG_DEFAULTS = {
     'training_preset': 'custom',
@@ -50,6 +55,93 @@ TRAIN_CONFIG_DEFAULTS = {
     'kl_anneal_hold_epochs': 0,
     'kl_anneal_warmup_epochs': 50,
 }
+
+
+# Build standardization tools once (best effort).
+_UNCHARGER = None
+_TAUTOMER_ENUM = None
+if rdMolStandardize is not None:
+    try:
+        _UNCHARGER = rdMolStandardize.Uncharger()
+    except Exception:
+        _UNCHARGER = None
+    try:
+        _TAUTOMER_ENUM = rdMolStandardize.TautomerEnumerator()
+    except Exception:
+        _TAUTOMER_ENUM = None
+
+
+def _largest_fragment(mol:Chem.Mol) -> tuple[Chem.Mol, bool]:
+    """Keep the largest fragment (salt stripping) and report if stripping happened."""
+    try:
+        frags = Chem.GetMolFrags(mol, asMols=True)
+    except Exception:
+        return mol, False
+
+    if not frags or len(frags) <= 1:
+        return mol, False
+
+    best = max(frags, key=lambda m: int(m.GetNumHeavyAtoms()))
+    return best, True
+
+
+def canonicalize_for_filtering(
+    smiles:str,
+    *,
+    strip_salts: bool = True,
+    decharge: bool = True,
+    canonicalize_tautomer: bool = False,
+) -> tuple[Optional[str], Optional[Chem.Mol], dict]:
+    """Return canonicalized parent SMILES + mol for robust filtering.
+
+    Pipeline (best effort):
+      1) Parse/decode from SMILES
+      2) Remove salts/mixtures by selecting largest fragment
+      3) Neutralize where possible
+      4) Optionally canonicalize tautomer representation
+      5) Return canonical SMILES used for duplicate/novelty checks
+    """
+    info = {
+        'salt_stripped': 0,
+        'tautomer_canonicalized': 0,
+    }
+
+    if smiles is None:
+        return None, None, info
+
+    s = str(smiles).strip()
+    if not s:
+        return None, None, info
+
+    mol = Chem.MolFromSmiles(s)
+    if mol is None:
+        return None, None, info
+
+    if strip_salts:
+        mol, stripped = _largest_fragment(mol)
+        if stripped:
+            info['salt_stripped'] = 1
+
+    if decharge and _UNCHARGER is not None:
+        try:
+            mol = _UNCHARGER.uncharge(mol)
+        except Exception:
+            pass
+
+    if canonicalize_tautomer and _TAUTOMER_ENUM is not None:
+        try:
+            before = Chem.MolToSmiles(mol, canonical=True)
+            mol = _TAUTOMER_ENUM.Canonicalize(mol)
+            after = Chem.MolToSmiles(mol, canonical=True)
+            if before != after:
+                info['tautomer_canonicalized'] = 1
+        except Exception:
+            pass
+
+    can = Chem.MolToSmiles(mol, canonical=True)
+    if not can:
+        return None, None, info
+    return can, mol, info
 
 
 def _flatten_grouped_train_config(config_override:dict) -> dict:
@@ -235,7 +327,14 @@ def _normalize_train_config(config_override:dict) -> dict:
     return config
 
 
-def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
+def load_training_canonical_smiles(
+    prop_file:str,
+    seq_length:int,
+    *,
+    strip_salts: bool = True,
+    decharge: bool = True,
+    canonicalize_tautomer: bool = False,
+) -> set:
     """Load canonical SMILES set from the training/property file.
 
     This follows the same length filter used in `load_data` so the exclusion set
@@ -244,7 +343,14 @@ def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
     The goal of this is to cache the canonicalized SMILES
     """
     # Cache to avoid re-canonicalizing large training files on every run.
-    cache_path = f"{prop_file}.canon_seq{int(seq_length)}.pkl.gz"
+    # Versioned cache suffix so stale canonicalization from older logic isn't reused.
+    cache_path = (
+        f"{prop_file}.canon_std_v3"
+        f"_salts{int(bool(strip_salts))}"
+        f"_dechg{int(bool(decharge))}"
+        f"_taut{int(bool(canonicalize_tautomer))}"
+        f"_seq{int(seq_length)}.pkl.gz"
+    )
     try:
         if os.path.exists(cache_path):
             cache_mtime = os.path.getmtime(cache_path)
@@ -267,11 +373,13 @@ def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
 
     for row in lines:
         smi = row[0]
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            continue
-        can = Chem.MolToSmiles(mol)
-        if can:
+        can, _, _ = canonicalize_for_filtering(
+            smi,
+            strip_salts=strip_salts,
+            decharge=decharge,
+            canonicalize_tautomer=canonicalize_tautomer,
+        )
+        if can is not None:
             canonical.add(can)
 
     try:
@@ -288,6 +396,9 @@ def collect_new_unique_from_raw(
     training_smiles:Optional[set] = None,
     eos_token:str = 'E',
     accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
+    strip_salts: bool = True,
+    decharge: bool = True,
+    canonicalize_tautomer: bool = False,
 ) -> tuple:
     """Filter decoded strings into new unique molecules + quality stats.
 
@@ -303,6 +414,8 @@ def collect_new_unique_from_raw(
         'in_training': 0,
         'duplicate': 0,
         'rejected_by_filter': 0,
+        'salt_stripped': 0,
+        'tautomer_canonicalized': 0,
     }
 
     if training_smiles is None:
@@ -317,15 +430,21 @@ def collect_new_unique_from_raw(
             stats['invalid_or_empty'] += 1
             continue
 
-        mol = Chem.MolFromSmiles(s)
-        if mol is None:
+        # Robust decode + normalization before novelty/duplicate checks.
+        # This strips salts/fragments and canonicalizes tautomer forms so
+        # duplicates and novelty are measured on a consistent parent form.
+        can, mol, can_info = canonicalize_for_filtering(
+            s,
+            strip_salts=strip_salts,
+            decharge=decharge,
+            canonicalize_tautomer=canonicalize_tautomer,
+        )
+        if can is None or mol is None:
             stats['invalid_or_empty'] += 1
             continue
 
-        can = Chem.MolToSmiles(mol)
-        if not can:
-            stats['invalid_or_empty'] += 1
-            continue
+        stats['salt_stripped'] += int(can_info.get('salt_stripped', 0))
+        stats['tautomer_canonicalized'] += int(can_info.get('tautomer_canonicalized', 0))
 
         if can in training_smiles:
             stats['in_training'] += 1

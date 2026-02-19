@@ -8,6 +8,21 @@ All notable changes to this project are documented in this file.
 
 - `sample.py` / `debug_sampling.py`: Sampling now prefers the `model_config` embedded in the checkpoint (`.pt`) payload. This prevents a subtle failure mode where `save/training_config.json` gets overwritten by later training runs (often Transformer experiments), causing sampling to use the wrong `prop_file` / `seq_length` / `num_prop` and especially the wrong `prop_norm_mean/std` (=> invalid SMILES and/or near-zero acceptance).
 - `sample.py`: Default decoding is stochastic again (`do_sample=True`). During Transformer refactors the default was set to greedy decoding, which commonly collapses to a single repeated molecule ("not unique") and can also reduce validity.
+- `sample.py` / `utils.py`: Novelty and duplicate checks now use the same canonicalization pipeline for both generated molecules and training-set molecules, avoiding mismatches from inconsistent canonical forms.
+
+### Added
+
+- `sample.py`: Added sweep-level quality reporting for the whole generated sweep (`WHOLE GENERATED SWEEP`) with V/U/N and detailed counters aggregated across all property pairs.
+- `sample.py`: Added per-sweep-pair statistics export fields for downstream heatmaps, including acceptance and filtering counters.
+- `sample.py`: Added explicit runtime canonicalization logging and counters in quality stats (`salt_stripped`, `tautomer_canonicalized`).
+- `utils.py`: Added robust canonicalization helper for filtering/novelty (`canonicalize_for_filtering(...)`) with configurable salt stripping, decharge, and optional tautomer canonicalization.
+
+### Changed
+
+- `sample.py`: Runtime sampling configuration is now nested by concern (`model`, `generation`, `sampling`, `filters`, `cleanup`, `sweep`, `output`) and composed into flat runtime keys internally for compatibility.
+- `sample.py`: Cleanup controls (`strip_salts`, `decharge`, `canonicalize_tautomer`) are now first-class under `runtime_config['cleanup']` (with backward-compatible fallback if older configs still put them under `filters`).
+- `utils.py`: Training-set canonical cache naming now includes canonicalization mode flags to prevent stale cache reuse when cleanup options change.
+- `utils.py`: Canonicalization path was optimized for speed by default (parse/canonicalize + optional decharge; tautomer canonicalization remains optional due to runtime cost).
 
 ### Changed
 

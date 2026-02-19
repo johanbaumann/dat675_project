@@ -17,15 +17,21 @@ This repository now contains an extended implementation that supports both:
 
  Modifications in this repo include:
 
+(Its a bit of a ship of Theseus situation since so much is changed...)
+
 - Changed from Tensorflow to Pytorch!
 - Dual architecture switch in one `CVAE` class: `model_mode = lstm | transformer`.
 - Saved training/model recreation config (`training_config.json`) during training.
 - Sampling that can auto-load training config from the checkpoint folder (no manual architecture retyping).
 - Added $\beta$-annealing to prevent posterior collapse.
-  - So this is now a $\beta$-CVAE
-- A bunch of "tricks of the trade such as:"
+
+  - So this is now a $\beta$-CVAE, based on works by [Nicholas Ang et al](https://arxiv.org/abs/2306.01683)  Who was based on [Higgints et al](https://www.cs.toronto.edu/~bonner/courses/2022s/csc2547/papers/generative/disentangled-representations/beta-vae,-higgins,-iclr2017.pdf).
+  - Higher $\beta \implies$strenghtens constraints of latent space to be disentangled (traversable)
+  - lower $\beta \implies$greater flexability in the representation.
+- A bunch of "tricks of the trade" such as:
+
   - Lr adjustment on platue
-  - dropouts
+  - dropouts (can prevent overfitting, and increase generalization)
   - weight decay
   - Ability to use both adam and adamW for optimizer
   - kl annealing holdout and warmup (it can be goofy af in the begining of training)
@@ -36,7 +42,76 @@ This repository now contains an extended implementation that supports both:
 - Improved generation filtering/reporting in sampling (`unique`, `invalid`, `duplicates`, `in_training`).
 - EOS-aware early stopping in decode loop for faster generation. So it does not go trough everything multiple times
 - Ability to use only a subset of parameters for conditions compared to the origonal papers which had: MW,LogP, TPSA, HBD, HBA
-- 
+- Latent memory injection into the Transformer-decoder. This is since the decoder produces sequences conditioned on both *z* and *c.* This means that for each time step, the decoder builds token input from: token embeddings, latent vector z and condition vector c, where both z and c is broadcasted across time steps. Then a memory vector is built and alastly cross-attention is applied in decoder. (a technique studied in the context of  LLMS for Memory injection atacks...)
+
+## The ELBO optimization of $\beta$-CVAE:
+
+
+
+$$
+logp_\theta(x|z) \ge \mathcal{L}(\theta,\phi,x,z) = \underbrace{\mathbb{E}_{q_\phi(z|x)}[log\underbrace{p_\theta(x|z,c)}_{\text{Conditional likleyhood}}]}_{\text{Reconstruction error (decoder)}}-\beta\underbrace{ D_{KL}[\underbrace{q_\phi(z|x,c)}_{\text{Approximated posterior}}||\underbrace{p(z|c)}_{\text{conditioned-prior}}]}_{D_{KL},\text{ Kullback-lieber term (encoder)}}
+$$
+
+Where:
+
+#### *Random varibles and dist....:*
+
+* x *:* data, observations
+* *c* : condition vector can be: LogP, MW.....
+* *z*: Latent varible (possible molecule space)
+* 
+
+#### Parameters $\phi \ and \ \theta$:
+
+###### $\theta$(decoder/generative parameters):
+
+Parameters on the conditional likleyhood model:
+
+$$
+p_\theta(x|z,c)
+$$
+
+Decoder network. Givent latent (*z*) and condition *c:* outputs distribution over x. since smiles $\implies$
+
+$$
+p_\theta(x|z,c): \\ \text{Factorizes over timesteps as an autoregressice categorial distribution (softmax over tokens/atoms/smiles-letters)}
+$$
+
+###### $\phi$ (encoder/ variational parameters):
+
+Tries to approximate the posterior:
+
+$$
+q_\phi(z|x,c)
+$$
+
+It outputs a distribution over latent varibles *z.*
+
+In this project the prior is assumed to be (conditioned on *c*):
+
+$q(z|x,c) \in {\mathcal{N}(\mu_\phi(x,c),diag(\sigma_\phi^2(x,c)))}$
+
+One has to approximate the posterior since the true posterior: $p(z|x,c)$ is intractable since:
+
+$$
+p(z|x,c) = \frac{p(x|z,c)p(z|c)}{\underbrace{p(x|c)}_{\text{intractable}}}
+$$
+
+
+$$
+\underbrace{p(x|c)}_{\text{Marginal likleyhood/Evidence }} = \int p(x|z,c) p(z|c)dz
+$$
+
+
+
+Which would mean having to find the probability of all possible real-latent varible *c*-values (impossible). And especially in the case of smiles where they are discrete....
+
+So the encoder must approximate it, and the approximated posterior is denoted as: $q_\phi(z|x,c)$
+
+
+
+
+
 
 ## 1) Prepare SMILES property file
 
@@ -133,12 +208,7 @@ config = {
 }
 ```
 
-
-
 **Stable for Transformer:**
-
-
-
 
 ```python
 config = {
