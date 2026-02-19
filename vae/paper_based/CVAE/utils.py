@@ -1,10 +1,9 @@
 #import h5py
 import numpy as np
 from rdkit import Chem
-from typing import Any, Callable, Optional, Sequence, Union
+from typing import Any, Callable, Optional
 import json
 import os
-import importlib
 import gzip
 import pickle
 
@@ -356,8 +355,7 @@ def load_training_canonical_smiles(
             cache_mtime = os.path.getmtime(cache_path)
             src_mtime = os.path.getmtime(prop_file)
             if cache_mtime >= src_mtime:
-                with gzip.open(cache_path, 'rb') as f:
-                    cached = pickle.load(f)
+                cached = load_pickle_gz(cache_path)
                 if isinstance(cached, set):
                     return cached
     except Exception:
@@ -383,8 +381,7 @@ def load_training_canonical_smiles(
             canonical.add(can)
 
     try:
-        with gzip.open(cache_path, 'wb') as f:
-            pickle.dump(canonical, f, protocol=pickle.HIGHEST_PROTOCOL)
+        save_pickle_gz(cache_path, canonical)
     except Exception:
         pass
     return canonical
@@ -482,109 +479,6 @@ def convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
     vector = vector.astype(int)
     return "".join(map(lambda x: list_char[x], vector)).strip()
 
-def stochastic_convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
-    list_char = char.tolist()
-    s = ""
-    for i in range(len(vector)):
-        prob = vector[i].tolist()
-        norm0 = sum(prob)
-        prob = [i/norm0 for i in prob]
-        index = np.random.choice(len(list_char), 1, p=prob)
-        s+=list_char[index[0]]
-    return s
-
-def one_hot_array(i:int, n:int) -> list:
-    return list(map(int, [ix == i for ix in range(n)]))
-
-def one_hot_index(vec:Union[np.ndarray, Sequence[str]], charset:str) -> list:
-    return list(map(charset.index, vec))
-
-def from_one_hot_array(vec:np.ndarray) -> Optional[int]:
-    oh = np.where(vec == 1)
-    if oh[0].shape == (0, ):
-        return None
-    return int(oh[0][0])
-
-def decode_smiles_from_indexes(vec:np.ndarray, charset:str) -> str:
-    return "".join(map(lambda x: charset[x], vec)).strip()
-
-def load_dataset(filename:str, split:bool = True) -> tuple:
-    h5py = importlib.import_module('h5py')
-    h5f = h5py.File(filename, 'r')
-    if split:
-        data_train = h5f['data_train'][:]
-    else:
-        data_train = None
-    data_test = h5f['data_test'][:]
-    charset = h5f['charset'][:]
-    h5f.close()
-    if split:
-        return data_train, data_test, charset
-    else:
-        return data_test, charset
-
-def encode_smiles(smiles:str, model, charset:str) -> np.ndarray:
-    cropped = list(smiles.ljust(120))
-    preprocessed = np.array([list(map(lambda x: one_hot_array(x, len(charset)), one_hot_index(cropped, charset)))])
-    latent = model.encoder.predict(preprocessed)
-    return latent
-
-def smiles_to_onehot(smiles:str, charset:str) -> np.ndarray:
-    cropped = list(smiles.ljust(120))
-    preprocessed = np.array([list(map(lambda x: one_hot_array(x, len(charset)), one_hot_index(cropped, charset)))])
-    return preprocessed
-
-def smiles_to_vector(smiles:str, vocab:dict, max_length:int) -> list:
-    while len(smiles)<max_length:
-        smiles +=" "
-    return [vocab[str(x)] for x in smiles]
-
-def decode_latent_molecule(latent:np.ndarray, model, charset:str, latent_dim:int) -> str:
-    decoded = model.decoder.predict(latent.reshape(1, latent_dim)).argmax(axis=2)[0]
-    smiles = decode_smiles_from_indexes(decoded, charset)
-    return smiles
-
-def interpolate(source_smiles:str, dest_smiles:str, steps:int, charset:str, model, latent_dim:int) -> list:
-    source_latent = encode_smiles(source_smiles, model, charset)
-    dest_latent = encode_smiles(dest_smiles, model, charset)
-    step = (dest_latent - source_latent) / float(steps)
-    results = []
-    for i in range(steps):
-        item = source_latent + (step * i)        
-        decoded = decode_latent_molecule(item, model, charset, latent_dim)
-        results.append(decoded)
-    return results
-
-def get_unique_mols(mol_list:list) -> list:
-    inchi_keys = []
-    for mol in mol_list:
-        inchi = Chem.MolToInchi(mol)
-        if isinstance(inchi, tuple):
-            inchi = inchi[0]
-        inchi_keys.append(Chem.InchiToInchiKey(str(inchi)))
-    u, indices = np.unique(inchi_keys, return_index=True)
-    unique_mols = [[mol_list[i], inchi_keys[i]] for i in indices]
-    return unique_mols
-
-def accuracy(arr1:np.ndarray, arr2:np.ndarray, length:np.ndarray) -> tuple:
-    total = len(arr1)
-    count1=0
-    count2=0
-    count3=0
-    for i in range(len(arr1)):
-        if np.array_equal(arr1[i,:length[i]], arr2[i,:length[i]]):
-            count1+=1
-    for i in range(len(arr1)):
-        for j in range(length[i]):
-            if arr1[i][j]==arr2[i][j]:
-                count2+=1
-            count3+=1
-
-    return float(count1/float(total)), float(count2/count3)
-
-
-
-
 def load_data(n:str, seq_length:int) -> tuple:
     import collections
     f = open(n)
@@ -645,11 +539,6 @@ def compose_train_config_from_dict(config_override:dict) -> dict:
     return _normalize_train_config(config_override)
 
 
-def build_train_config(args) -> dict:
-    """Backward-compatible alias for compose_train_config."""
-    return compose_train_config(args)
-
-
 def get_model_config(config:dict, vocab_size:Optional[int] = None) -> dict:
     """Keep essential config values needed to recreate model architecture.
 
@@ -687,6 +576,32 @@ def save_json(path:str, payload:dict) -> None:
         os.makedirs(parent, exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2)
+
+
+def save_pickle_gz(
+    path: str,
+    payload: Any,
+    *,
+    protocol: int = pickle.HIGHEST_PROTOCOL,
+    compresslevel: int = 6,
+) -> str:
+    """Serialize payload to a gzip-compressed pickle file.
+
+    This is intended for large Python objects (e.g., generated molecule lists)
+    where plain text/CSV outputs can become very large.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with gzip.open(path, 'wb', compresslevel=int(compresslevel)) as f:
+        pickle.dump(payload, f, protocol=protocol)
+    return path
+
+
+def load_pickle_gz(path: str) -> Any:
+    """Load and return an object from a gzip-compressed pickle file."""
+    with gzip.open(path, 'rb') as f:
+        return pickle.load(f)
 
 
 def load_checkpoint_model_config(ckpt_path: str) -> Optional[dict]:

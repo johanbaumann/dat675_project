@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import time as t
 from typing import Callable, Optional
 
@@ -22,6 +23,7 @@ from utils import (
     load_data,
     load_checkpoint_model_config,
     load_json,
+    save_pickle_gz,
     load_training_canonical_smiles,
 )
 
@@ -141,14 +143,7 @@ def _compute_quality_metrics(
 
 
 def _print_metric_lines(metrics: dict, metric_labels: Optional[dict[str, str]] = None) -> None:
-    """
-    Function that print main metrics in nice forms of it...
-
-    
-    """
-
-
-
+    """Print quality metrics with human-readable labels."""
     labels = dict(QUALITY_METRIC_LABELS)
     if metric_labels:
         labels.update(metric_labels)
@@ -192,31 +187,8 @@ def _print_quality_stats(
     in_training = int(stats['in_training'])
     duplicate = int(stats['duplicate'])
 
-    # computer V.U.N and any extra metrics before printing summary, so we have all the numbers available in case some extra metrics depend on them.
-
+    # Compute V/U/N and any extra metrics before printing summary.
     metrics = _compute_quality_metrics(stats, extra_metric_fns=extra_metric_fns)
-
-
-
-    """
-    Next the important V.U.N metrics:
-    - V: Validity: share of generated molecules that are valid (parsable by RDKit) and not empty.
-    - U: Uniqueness: share of generated molecules that are not duplicates of previously accepted generated molecules (INTERNAL).
-    - N: Novelty: share of generated molecules that are not present in the training set (or property file). Note that this is a lower bound on true novelty since we only check against training SMILES, not the whole chemical space.    
-    
-    C_s: set of validly generated molecules
-    n_s: total number of generated molecules
-    D: training set (or property file) molecules
-
-    V = 100 * |C_s| / n_s
-    U = 100 * set(C_s) / n_s 
-    N = 100 * (1 - |C_s \cap D| / |C_s|)
-    
-    
-    
-    
-    """
-
 
     print(80*'=')
     if scope_label:
@@ -247,8 +219,13 @@ def _print_quality_stats(
     if tautomer_canonicalized:
         print(f'additional tautomer_canonicalized: {tautomer_canonicalized}')
     print(80*'=')
-    #pritn('\n \n')
     print('\n \n')
+
+
+def _default_pickle_output_path(result_filename: str) -> str:
+    """Build default compressed molecule filename next to CSV output."""
+    root, _ = os.path.splitext(str(result_filename))
+    return f'{root}.pckl.gz'
 
 
 def _build_accept_predicate(*, config: dict, target_row: list[float]):
@@ -637,6 +614,7 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
             filters.get('canonicalize_tautomer', False),
         ),
         'result_filename': output.get('result_filename', 'CVAE_result.txt'),
+        'molecules_pickle_filename': output.get('molecules_pickle_filename', None),
         'sweep_stats_filename': output.get('sweep_stats_filename', 'CVAE_sweep_stats.csv'),
         'run_property_sweep': sweep.get('enabled', False),
         'prop_profile': sweep.get(
@@ -673,16 +651,13 @@ if __name__ == '__main__':
     # Model architecture/training hyperparameters are loaded from training_config.json.
     runtime_config = {
         'model': {
-            'save_file': 'save/model_best.ckpt-90.pt', #for C-VAE
-            #"save_file": 'save/best_model_trans.pt', # for transformer!
-            #'training_config_file': 'trans_config', # for transformer!
+            'save_file': 'save/model_best.ckpt-90.pt',
             'training_config_file': None,
         },
         'generation': {
-            #'batch_size': 64, # for Transformer,
-            'batch_size': 128, # for C-VAE (paper used 256, but that may cause OOM on smaller GPUs)
-            'num_iteration': 10,  # number of batches to sample (old behavior)
-            'num_unique': 3_000_0, # 30k of unique molecules.... for each sweep point...
+            'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
+            'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
+            'num_unique': 3_000_0,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
             'target_prop': '300.0 3.0',
             'prop_file': None,
@@ -722,12 +697,14 @@ if __name__ == '__main__':
         'sweep': {
             'enabled': True,
             'prop_profile': {
-                'MW': np.linspace(150.0, 500.0, num=10), # Example: np.linspace(1, 10, num=10)
+                'MW': np.linspace(150.0, 500.0, num=10),
                 'LogP': np.linspace(-4.0, 6.0, num=10),
             },
         },
         'output': {
             'result_filename': 'CVAE_lstm_huge.txt',
+            # If None, defaults to result filename stem + '.pckl.gz'.
+            'molecules_pickle_filename': None,
             'sweep_stats_filename': 'CVAE_sweep_huge.csv',
         },
     }
@@ -781,7 +758,6 @@ if __name__ == '__main__':
 
     # Create and restore model.
     model = create_and_restore_model(config, model_config, vocab_size)
-    #print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
     # Target property conditioning: replicate the target row for the whole batch.
     try:
@@ -821,11 +797,6 @@ if __name__ == '__main__':
     # If training used standardized properties, apply the same transform here.
     prop_norm_mean = model_config.get('prop_norm_mean')
     prop_norm_std = model_config.get('prop_norm_std')
-    #if prop_norm_mean is not None and prop_norm_std is not None:
-    #    mean_arr = np.array(prop_norm_mean, dtype=np.float32)
-    #    std_arr = np.array(prop_norm_std, dtype=np.float32)
-    #    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
-    #    target_prop = (target_prop - mean_arr) / std_arr
     target_prop = normalize_like_training(target_prop, prop_norm_mean, prop_norm_std)
 
     # Start token: 'X'. In this dataset, 'X' is appended to the vocab in `load_data()`.
@@ -916,6 +887,21 @@ if __name__ == '__main__':
         )
 
     print('number of valid smiles : ', len(ms))
+
+    # Save generated molecules in compressed binary form to reduce output size.
+    molecules_pickle_filename = config.get('molecules_pickle_filename')
+    if molecules_pickle_filename is None:
+        molecules_pickle_filename = _default_pickle_output_path(config['result_filename'])
+    save_pickle_gz(
+        molecules_pickle_filename,
+        {
+            'smiles': smiles,
+            'molecules': ms,
+            'num_molecules': len(ms),
+            'saved_at_unix': t.time(),
+        },
+    )
+    print(f'saved compressed molecules: {molecules_pickle_filename}')
 
     # Compute properties and write results.
     if len(ms) == 0:
