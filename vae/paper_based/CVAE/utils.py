@@ -240,6 +240,8 @@ def load_training_canonical_smiles(prop_file:str, seq_length:int) -> set:
 
     This follows the same length filter used in `load_data` so the exclusion set
     matches what the model was trained on.
+
+    The goal of this is to cache the canonicalized SMILES
     """
     # Cache to avoid re-canonicalizing large training files on every run.
     cache_path = f"{prop_file}.canon_seq{int(seq_length)}.pkl.gz"
@@ -349,6 +351,13 @@ def collect_new_unique_from_raw(
     return accepted, stats
 
 def convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
+    """
+    Converts a vector of one-hot encodings back to a SMILES string using the provided character set.
+    Args:
+        vector (np.ndarray): A 2D array of shape (sequence_length, vocab_size) representing one-hot encodings.
+        char (np.ndarray): A 1D array of shape (vocab_size,) containing the characters corresponding to the one-hot encodings.
+    
+    """
     list_char = list(char)
     #list_char = char.tolist()
     vector = vector.astype(int)
@@ -562,9 +571,9 @@ def save_json(path:str, payload:dict) -> None:
 
 
 def load_checkpoint_model_config(ckpt_path: str) -> Optional[dict]:
-    """Load `model_config` embedded in a `.pt` checkpoint, if present.
+    """Load `model_config` embedded in a '.pt' checkpoint, if present.
 
-    This is more reliable than relying on `save/training_config.json`, which can
+    This is more reliable than relying on 'save/training_config.json', which can
     be overwritten by later training runs and silently mismatch the checkpoint.
     """
     try:

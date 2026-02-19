@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import itertools
 import time as t
 from typing import Callable, Optional
 
@@ -275,7 +276,116 @@ def generate_fixed_iterations(
     mols_out = [unique_mols_by_smiles[s] for s in smiles_out]
     return mols_out, smiles_out
 
+def generate_unique_over_param_sweeps(
+    *, # for better readability....
+    props: dict[str, list[float]]|dict[str, np.ndarray|list[float]], 
+    model: CVAE,
+    model_conf: dict,
+    config: dict,
+    charset: np.ndarray,
+    start_codon: np.ndarray,
+    training_smiles: set,
+    top_k: Optional[int],
+    unique: int,
+) -> pd.DataFrame:
+    """
+    Sweep over a range of for example MW and LogP targets.
 
+    This is since the synthetic training data that one will use should be -
+    representative of the whole property space, not just a narrow slice.
+
+    args:
+        - props: a dict of the property name (not shure if the name is used, but will keep for debugging..)
+        and a list of target values to sweep over for that property. For example:
+        {
+            'MW': [200.0, 300.0, 400.0],
+            'LogP': [1.0, 3.0, 5.0],
+        }
+        props can also be a dict of:
+        {
+            'MW': np.ndarray of shape (num_targets,), (if one use a linspace or something instead of a list)
+            'LogP': np.ndarray of shape (num_targets,),
+        }
+        where the i-th element of each array corresponds to a target property combination. The function will iterate over the cartesian product of the property values, so if we have 3 MW targets and 3 LogP targets, we will generate for all 9 combinations of (MW, LogP).
+        - mopdel: the trained CVAE model to sample from
+        - model_conf: the model configuration dict (loaded from training config or checkpoint metadata)
+        - config: the runtime sampling configuration dict (defined in main())
+        - charset: the array of characters used for decoding model outputs
+        - start_codon: the array representing the start token for sampling
+        - training_smiles: a set of canonical SMILES from the training data, used for novelty filtering
+        - top_k: the top_k sampling parameter to control diversity/quality of outputs
+        - unique: number of unique molecules to generate for each target property combination
+
+
+    
+    
+    """
+    results = []
+    prop_names = list(props.keys())
+    prop_values = list(props.values())
+    # will iterate over the cartesian product of the property values, -
+    # so if we have 3 MW targets and 3 LogP targets, we will generate for all 9 combinations of (MW, LogP).
+    for target_row in itertools.product(*prop_values):
+        print(f"Generating for target properties: {dict(zip(prop_names, target_row))}")
+        target_prop = np.array(
+            [list(target_row) for _ in range(int(model_conf['batch_size']))],
+            dtype=np.float32,
+        )
+        target_prop = normalize_like_training(
+            target_prop,
+            model_conf.get('prop_norm_mean'),
+            model_conf.get('prop_norm_std'),
+        )
+        accept_predicate = _build_accept_predicate(config=config, target_row=list(target_row))
+        ms, smiles = generate_unique_molecules(
+            model=model,
+            charset=charset,
+            target_prop=target_prop,
+            start_codon=start_codon,
+            seq_length=int(model_conf['seq_length']),
+            num_unique=unique,
+            max_batches=config['max_batches'],
+            mean=float(model_conf['mean']),
+            stddev=float(model_conf['stddev']),
+            batch_size=int(model_conf['batch_size']),
+            latent_size=int(model_conf['latent_size']),
+            training_smiles=training_smiles,
+            do_sample=bool(config.get('do_sample', True)),
+            temperature=float(config.get('temperature', 1.0)),
+            top_k=top_k,
+            accept_predicate=accept_predicate,
+        )
+        results.append((target_row, len(ms), ms, smiles))
+    return pd.DataFrame(results, columns=['target_properties', 'num_molecules', 'molecules', 'smiles'])
+
+def converts_sweep_to_list(df:pd.DataFrame) -> tuple[list[Chem.Mol],list[str]]:
+    all_mols = []
+    all_smiles = []
+    for _, row in df.iterrows():
+        all_mols.extend(row['molecules'])
+        all_smiles.extend(row['smiles'])
+    return all_mols, all_smiles
+
+def create_and_restore_model(config: dict, model_config: dict,vocab_size:int) -> CVAE:
+    model = CVAE(vocab_size=vocab_size, args=model_config)
+    model.restore(config['save_file'])
+    print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
+    return model
+
+def normalize_like_training(
+    target_prop: np.ndarray,
+    prop_norm_mean: Optional[list],
+    prop_norm_std: Optional[list],
+) -> np.ndarray:
+    """Apply the same normalization used during training to the target properties."""
+
+    if prop_norm_mean is None or prop_norm_std is None:
+        return target_prop
+
+    mean_arr = np.array(prop_norm_mean, dtype=np.float32)
+    std_arr = np.array(prop_norm_std, dtype=np.float32)
+    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+    return (target_prop - mean_arr) / std_arr
 
 if __name__ == '__main__':
 
@@ -367,9 +477,8 @@ if __name__ == '__main__':
         print('training-set exclusion is disabled (exclude_training=False)')
 
     # Create and restore model.
-    model = CVAE(vocab_size, model_config)
-    model.restore(config['save_file'])
-    print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
+    model = create_and_restore_model(config, model_config, vocab_size)
+    #print('Number of parameters : ', sum(p.numel() for p in model.parameters() if p.requires_grad))
 
     # Target property conditioning: replicate the target row for the whole batch.
     try:
@@ -403,11 +512,12 @@ if __name__ == '__main__':
     # If training used standardized properties, apply the same transform here.
     prop_norm_mean = model_config.get('prop_norm_mean')
     prop_norm_std = model_config.get('prop_norm_std')
-    if prop_norm_mean is not None and prop_norm_std is not None:
-        mean_arr = np.array(prop_norm_mean, dtype=np.float32)
-        std_arr = np.array(prop_norm_std, dtype=np.float32)
-        std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
-        target_prop = (target_prop - mean_arr) / std_arr
+    #if prop_norm_mean is not None and prop_norm_std is not None:
+    #    mean_arr = np.array(prop_norm_mean, dtype=np.float32)
+    #    std_arr = np.array(prop_norm_std, dtype=np.float32)
+    #    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+    #    target_prop = (target_prop - mean_arr) / std_arr
+    target_prop = normalize_like_training(target_prop, prop_norm_mean, prop_norm_std)
 
     # Start token: 'X'. In this dataset, 'X' is appended to the vocab in `load_data()`.
     start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
@@ -415,44 +525,67 @@ if __name__ == '__main__':
     top_k_val = config.get('top_k')
     top_k = (None if top_k_val is None else int(top_k_val))
 
-    if config['num_unique'] is not None:
-        ms, smiles = generate_unique_molecules(
-            model=model,
-            charset=charset,
-            target_prop=target_prop,
-            start_codon=start_codon,
-            seq_length=int(model_config['seq_length']),
-            num_unique=int(config['num_unique']),
-            max_batches=config['max_batches'],
-            mean=float(model_config['mean']),
-            stddev=float(model_config['stddev']),
-            batch_size=int(model_config['batch_size']),
-            latent_size=int(model_config['latent_size']),
-            training_smiles=training_smiles,
-            do_sample=bool(config.get('do_sample', True)),
-            temperature=float(config.get('temperature', 1.0)),
-            top_k=top_k,
-            accept_predicate=accept_predicate,
-        )
-    else:
-        ms, smiles = generate_fixed_iterations(
-            model=model,
-            charset=charset,
-            target_prop=target_prop,
-            start_codon=start_codon,
-            seq_length=int(model_config['seq_length']),
-            num_iteration=int(config['num_iteration']),
-            mean=float(model_config['mean']),
-            stddev=float(model_config['stddev']),
-            batch_size=int(model_config['batch_size']),
-            latent_size=int(model_config['latent_size']),
-            training_smiles=training_smiles,
-            do_sample=bool(config.get('do_sample', True)),
-            temperature=float(config.get('temperature', 1.0)),
-            top_k=top_k,
-            accept_predicate=accept_predicate,
-        )
 
+
+
+
+
+
+
+    #if config['num_unique'] is not None:
+    #    ms, smiles = generate_unique_molecules(
+    #        model=model,
+    #        charset=charset,
+    #        target_prop=target_prop,
+    #        start_codon=start_codon,
+    #        seq_length=int(model_config['seq_length']),
+    #        num_unique=int(config['num_unique']),
+    #        max_batches=config['max_batches'],
+    #        mean=float(model_config['mean']),
+    #        stddev=float(model_config['stddev']),
+    #        batch_size=int(model_config['batch_size']),
+    #        latent_size=int(model_config['latent_size']),
+    #        training_smiles=training_smiles,
+    #        do_sample=bool(config.get('do_sample', True)),
+    #        temperature=float(config.get('temperature', 1.0)),
+    #        top_k=top_k,
+    #        accept_predicate=accept_predicate,
+    #    )
+    #else:
+    #    ms, smiles = generate_fixed_iterations(
+    #        model=model,
+    #        charset=charset,
+    #        target_prop=target_prop,
+    #        start_codon=start_codon,
+    #        seq_length=int(model_config['seq_length']),
+    #        num_iteration=int(config['num_iteration']),
+    #        mean=float(model_config['mean']),
+    #        stddev=float(model_config['stddev']),
+    #        batch_size=int(model_config['batch_size']),
+    #        latent_size=int(model_config['latent_size']),
+    #        training_smiles=training_smiles,
+    #        do_sample=bool(config.get('do_sample', True)),
+    #        temperature=float(config.get('temperature', 1.0)),
+    #        top_k=top_k,
+    #        accept_predicate=accept_predicate,
+    #    )
+    # Example of sweeping over multiple target property combinations.
+    props_to_sweep = {
+        'MW': np.linspace(200.0, 500.0, num=5), # 5 targets from 200 to 500
+        'LogP': [1.0, 3.0, 5.0],
+    }
+    sweep_results = generate_unique_over_param_sweeps(
+        props=props_to_sweep,
+        model=model,
+        model_conf=model_config,
+        config=config,
+        charset=charset,
+        start_codon=start_codon,
+        training_smiles=training_smiles,
+        top_k=top_k,
+        unique=int(config['num_unique']),
+    )
+    ms, smiles = converts_sweep_to_list(sweep_results)
     print('number of valid smiles : ', len(ms))
 
     # Compute properties and write results.

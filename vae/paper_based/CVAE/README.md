@@ -72,17 +72,130 @@ Training is configured directly inside `train.py` using a single `config` dictio
 
 Edit the grouped `config` block near the top of `train.py`.
 
+**Stable for lstm:**
+
 ```python
 config = {
-	'training_preset': 'custom',
-	'data': {'prop_file': 'prop_mw_logp.txt', 'seq_length': 120, 'train_ratio': 0.75},
-	'model': {'mode': 'transformer', 'latent_size': 200, 'unit_size': 512, 'n_rnn_layer': 2},
-	'transformer': {'heads': 8, 'ff_size': 1024, 'dropout': 0.15},
-	'optimization': {'optimizer': 'adamw', 'lr': 1e-4, 'use_amp': True, 'amp_dtype': 'float16'},
-	'training': {'batch_size': 64, 'num_epochs': 100, 'save_dir': 'save/'},
-	'scheduler': {'enabled': True, 'factor': 0.5, 'patience': 5, 'threshold': 1e-4, 'min_lr': 1e-6},
-	'kl': {'enabled': True, 'start_beta': 0.01, 'max_beta': 1.0, 'hold_epochs': 0, 'warmup_epochs': 50},
-	'diagnostics': {'every': 1},
+    'training_preset': 'custom',  # 'custom' or 'stable_transformer'
+    'data': {
+        'prop_file': '250k_zinc_clean.txt',
+        'seq_length': 120,
+        'train_ratio': 0.75,
+    },
+    'model': {
+        'mode': 'lstm',  # 'lstm' or 'transformer'
+        'latent_size': 200,
+        'unit_size': 512,
+        'n_rnn_layer': 3,
+        'mean': 0.0,
+        'stddev': 1.0,
+        'num_prop': None,  # inferred from property file
+    },
+    'transformer': {
+        'heads': 8,
+        'ff_size': 1024,
+        'dropout': 0.15,
+    },
+    'optimization': {
+        'optimizer': 'adam',
+        'lr': 0.0001, # 10e-4, 1e-5 for transformer..
+        'weight_decay': 0.0, # 0.001 for transformer 
+        'use_amp': False, # true if using transformer with fp16, can cause instability with lstm
+        'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
+        'grad_clip_norm': 4.0,
+    },
+    'training': {
+        'batch_size': 128, # 64 for transformer...
+        'num_epochs': 100,
+        'save_dir': 'save/',
+        'save_every': 10,
+        'early_stopping_patience': 20,
+        'early_stopping_min_delta': 0.0,
+        'early_stopping_restore_best': True,
+    },
+    'scheduler': {
+        'enabled': True,
+        'factor': 0.5,
+        'patience': 5,
+        'threshold': 1e-5,
+        'min_lr': 1e-6,
+    },
+    'kl': {
+        'enabled': False,
+        'start_beta': 0.0,
+        'max_beta': 1.0,
+        'hold_epochs': 0,
+        'warmup_epochs': 50,
+    },
+    'diagnostics': {
+        'every': 1,
+    },
+}
+```
+
+
+
+**Stable for Transformer:**
+
+
+
+
+```python
+config = {
+    'training_preset': 'custom',  # 'custom' or 'stable_transformer'
+    'data': {
+        'prop_file': '250k_zinc_clean.txt',
+        'seq_length': 120,
+        'train_ratio': 0.75,
+    },
+    'model': {
+        'mode': 'lstm',  # 'lstm' or 'transformer'
+        'latent_size': 200,
+        'unit_size': 512,
+        'n_rnn_layer': 2,
+        'mean': 0.0, # p(z) = N(0,1)... 
+        'stddev': 1.0,
+        'num_prop': None,  # inferred from property file
+    },
+    'transformer': {
+        'heads': 8,
+        'ff_size': 1024,
+        'dropout': 0.15,
+    },
+    'optimization': {
+        'optimizer': 'adamw',
+        'lr': 0.00001, # 10e-4, 1e-5 for transformer..
+        'weight_decay': 0.001, # 0.001 for transformer 
+        'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
+        'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
+        'grad_clip_norm': 4.0,
+    },
+    'training': {
+        'batch_size': 64, # 64 for transformer...
+        'num_epochs': 100,
+        'save_dir': 'save/',
+        'save_every': 10,
+        'early_stopping_patience': 20,
+        'early_stopping_min_delta': 0.0,
+        'early_stopping_restore_best': True,
+    },
+    'scheduler': {
+        'enabled': True,
+        'factor': 0.5,
+        'patience': 5,
+        'threshold': 1e-5,
+        'min_lr': 1e-6,
+    },
+    'kl': {
+        'enabled': False,
+        'start_beta': 0.01,
+        'max_beta': 1.0,
+        'hold_epochs': 0,
+        'warmup_epochs': 50,
+    },
+    'diagnostics': {
+        'every': 1,
+    },
 }
 ```
 

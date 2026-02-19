@@ -60,7 +60,7 @@ def apply_training_preset(cfg:dict) -> dict:
 config = {
     'training_preset': 'custom',  # 'custom' or 'stable_transformer'
     'data': {
-        'prop_file': 'prop_mw_logp.txt',
+        'prop_file': '250k_zinc_clean.txt',
         'seq_length': 120,
         'train_ratio': 0.75,
     },
@@ -68,7 +68,7 @@ config = {
         'mode': 'lstm',  # 'lstm' or 'transformer'
         'latent_size': 200,
         'unit_size': 512,
-        'n_rnn_layer': 3,
+        'n_rnn_layer': 3, # 2 layers for transformers (memory constraints...)
         'mean': 0.0,
         'stddev': 1.0,
         'num_prop': None,  # inferred from property file
@@ -80,14 +80,14 @@ config = {
     },
     'optimization': {
         'optimizer': 'adam',
-        'lr': 0.0001, # 10e-4
-        'weight_decay': 0.0,
-        'use_amp': False,
-        'amp_dtype': 'float16',
+        'lr': 0.0001, # 10e-4, 1e-5 for transformer..
+        'weight_decay': 0.0, # 0.001 for transformer 
+        'use_amp': False, # true if using transformer with fp16, can cause instability with lstm
+        'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
         'grad_clip_norm': 4.0,
     },
     'training': {
-        'batch_size': 128,
+        'batch_size': 128, # 64 for transformer...
         'num_epochs': 100,
         'save_dir': 'save/',
         'save_every': 10,
