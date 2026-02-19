@@ -479,10 +479,77 @@ def convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
     vector = vector.astype(int)
     return "".join(map(lambda x: list_char[x], vector)).strip()
 
+
+def load_sampling_metadata(prop_file: str, seq_length: int) -> tuple[np.ndarray, dict, int]:
+    """Load charset/vocab/num_prop for sampling without building training tensors.
+
+    Uses a gzip-pickle cache keyed by file + seq length to make repeated startup
+    for large property files fast.
+    """
+    cache_path = f"{prop_file}.sample_meta_seq{int(seq_length)}.pkl.gz"
+    try:
+        if os.path.exists(cache_path):
+            cache_mtime = os.path.getmtime(cache_path)
+            src_mtime = os.path.getmtime(prop_file)
+            if cache_mtime >= src_mtime:
+                cached = load_pickle_gz(cache_path)
+                chars_cached = cached.get('charset')
+                vocab_cached = cached.get('vocab')
+                num_prop_cached = cached.get('num_prop')
+                if chars_cached is not None and vocab_cached is not None and num_prop_cached is not None:
+                    return np.array(chars_cached), dict(vocab_cached), int(num_prop_cached)
+    except Exception:
+        pass
+
+    import collections
+
+    counter = collections.Counter()
+    num_prop: Optional[int] = None
+
+    with open(prop_file, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            tokens = line.split()
+            if not tokens:
+                continue
+            smi = tokens[0]
+            if len(smi) >= int(seq_length) - 2:
+                continue
+
+            if num_prop is None:
+                num_prop = max(0, len(tokens) - 1)
+            counter.update(smi)
+
+    if num_prop is None:
+        raise ValueError(f'No usable rows found in prop file: {prop_file}')
+
+    if len(counter) == 0:
+        raise ValueError(
+            f'No SMILES passed length filter for seq_length={int(seq_length)} in prop file: {prop_file}'
+        )
+
+    chars = tuple([ch for ch, _ in counter.most_common()])
+    vocab = dict(zip(chars, range(len(chars))))
+    chars += ('E',)
+    chars += ('X',)
+    vocab['E'] = len(chars) - 2
+    vocab['X'] = len(chars) - 1
+
+    payload = {
+        'charset': chars,
+        'vocab': vocab,
+        'num_prop': int(num_prop),
+    }
+    try:
+        save_pickle_gz(cache_path, payload)
+    except Exception:
+        pass
+
+    return np.array(chars), vocab, int(num_prop)
+
 def load_data(n:str, seq_length:int) -> tuple:
     import collections
-    f = open(n)
-    lines = f.read().split('\n')[:-1]
+    with open(n, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.read().split('\n')[:-1]
     lines = [l.split() for l in lines]
     lines = [l for l in lines if len(l[0])<seq_length-2]
     smiles = [l[0] for l in lines]

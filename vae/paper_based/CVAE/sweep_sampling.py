@@ -14,7 +14,7 @@ from utils import (
     compose_train_config_from_dict,
     convert_to_smiles,
     infer_training_config_path,
-    load_data,
+    load_sampling_metadata,
     load_json,
     load_training_canonical_smiles,
 )
@@ -106,8 +106,11 @@ def main() -> None:
     training_config = load_json(training_config_path)
     model_config = compose_train_config_from_dict(training_config)
 
-    _, _, charset, vocab, loaded_labels, _ = load_data(model_config["prop_file"], int(model_config["seq_length"]))
-    model_config["num_prop"] = int(loaded_labels.shape[1])
+    charset, vocab, inferred_num_prop = load_sampling_metadata(
+        model_config["prop_file"],
+        int(model_config["seq_length"]),
+    )
+    model_config["num_prop"] = int(inferred_num_prop)
 
     vocab_size = len(charset)
     model = CVAE(vocab_size, model_config)

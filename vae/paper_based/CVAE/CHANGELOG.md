@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 - `sample.py`: Default decoding is stochastic again (`do_sample=True`). During Transformer refactors the default was set to greedy decoding, which commonly collapses to a single repeated molecule ("not unique") and can also reduce validity.
 - `sample.py` / `utils.py`: Novelty and duplicate checks now use the same canonicalization pipeline for both generated molecules and training-set molecules, avoiding mismatches from inconsistent canonical forms.
 - `sample.py`: Generated molecule artifacts are now saved as compressed pickle (`.pckl.gz`) to avoid very large plain-text intermediate payloads.
+- `sample.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup no longer calls full `load_data(...)` just to get charset/vocab/num_prop. Scripts now use a lightweight metadata loader with cache, avoiding long startup stalls on very large property files.
 
 ### Added
 
@@ -18,6 +19,7 @@ All notable changes to this project are documented in this file.
 - `sample.py`: Added explicit runtime canonicalization logging and counters in quality stats (`salt_stripped`, `tautomer_canonicalized`).
 - `utils.py`: Added robust canonicalization helper for filtering/novelty (`canonicalize_for_filtering(...)`) with configurable salt stripping, decharge, and optional tautomer canonicalization.
 - `utils.py`: Added reusable compressed persistence helpers `save_pickle_gz(...)` and `load_pickle_gz(...)` for storing/loading large generated molecule payloads.
+- `utils.py`: Added `load_sampling_metadata(...)` for fast, cached extraction of charset/vocab/num_prop from large property files without constructing full training tensors.
 
 ### Changed
 

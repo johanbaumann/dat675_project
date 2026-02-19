@@ -9,7 +9,7 @@ from utils import (
     convert_to_smiles,
     infer_training_config_path,
     load_checkpoint_model_config,
-    load_data,
+    load_sampling_metadata,
     load_json,
     load_training_canonical_smiles,
 )
@@ -46,9 +46,12 @@ def main() -> None:
         if config.get(key) is not None:
             model_config[key] = config[key]
 
-    _, _, charset, vocab, loaded_labels, _ = load_data(model_config["prop_file"], int(model_config["seq_length"]))
+    charset, vocab, inferred_num_prop = load_sampling_metadata(
+        model_config["prop_file"],
+        int(model_config["seq_length"]),
+    )
     vocab_size = len(charset)
-    model_config["num_prop"] = int(loaded_labels.shape[1])
+    model_config["num_prop"] = int(inferred_num_prop)
 
     if bool(config.get("exclude_training", True)):
         training_smiles = load_training_canonical_smiles(model_config["prop_file"], int(model_config["seq_length"]))

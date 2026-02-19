@@ -20,7 +20,7 @@ from utils import (
     compose_train_config_from_dict,
     convert_to_smiles,
     infer_training_config_path,
-    load_data,
+    load_sampling_metadata,
     load_checkpoint_model_config,
     load_json,
     save_pickle_gz,
@@ -652,7 +652,7 @@ if __name__ == '__main__':
     runtime_config = {
         'model': {
             'save_file': 'save/model_best.ckpt-90.pt',
-            'training_config_file': None,
+            'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
             'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
@@ -730,10 +730,12 @@ if __name__ == '__main__':
         if config.get(key) is not None:
             model_config[key] = config[key]
 
-    # Build vocabulary/charset from property file.
-    _, _, charset, vocab, loaded_labels, _ = load_data(model_config['prop_file'], int(model_config['seq_length']))
+    # Build vocabulary/charset and infer num_prop from property file (fast metadata path).
+    charset, vocab, inferred_num_prop = load_sampling_metadata(
+        model_config['prop_file'],
+        int(model_config['seq_length']),
+    )
     vocab_size = len(charset)
-    inferred_num_prop = int(loaded_labels.shape[1])
     trained_num_prop = int(model_config.get('num_prop', inferred_num_prop))
     if trained_num_prop != inferred_num_prop:
         raise ValueError(
