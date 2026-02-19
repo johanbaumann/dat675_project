@@ -17,6 +17,7 @@ from utils import (
     load_sampling_metadata,
     load_json,
     load_training_canonical_smiles,
+    resolve_checkpoint_path,
 )
 
 
@@ -101,7 +102,15 @@ def main() -> None:
     RDLogger.logger().setLevel(logging.CRITICAL)
 
     # Align these with sample.py defaults
-    save_file = "save/model_9.ckpt-9.pt"
+    save_file = None
+    run_dir = "save/your_run_folder"
+    checkpoint_glob = "model_best.ckpt-*.pt"
+    save_file = resolve_checkpoint_path(
+        save_file=save_file,
+        run_dir=run_dir,
+        checkpoint_glob=checkpoint_glob,
+    )
+    print(f"resolved checkpoint: {save_file}")
     training_config_path = infer_training_config_path(save_file)
     training_config = load_json(training_config_path)
     model_config = compose_train_config_from_dict(training_config)

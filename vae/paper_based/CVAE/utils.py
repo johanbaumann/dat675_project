@@ -6,6 +6,9 @@ import json
 import os
 import gzip
 import pickle
+import glob
+import re
+import time
 
 try:
     from rdkit.Chem.MolStandardize import rdMolStandardize
@@ -28,6 +31,8 @@ TRAIN_CONFIG_DEFAULTS = {
     'num_prop': 3,
     'grad_clip_norm': 1.0,
     'save_dir': 'save/',
+    'run_name': None,
+    'use_run_subdir': True,
     'patientce': 10,
     'model_mode': 'lstm',
     'optimizer': 'adam',
@@ -216,6 +221,10 @@ def _flatten_grouped_train_config(config_override:dict) -> dict:
             flat['num_epochs'] = training['num_epochs']
         if 'save_dir' in training:
             flat['save_dir'] = training['save_dir']
+        if 'run_name' in training:
+            flat['run_name'] = training['run_name']
+        if 'use_run_subdir' in training:
+            flat['use_run_subdir'] = training['use_run_subdir']
         if 'save_every' in training:
             flat['save_every'] = training['save_every']
         if 'early_stopping_patience' in training:
@@ -300,6 +309,13 @@ def _normalize_train_config(config_override:dict) -> dict:
     else:
         config['num_prop'] = int(config['num_prop'])
     config['save_dir'] = str(config['save_dir'])
+    raw_run_name = config.get('run_name', None)
+    if raw_run_name is None:
+        config['run_name'] = None
+    else:
+        run_name = str(raw_run_name).strip()
+        config['run_name'] = run_name if run_name else None
+    config['use_run_subdir'] = bool(config.get('use_run_subdir', True))
     config['save_every'] = int(config.get('save_every', 10))
     config['patientce'] = int(config.get('patientce', config.get('early_stopping_patience', 10)))
     config['weight_decay'] = float(config.get('weight_decay', 0.0))
@@ -324,6 +340,76 @@ def _normalize_train_config(config_override:dict) -> dict:
     config['kl_anneal_warmup_epochs'] = int(config.get('kl_anneal_warmup_epochs', 50))
 
     return config
+
+
+def sanitize_run_name(name:str) -> str:
+    """Convert a run name into a filesystem-friendly folder name."""
+    value = str(name).strip()
+    if not value:
+        raise ValueError('run_name cannot be empty after stripping whitespace.')
+
+    value = re.sub(r'[<>:"/\\|?*]+', '_', value)
+    value = re.sub(r'\s+', '_', value)
+    value = value.strip('._')
+    if not value:
+        raise ValueError('run_name became empty after sanitization.')
+    return value
+
+
+def build_train_run_save_dir(
+    base_save_dir:str,
+    *,
+    run_name:Optional[str] = None,
+    use_run_subdir:bool = True,
+) -> str:
+    """Return the effective save directory for a training run."""
+    base = str(base_save_dir)
+    if not bool(use_run_subdir):
+        return base
+
+    if run_name is None:
+        auto_name = time.strftime('run_%Y%m%d_%H%M%S')
+    else:
+        auto_name = sanitize_run_name(str(run_name))
+
+    return os.path.join(base, auto_name)
+
+
+def resolve_checkpoint_path(
+    *,
+    save_file:Optional[str] = None,
+    run_dir:Optional[str] = None,
+    checkpoint_glob:str = 'model_best.ckpt-*.pt',
+) -> str:
+    """Resolve checkpoint path from explicit file or a run directory."""
+    if save_file is not None:
+        resolved = str(save_file)
+        if not os.path.exists(resolved):
+            raise FileNotFoundError(f'Checkpoint not found: {resolved}')
+        return resolved
+
+    if run_dir is None:
+        raise ValueError('Either save_file or run_dir must be provided.')
+
+    run_dir = str(run_dir)
+    if not os.path.isdir(run_dir):
+        raise FileNotFoundError(f'Run directory not found: {run_dir}')
+
+    primary_pattern = os.path.join(run_dir, str(checkpoint_glob))
+    primary_matches = [p for p in glob.glob(primary_pattern) if os.path.isfile(p)]
+    if primary_matches:
+        primary_matches.sort(key=os.path.getmtime, reverse=True)
+        return primary_matches[0]
+
+    fallback_pattern = os.path.join(run_dir, '*.pt')
+    fallback_matches = [p for p in glob.glob(fallback_pattern) if os.path.isfile(p)]
+    if fallback_matches:
+        fallback_matches.sort(key=os.path.getmtime, reverse=True)
+        return fallback_matches[0]
+
+    raise FileNotFoundError(
+        f'No checkpoint files found in run_dir={run_dir} (pattern={checkpoint_glob!r}).'
+    )
 
 
 def load_training_canonical_smiles(
@@ -631,6 +717,9 @@ def get_model_config(config:dict, vocab_size:Optional[int] = None) -> dict:
         'transformer_ff_size': int(config.get('transformer_ff_size', int(config['unit_size']) * 4)),
         'transformer_dropout': float(config.get('transformer_dropout', 0.1)),
         'prop_file': str(config.get('prop_file', 'smiles_prop.txt')),
+        'save_dir': str(config.get('save_dir', 'save/')),
+        'run_name': config.get('run_name', None),
+        'use_run_subdir': bool(config.get('use_run_subdir', True)),
     }
     if vocab_size is not None:
         model_config['vocab_size'] = int(vocab_size)

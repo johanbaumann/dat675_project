@@ -23,6 +23,7 @@ from utils import (
     load_sampling_metadata,
     load_checkpoint_model_config,
     load_json,
+    resolve_checkpoint_path,
     save_pickle_gz,
     load_training_canonical_smiles,
 )
@@ -584,7 +585,9 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
     sweep = runtime_config.get('sweep', {})
 
     return {
-        'save_file': model.get('save_file', 'save/model_best.ckpt-90.pt'),
+        'save_file': model.get('save_file', None),
+        'run_dir': model.get('run_dir', None),
+        'checkpoint_glob': model.get('checkpoint_glob', 'model_best.ckpt-*.pt'),
         'training_config_file': model.get('training_config_file', None),
         'target_prop': generation.get('target_prop', '300.0 3.0'),
         'prop_file': generation.get('prop_file', None),
@@ -651,7 +654,11 @@ if __name__ == '__main__':
     # Model architecture/training hyperparameters are loaded from training_config.json.
     runtime_config = {
         'model': {
-            'save_file': 'save/model_best.ckpt-90.pt',
+            # Prefer selecting checkpoint from a run folder created by train.py.
+            # If save_file is provided, it takes precedence over run_dir.
+            'save_file': None,
+            'run_dir': 'save/your_run_folder',
+            'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
@@ -710,6 +717,12 @@ if __name__ == '__main__':
     }
 
     config = compose_runtime_sample_config(runtime_config)
+    config['save_file'] = resolve_checkpoint_path(
+        save_file=config.get('save_file'),
+        run_dir=config.get('run_dir'),
+        checkpoint_glob=str(config.get('checkpoint_glob', 'model_best.ckpt-*.pt')),
+    )
+    print(f"resolved checkpoint: {config['save_file']}")
 
     training_config_path = config['training_config_file']
 

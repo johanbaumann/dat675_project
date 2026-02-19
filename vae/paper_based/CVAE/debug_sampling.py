@@ -12,6 +12,7 @@ from utils import (
     load_sampling_metadata,
     load_json,
     load_training_canonical_smiles,
+    resolve_checkpoint_path,
 )
 
 
@@ -19,7 +20,9 @@ def main() -> None:
     # Keep this aligned with sample.py defaults
     config = {
         "batch_size": 64,
-        "save_file": "save/model_9.ckpt-9.pt",
+        "save_file": None,
+        "run_dir": "save/your_run_folder",
+        "checkpoint_glob": "model_best.ckpt-*.pt",
         "training_config_file": None,
         "target_prop": "300.0 3.0",
         "seq_length": None,
@@ -30,6 +33,13 @@ def main() -> None:
         "batches": 200,
         "eos_token": "E",
     }
+
+    config["save_file"] = resolve_checkpoint_path(
+        save_file=config.get("save_file"),
+        run_dir=config.get("run_dir"),
+        checkpoint_glob=str(config.get("checkpoint_glob", "model_best.ckpt-*.pt")),
+    )
+    print(f"resolved checkpoint: {config['save_file']}")
 
     training_config_path = config["training_config_file"]
 

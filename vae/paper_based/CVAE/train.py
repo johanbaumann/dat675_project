@@ -41,13 +41,13 @@ def apply_training_preset(cfg:dict) -> dict:
         cfg.update({
             'model_mode': 'transformer',
             'optimizer': 'adamw',
-            'weight_decay': 0.0,
+            'weight_decay': 0.001, # 
             'use_amp': True,
             'kl_anneal_enabled': True,
             'kl_anneal_start_beta': 0.01,
             'kl_anneal_max_beta': 1.0,
             'kl_anneal_hold_epochs': 0,
-            'kl_anneal_warmup_epochs': 50,
+            'kl_anneal_warmup_epochs': 8,
             'diagnostics_every': 1,
         })
         print('training preset: stable_transformer (applied)')
@@ -65,10 +65,10 @@ config = {
         'train_ratio': 0.75,
     },
     'model': {
-        'mode': 'lstm',  # 'lstm' or 'transformer'
+        'mode': 'transformer',  # 'lstm' or 'transformer'
         'latent_size': 200,
         'unit_size': 512,
-        'n_rnn_layer': 3, # 2 layers for transformers (memory constraints...)
+        'n_rnn_layer': 2, # 2 layers for transformers (memory constraints...)
         'mean': 0.0,
         'stddev': 1.0,
         'num_prop': None,  # inferred from property file
@@ -79,35 +79,37 @@ config = {
         'dropout': 0.15,
     },
     'optimization': {
-        'optimizer': 'adam',
-        'lr': 0.0001, # 10e-4, 1e-5 for transformer..
-        'weight_decay': 0.0, # 0.001 for transformer 
-        'use_amp': False, # true if using transformer with fp16, can cause instability with lstm
+        'optimizer': 'adamw',
+        'lr': 0.00001, # 10e-4, 1e-5 for transformer..
+        'weight_decay': 0.001, # 0.001 for transformer 
+        'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
         'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
         'grad_clip_norm': 4.0,
     },
     'training': {
-        'batch_size': 128, # 64 for transformer...
+        'batch_size': 64, # 64 for transformer... 128 for lstm
         'num_epochs': 100,
         'save_dir': 'save/',
+        'run_name': None,  # If None, auto-generated timestamped run folder is used.
+        'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
         'save_every': 10,
-        'early_stopping_patience': 20,
-        'early_stopping_min_delta': 0.0,
+        'early_stopping_patience': 5,
+        'early_stopping_min_delta': 0.001,
         'early_stopping_restore_best': True,
     },
     'scheduler': {
         'enabled': True,
         'factor': 0.5,
-        'patience': 5,
-        'threshold': 1e-5,
+        'patience': 2,
+        'threshold': 1e-3,
         'min_lr': 1e-6,
     },
     'kl': {
-        'enabled': False,
-        'start_beta': 0.0,
+        'enabled': True,
+        'start_beta': 0.01, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
         'max_beta': 1.0,
         'hold_epochs': 0,
-        'warmup_epochs': 50,
+        'warmup_epochs': 8,
     },
     'diagnostics': {
         'every': 1,
@@ -117,6 +119,15 @@ config = {
 config = compose_train_config_from_dict(config)
 config = apply_training_preset(config)
 config = compose_train_config_from_dict(config)
+
+base_save_dir = config['save_dir']
+config['save_dir'] = build_train_run_save_dir(
+    base_save_dir,
+    run_name=config.get('run_name'),
+    use_run_subdir=bool(config.get('use_run_subdir', True)),
+)
+print(f"save root dir: {base_save_dir}")
+print(f"run save dir: {config['save_dir']}")
 
 # check for gpu
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
