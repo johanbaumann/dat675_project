@@ -657,14 +657,14 @@ if __name__ == '__main__':
             # Prefer selecting checkpoint from a run folder created by train.py.
             # If save_file is provided, it takes precedence over run_dir.
             'save_file': None,
-            'run_dir': 'save/your_run_folder',
+            'run_dir': 'save/run_20260219_230438',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
-            'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
+            'batch_size': 64,  # Paper used 256, but that may cause OOM on smaller GPUs.
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
-            'num_unique': 3_000_0,  # 30k unique molecules for each sweep point.
+            'num_unique': 3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
             'target_prop': '300.0 3.0',
             'prop_file': None,
@@ -709,10 +709,10 @@ if __name__ == '__main__':
             },
         },
         'output': {
-            'result_filename': 'CVAE_lstm_huge.txt',
+            'result_filename': 'CVAE_transformer_test.txt',
             # If None, defaults to result filename stem + '.pckl.gz'.
             'molecules_pickle_filename': None,
-            'sweep_stats_filename': 'CVAE_sweep_huge.csv',
+            'sweep_stats_filename': 'CVAE_transformer_test.csv',
         },
     }
 
