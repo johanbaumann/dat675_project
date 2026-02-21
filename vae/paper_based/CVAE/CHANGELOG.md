@@ -23,6 +23,7 @@ All notable changes to this project are documented in this file.
 - `debug_sampling.py` / `sweep_sampling.py`: Updated defaults to support run-folder based checkpoint selection, matching training output layout.
 - `sample.py`: Added sweep-level quality reporting for the whole generated sweep (`WHOLE GENERATED SWEEP`) with V/U/N and detailed counters aggregated across all property pairs.
 - `sample.py`: Added per-sweep-pair statistics export fields for downstream heatmaps, including acceptance and filtering counters.
+- `sample.py`: Sampling now also persists a run-level quality summary CSV (default: `<result_filename>_quality_summary.csv`) containing aggregated V/U/N/Acceptance plus detailed not-ok breakdown counters and rates (`not_ok_count/rate`, `invalid_or_empty_rate`, `in_training_rate`, `duplicate_rate`, `rejected_by_filter_rate`) so sweep-level totals no longer need to be recomputed from per-pair rows.
 - `sample.py`: Added explicit runtime canonicalization logging and counters in quality stats (`salt_stripped`, `tautomer_canonicalized`).
 - `utils.py`: Added robust canonicalization helper for filtering/novelty (`canonicalize_for_filtering(...)`) with configurable salt stripping, decharge, and optional tautomer canonicalization.
 - `utils.py`: Added reusable compressed persistence helpers `save_pickle_gz(...)` and `load_pickle_gz(...)` for storing/loading large generated molecule payloads.

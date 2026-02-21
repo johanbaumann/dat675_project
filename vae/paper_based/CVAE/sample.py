@@ -229,6 +229,86 @@ def _default_pickle_output_path(result_filename: str) -> str:
     return f'{root}.pckl.gz'
 
 
+def _default_quality_summary_output_path(result_filename: str) -> str:
+    """Build default quality summary filename next to CSV output."""
+    root, _ = os.path.splitext(str(result_filename))
+    return f'{root}_quality_summary.csv'
+
+
+def _build_quality_summary_row(
+    *,
+    stats: dict,
+    run_scope: str,
+    num_molecules_saved: int,
+    config: dict,
+) -> dict:
+    """Build one-row summary with V/U/N and detailed rejection breakdown."""
+    total_generated = int(stats.get('total_generated', 0))
+    accepted = int(stats.get('accepted', 0))
+    invalid_or_empty = int(stats.get('invalid_or_empty', 0))
+    in_training = int(stats.get('in_training', 0))
+    duplicate = int(stats.get('duplicate', 0))
+    rejected_by_filter = int(stats.get('rejected_by_filter', 0))
+    salt_stripped = int(stats.get('salt_stripped', 0))
+    tautomer_canonicalized = int(stats.get('tautomer_canonicalized', 0))
+
+    not_ok_count = invalid_or_empty + in_training + duplicate
+
+    def _ratio(x: int) -> float:
+        if total_generated <= 0:
+            return 0.0
+        return float(x) / float(total_generated)
+
+    metrics = _compute_quality_metrics(stats)
+    return {
+        'run_scope': str(run_scope),
+        'run_property_sweep': bool(config.get('run_property_sweep', False)),
+        'num_molecules_saved': int(num_molecules_saved),
+        'num_unique_requested': int(config.get('num_unique')) if config.get('num_unique') is not None else np.nan,
+        'max_batches': int(config.get('max_batches')) if config.get('max_batches') is not None else np.nan,
+        'do_sample': bool(config.get('do_sample', True)),
+        'temperature': float(config.get('temperature', 1.0)),
+        'top_k': int(config.get('top_k')) if config.get('top_k') is not None else np.nan,
+        'total_generated': total_generated,
+        'accepted': accepted,
+        'invalid_or_empty': invalid_or_empty,
+        'in_training': in_training,
+        'duplicate': duplicate,
+        'rejected_by_filter': rejected_by_filter,
+        'salt_stripped': salt_stripped,
+        'tautomer_canonicalized': tautomer_canonicalized,
+        'not_ok_count': int(not_ok_count),
+        'validity': float(metrics['validity']),
+        'uniqueness': float(metrics['uniqueness']),
+        'novelty': float(metrics['novelty']),
+        'acceptance_rate': float(metrics['acceptance_rate']),
+        'not_ok_rate': _ratio(not_ok_count),
+        'invalid_or_empty_rate': _ratio(invalid_or_empty),
+        'in_training_rate': _ratio(in_training),
+        'duplicate_rate': _ratio(duplicate),
+        'rejected_by_filter_rate': _ratio(rejected_by_filter),
+        'valid_count': int(metrics['valid_count']),
+        'novel_count': int(metrics['novel_count']),
+        'unique_count': int(metrics['unique_count']),
+    }
+
+
+def _save_quality_summary_csv(*, stats: dict, run_scope: str, num_molecules_saved: int, config: dict) -> str:
+    """Persist one-row quality summary CSV and return its path."""
+    quality_summary_filename = config.get('quality_summary_filename')
+    if quality_summary_filename is None:
+        quality_summary_filename = _default_quality_summary_output_path(config['result_filename'])
+
+    summary_row = _build_quality_summary_row(
+        stats=stats,
+        run_scope=run_scope,
+        num_molecules_saved=num_molecules_saved,
+        config=config,
+    )
+    pd.DataFrame([summary_row]).to_csv(quality_summary_filename, index=False)
+    return str(quality_summary_filename)
+
+
 def _build_accept_predicate(*, config: dict, target_row: list[float]):
     mw_tol = config.get('mw_tolerance')
     logp_tol = config.get('logp_tolerance')
@@ -618,6 +698,7 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
         ),
         'result_filename': output.get('result_filename', 'CVAE_result.txt'),
         'molecules_pickle_filename': output.get('molecules_pickle_filename', None),
+        'quality_summary_filename': output.get('quality_summary_filename', None),
         'sweep_stats_filename': output.get('sweep_stats_filename', 'CVAE_sweep_stats.csv'),
         'run_property_sweep': sweep.get('enabled', False),
         'prop_profile': sweep.get(
@@ -652,17 +733,24 @@ if __name__ == '__main__':
 
     # Runtime sampling options.
     # Model architecture/training hyperparameters are loaded from training_config.json.
+
+    model_type = 'lstm' 
+
+    
+
+
     runtime_config = {
         'model': {
             # Prefer selecting checkpoint from a run folder created by train.py.
             # If save_file is provided, it takes precedence over run_dir.
             'save_file': None,
-            'run_dir': 'save/huge_generation_lstm',
+            #'run_dir': 'save/huge_generation_lstm',
+            'run_dir': 'save/run_20260219_230438',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
-            'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
+            'batch_size': 64,  # Paper used 256, but that may cause OOM on smaller GPUs.
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
             'num_unique': 3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
@@ -673,7 +761,7 @@ if __name__ == '__main__':
             'stddev': None,
         },
         'sampling': {
-            # Sampling controls. Greedy decoding (do_sample=False) often collapses to 1 molecule.
+            # Sampling controls. Greedy decoding (do_sample=False) 
             'do_sample': False,
             # Sweep for this checkpoint suggests ~temperature=0.6, top_k=20 gives much higher unique+novel acceptance.
             'temperature': 0.6, # higher temperature -> more random, lower temperature -> more valid, less diverse
@@ -709,10 +797,15 @@ if __name__ == '__main__':
             },
         },
         'output': {
-            'result_filename': 'CVAE_lstm_300k_test.txt',
+            #'result_filename': 'CVAE_lstm_300k_test.txt',
+            'result_filename': 'CVAE_transformer_300k_test.txt',
             # If None, defaults to result filename stem + '.pckl.gz'.
             'molecules_pickle_filename': None,
-            'sweep_stats_filename': 'CVAE_lstm_test.csv',
+            # If None, defaults to result filename stem + '_quality_summary.csv'.
+            'quality_summary_filename': None,
+            #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
+            'sweep_stats_filename': 'CVAE_transformer_300k_test.csv',
+            
         },
     }
 
@@ -827,6 +920,9 @@ if __name__ == '__main__':
 
 
 
+    run_scope = 'single_target'
+    run_stats = _new_stats()
+
     if bool(config.get('run_property_sweep', False)):
         # Sweep ranges are defined at the top in runtime_config['sweep']['prop_profile'].
         props_to_sweep = config['prop_profile']
@@ -853,12 +949,14 @@ if __name__ == '__main__':
         print(f"saved sweep statistics: {config['sweep_stats_filename']}")
 
         sweep_total_stats = _aggregate_stats_from_sweep_results(sweep_results)
+        run_scope = 'sweep_all_pairs'
+        run_stats = sweep_total_stats
         _print_quality_stats(
             sweep_total_stats,
             scope_label='WHOLE GENERATED SWEEP (all property pairs combined)',
         )
     elif config['num_unique'] is not None:
-        ms, smiles, _ = generate_unique_molecules(
+        ms, smiles, run_stats = generate_unique_molecules(
             model=model,
             charset=charset,
             target_prop=target_prop,
@@ -880,7 +978,7 @@ if __name__ == '__main__':
             accept_predicate=accept_predicate,
         )
     else:
-        ms, smiles, _ = generate_fixed_iterations(
+        ms, smiles, run_stats = generate_fixed_iterations(
             model=model,
             charset=charset,
             target_prop=target_prop,
@@ -921,6 +1019,14 @@ if __name__ == '__main__':
             },
         )
         print(f'saved compressed molecules: {molecules_pickle_filename}')
+
+    quality_summary_filename = _save_quality_summary_csv(
+        stats=run_stats,
+        run_scope=run_scope,
+        num_molecules_saved=len(ms),
+        config=config,
+    )
+    print(f'saved quality summary: {quality_summary_filename}')
 
     # Compute properties and write results.
     if len(ms) == 0:
