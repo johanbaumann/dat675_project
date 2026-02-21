@@ -657,12 +657,12 @@ if __name__ == '__main__':
             # Prefer selecting checkpoint from a run folder created by train.py.
             # If save_file is provided, it takes precedence over run_dir.
             'save_file': None,
-            'run_dir': 'save/run_20260219_230438',
+            'run_dir': 'save/huge_generation_lstm',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
-            'batch_size': 64,  # Paper used 256, but that may cause OOM on smaller GPUs.
+            'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
             'num_unique': 3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
@@ -709,10 +709,10 @@ if __name__ == '__main__':
             },
         },
         'output': {
-            'result_filename': 'CVAE_transformer_test.txt',
+            'result_filename': 'CVAE_lstm_300k_test.txt',
             # If None, defaults to result filename stem + '.pckl.gz'.
             'molecules_pickle_filename': None,
-            'sweep_stats_filename': 'CVAE_transformer_test.csv',
+            'sweep_stats_filename': 'CVAE_lstm_test.csv',
         },
     }
 
@@ -906,17 +906,21 @@ if __name__ == '__main__':
     # Save generated molecules in compressed binary form to reduce output size.
     molecules_pickle_filename = config.get('molecules_pickle_filename')
     if molecules_pickle_filename is None:
-        molecules_pickle_filename = _default_pickle_output_path(config['result_filename'])
-    save_pickle_gz(
-        molecules_pickle_filename,
-        {
-            'smiles': smiles,
-            'molecules': ms,
-            'num_molecules': len(ms),
-            'saved_at_unix': t.time(),
-        },
-    )
-    print(f'saved compressed molecules: {molecules_pickle_filename}')
+        # do not save!
+    
+        #molecules_pickle_filename = _default_pickle_output_path(config['result_filename'])
+        print('no pickle path, not saving compressed mols')
+    if molecules_pickle_filename is not None:
+        save_pickle_gz(
+            molecules_pickle_filename,
+            {
+                'smiles': smiles,
+                'molecules': ms,
+                'num_molecules': len(ms),
+                'saved_at_unix': t.time(),
+            },
+        )
+        print(f'saved compressed molecules: {molecules_pickle_filename}')
 
     # Compute properties and write results.
     if len(ms) == 0:
