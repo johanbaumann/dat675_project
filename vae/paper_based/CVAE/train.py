@@ -68,7 +68,7 @@ config = {
         'mode': 'transformer',  # 'lstm' or 'transformer'
         'latent_size': 200,
         'unit_size': 512,
-        'n_rnn_layer': 2, # 2 layers for transformers (memory constraints...)
+        'n_rnn_layer': 2, # 2 layers for transformers, 3 for lstm (memory constraints...)
         'mean': 0.0,
         'stddev': 1.0,
         'num_prop': None,  # inferred from property file
@@ -88,12 +88,12 @@ config = {
     },
     'training': {
         'batch_size': 64, # 64 for transformer... 128 for lstm
-        'num_epochs': 100,
+        'num_epochs': 200,
         'save_dir': 'save/',
         'run_name': None,  # If None, auto-generated timestamped run folder is used.
         'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
         'save_every': 10,
-        'early_stopping_patience': 5,
+        'early_stopping_patience': 10,
         'early_stopping_min_delta': 0.001,
         'early_stopping_restore_best': True,
     },
@@ -106,7 +106,7 @@ config = {
     },
     'kl': {
         'enabled': True,
-        'start_beta': 0.01, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
+        'start_beta': 0.1, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
         'max_beta': 1.0,
         'hold_epochs': 0,
         'warmup_epochs': 8,
