@@ -989,14 +989,14 @@ if __name__ == '__main__':
             # If save_file is provided, it takes precedence over run_dir.
             'save_file': None,
             #'run_dir': 'save/huge_generation_lstm',
-            'run_dir': 'save/run_20260222_112050',
+            'run_dir': 'save/run_20260223_131822',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
-            'batch_size': 64,  # Paper used 256, but that may cause OOM on smaller GPUs.
+            'batch_size': 256,  # Paper used 256, but that may cause OOM on smaller GPUs.
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
-            'num_unique': 3_000,  # 30k unique molecules for each sweep point.
+            'num_unique': 1000,#3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
             'target_prop': '300.0 3.0',
             'prop_file': None,
@@ -1015,8 +1015,8 @@ if __name__ == '__main__':
             # Optional constraints to keep outputs close to target properties.
             # These values assume target_prop is MW then LogP.
             # If you set them to None, sampling accepts any valid/novel molecule.
-            'mw_tolerance': 200.0,
-            'logp_tolerance': 5.0,
+            'mw_tolerance': 200.0, #200
+            'logp_tolerance': 1.0, # 5.0
             # Optional: enforce polarity so TPSA isn't ~0.0 for hydrocarbon-only molecules.
             'min_tpsa': None,
             # Hard caps (optional) to prevent very large molecules due to halogen-heavy strings.
@@ -1042,13 +1042,13 @@ if __name__ == '__main__':
         },
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
-            'result_filename': 'CVAE_transformer_300k_test.txt',
+            'result_filename': 'label_CVAE_transformer_300k_test.txt',
             # If None, defaults to result filename stem + '.pckl.gz'.
             'molecules_pickle_filename': None,
             # If None, defaults to result filename stem + '_quality_summary.csv'.
             'quality_summary_filename': None,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
-            'sweep_stats_filename': 'CVAE_transformer_300k_test.csv',
+            'sweep_stats_filename': 'label_CVAE_transformer_300k_test.csv',
             
         },
     }

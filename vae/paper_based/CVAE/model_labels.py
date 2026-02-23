@@ -9,7 +9,7 @@ from typing import Optional
 
 """model_labels.py
 
-CVAE model for molecule generation + optional auxiliary label predictor.
+Beta-CVAE model for molecule generation + optional auxiliary label predictor.
 
 This file is a non-breaking extension of the base CVAE:
 - The conditioning vector `c` (properties) is unchanged.
@@ -38,11 +38,11 @@ https://arxiv.org/pdf/1610.02415
 CHANGELOG
 ---------
 2026-02-23
-- Added optional label prediction head `label_head` (reads latent `z`).
-- Added config knobs: `predict_labels`, `label_dim`, `label_loss_weight`.
-- Added optional `label_loss` to the total loss and metrics.
+- Added optional label prediction head 'label_head' (reads latent 'z').
+- Added config knobs: 'predict_labels', 'label_dim', 'label_loss_weight'.
+- Added optional 'label_loss' to the total loss and metrics.
 - Kept sampling pipeline unchanged; forward signature is backward compatible
-    when `predict_labels=False`.
+    when 'predict_labels=False'.
 """
 
 class PositionalEncoding(nn.Module):
@@ -284,7 +284,10 @@ class CVAE(nn.Module):
         return z, mean, log_sigma
 
     def predict_label(self, z: torch.Tensor) -> torch.Tensor:
-        """Predict labels from latent vector.
+        """
+        
+        Predict labels from latent vector. Label vector has dimensions:
+        'label_dim', which can be set to any positive integer. The specific meaning of the labels is task-dependent
 
         initial_state is not used for label prediction since it's only based on 'z', which is derived from the encoder output.
         
@@ -298,6 +301,20 @@ class CVAE(nn.Module):
         return self.label_head(z)
 
     def decode(self, x: torch.Tensor, z: torch.Tensor, c: torch.Tensor, initial_state=None, lengths: Optional[torch.Tensor] = None) -> tuple:
+        """
+        Decoder:
+        For LSTM:
+           input at each step is [z, x_emb, c], where z and c are repeated across sequence length.
+        For Transformer:
+           input at each step is [x_emb, z, c] projected to unit_size, 
+           with separate memory from [z, c] for cross-attention.
+        
+        
+        
+        
+        """
+        
+        
         if self.model_mode == 'lstm':
             x_emb = self.embedding(x)
             z_seq = z.unsqueeze(1).expand(-1, x_emb.size(1), -1)
@@ -531,6 +548,16 @@ class CVAE(nn.Module):
             param_group['lr'] = learning_rate
 
     def get_latent_vector(self, x: np.ndarray, c: np.ndarray, l: np.ndarray) -> np.ndarray:
+        """
+        Very important function:
+        given: 
+        -   x: (batch, seq_len) numpy array of token indices
+        -   c: (batch, num_prop) numpy array of conditioning properties (e.g. LogP/MW/TPSA).
+        -   l: (batch,) numpy array of sequence lengths (excluding padding).
+        returns:
+        -   z: (batch, latent_size) numpy array of latent vectors obtained from the
+        model's encoder. This is the key function that maps input sequences to their latent representations,
+        """
         self.train(False)
         x_t = torch.as_tensor(x, dtype=torch.long, device=self.device)
         c_t = torch.as_tensor(c, dtype=torch.float32, device=self.device)
@@ -538,6 +565,7 @@ class CVAE(nn.Module):
         with torch.no_grad():
             z, _, _ = self.encode(x_t, c_t, l_t)
         return z.detach().cpu().numpy()
+
 
     def sample(
         self,
@@ -549,6 +577,22 @@ class CVAE(nn.Module):
         temperature: float = 1.0,
         top_k: Optional[int] = None,
     ) -> np.ndarray:
+        
+        """
+        Samples a batch of sequences from the model given:
+            - latent_vector: (batch, latent_size) numpy array of latent vectors 'z' to
+            condition on. Typically obtained from 'get_latent_vector()' or sampled from N(0,1).
+            - c: (batch, num_prop) numpy array of conditioning properties (e.g. LogP/MW/TPSA).
+            - start_codon: (batch,) numpy array of start token indices to initialize decoding.
+            - seq_length: maximum sequence length to decode (including start token).
+            - do_sample: if True, use multinomial sampling; if False, use argmax decoding.
+            - temperature: softmax temperature for sampling; ignored if do_sample=False.
+            - top_k: if set, restrict sampling to the top_k most probable tokens at each step
+
+
+
+        """
+
         self.train(False)
         e_index = self.vocab_size - 2
 
@@ -560,7 +604,13 @@ class CVAE(nn.Module):
         preds = []
         finished = torch.zeros(x.shape[0], dtype=torch.bool, device=self.device)
         e_index_t = torch.tensor(e_index, dtype=torch.long, device=self.device)
+        ##
 
+
+        # Samples next token from last steps using:
+        # either argmax (greedy) or multinomial sampling (with temp control)
+        # from softmax distribution of the last step's logits. 
+        # Can also apply top-k filtering before sampling.
         def _sample_next_from_logits(
             logits_last: torch.Tensor,
             *,
@@ -592,6 +642,8 @@ class CVAE(nn.Module):
             return torch.multinomial(probs, num_samples=1)
 
         with torch.no_grad():
+            # decode one token until either EOS,
+            # or max sequence length is reached.
             for _ in range(seq_length):
                 if self.model_mode == 'lstm':
                     _, logits, state = self.decode(x, z, c_t, initial_state=state)
@@ -617,6 +669,10 @@ class CVAE(nn.Module):
                 )
 
                 preds.append(next_x)
+                # in place update of finished flags:
+                # once a sequence generates EOS, its marked as finished
+                # and will only generate EOS for subsequent steps, ensuring proper padding.
+                # this speeds up the sampling loop!
                 finished |= next_x.squeeze(1).eq(e_index_t)
                 if self.model_mode == 'lstm':
                     x = next_x

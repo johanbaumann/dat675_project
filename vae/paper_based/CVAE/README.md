@@ -15,7 +15,6 @@ Reference papers for CVAE:
 
   - With github of: https://github.com/jaechanglim/CVAE
 
-
 Reference paper for $\beta$-CVAE:
 
 - Guang Jun, De Tao, Bingquan "Balancing Exploration and Exploitation:
@@ -24,14 +23,12 @@ Reference paper for $\beta$-CVAE:
 
 Beta term can controll the entagleness of latent space. Making molecules more disentangeled.  of molecules (and stabilize them)
 
-
 Reference paper for Vae with label prediction:
 
 - "Automatic Chemical Design Using a Data-Driven
   Continuous Representation of Molecules" By Gómez-Bombarelli et al.
   Landmark paper. (2018)
 - https://doi.org/10.1021/acscentsci.7b00572
-
 
 This repository now contains an extended implementation that supports both:
 
@@ -68,6 +65,8 @@ This repository now contains an extended implementation that supports both:
 - EOS-aware early stopping in decode loop for faster generation. So it does not go trough everything multiple times
 - Ability to use only a subset of parameters for conditions compared to the origonal papers which had: MW,LogP, TPSA, HBD, HBA
 - Latent memory injection into the Transformer-decoder. This is since the decoder produces sequences conditioned on both *z* and *c.* This means that for each time step, the decoder builds token input from: token embeddings, latent vector z and condition vector c, where both z and c is broadcasted across time steps. Then a memory vector is built and alastly cross-attention is applied in decoder. (a technique studied in the context of  LLMS for Memory injection atacks...)
+- Separate prediction head for label predictions
+- 
 
 ## The ELBO optimization of $\beta$-CVAE:
 
@@ -127,6 +126,21 @@ $$
 Which would mean having to find the probability of all possible real-latent varible *c*-values (impossible). And especially in the case of smiles where they are discrete....
 
 So the encoder must approximate it, and the approximated posterior is denoted as: $q_\phi(z|x,c)$
+
+
+
+## Label-Prediction head:
+
+The labels will be sampeled from latent space: $f(z)$. This head is separate from the decoder.  The shape of the MLP is:
+
+$$
+f(z) = 
+$$
+
+
+
+
+
 
 ## 1) Prepare SMILES property file
 
