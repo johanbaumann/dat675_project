@@ -1016,7 +1016,7 @@ if __name__ == '__main__':
             # These values assume target_prop is MW then LogP.
             # If you set them to None, sampling accepts any valid/novel molecule.
             'mw_tolerance': 200.0, #200
-            'logp_tolerance': 1.0, # 5.0
+            'logp_tolerance': 2.5, # 5.0
             # Optional: enforce polarity so TPSA isn't ~0.0 for hydrocarbon-only molecules.
             'min_tpsa': None,
             # Hard caps (optional) to prevent very large molecules due to halogen-heavy strings.
