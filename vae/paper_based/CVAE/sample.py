@@ -223,6 +223,7 @@ def _print_quality_stats(
     print('\n \n')
 
 
+
 def _default_pickle_output_path(result_filename: str) -> str:
     """Build default compressed molecule filename next to CSV output."""
     root, _ = os.path.splitext(str(result_filename))
