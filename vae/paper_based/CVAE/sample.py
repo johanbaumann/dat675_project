@@ -735,7 +735,7 @@ if __name__ == '__main__':
     # Runtime sampling options.
     # Model architecture/training hyperparameters are loaded from training_config.json.
 
-    model_type = 'lstm' 
+    model_type = 'transformer' 
 
     
 
@@ -746,7 +746,7 @@ if __name__ == '__main__':
             # If save_file is provided, it takes precedence over run_dir.
             'save_file': None,
             #'run_dir': 'save/huge_generation_lstm',
-            'run_dir': 'save/run_20260219_230438',
+            'run_dir': 'save/run_20260222_112050',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },

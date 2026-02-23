@@ -1,0 +1,16 @@
+Labels / Descriptor Head Changelog
+================================
+
+2026-02-23
+- Training: Added `label_target_indices` in `train_labels.py` to choose which conditioning property columns are used as the auxiliary label targets.
+  - Example for your property ordering `[MW, LogP]`: set `label_target_indices=[1]` to predict LogP only.
+  - Default when `label_target_indices` is None and `predict_labels=True`:
+    - if `num_prop==2` (assumed `[MW, LogP]`), predicts LogP only
+    - otherwise predicts all properties
+- Checkpoint metadata: When label prediction is enabled, the saved `model_config` now includes:
+  - `label_target_indices`
+  - `label_target_names` (best-effort: `['MW','LogP']` when `num_prop==2`)
+  This allows sampling to interpret/denormalize predictions.
+- Sampling output: `sample_labels.py` now denormalizes predicted label columns (when metadata + `prop_norm_mean/std` exist) and writes named columns like `pred_LogP`.
+  - Adds `pred_LogP_minus_rdkit_LogP` so you can directly compare the model-predicted LogP to RDKit’s `MolLogP`.
+- Checkpoint restore robustness: `model_labels.py` restore logic tolerates optimizer/grad-scaler state mismatches (important when optional heads change parameter sets; optimizer state is not needed for inference/sampling).

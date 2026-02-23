@@ -2,11 +2,36 @@
 
 # Conditional VAE for molecular generation (PyTorch)
 
-Reference paper:
+Reference paper( for the code):
 
 - https://jcheminf.biomedcentral.com/articles/10.1186/s13321-018-0286-7
 - https://arxiv.org/abs/1806.05805
 - 
+- 
+
+Reference papers for CVAE:
+
+- Lim, J., Ryu, S., Kim, J.W. *et al.* Molecular generative model based on conditional variational autoencoder for de novo molecular design. *J Cheminform*  **10** , 31 (2018). https://doi.org/10.1186/s13321-018-0286-7
+
+  - With github of: https://github.com/jaechanglim/CVAE
+
+
+Reference paper for $\beta$-CVAE:
+
+- Guang Jun, De Tao, Bingquan "Balancing Exploration and Exploitation:
+  Disentangled β-CVAE in De Novo Drug Design" (aug 2023)
+- https://arxiv.org/abs/2306.01683
+
+Beta term can controll the entagleness of latent space. Making molecules more disentangeled.  of molecules (and stabilize them)
+
+
+Reference paper for Vae with label prediction:
+
+- "Automatic Chemical Design Using a Data-Driven
+  Continuous Representation of Molecules" By Gómez-Bombarelli et al.
+  Landmark paper. (2018)
+- https://doi.org/10.1021/acscentsci.7b00572
+
 
 This repository now contains an extended implementation that supports both:
 
@@ -45,8 +70,6 @@ This repository now contains an extended implementation that supports both:
 - Latent memory injection into the Transformer-decoder. This is since the decoder produces sequences conditioned on both *z* and *c.* This means that for each time step, the decoder builds token input from: token embeddings, latent vector z and condition vector c, where both z and c is broadcasted across time steps. Then a memory vector is built and alastly cross-attention is applied in decoder. (a technique studied in the context of  LLMS for Memory injection atacks...)
 
 ## The ELBO optimization of $\beta$-CVAE:
-
-
 
 $$
 logp_\theta(x|z) \ge \mathcal{L}(\theta,\phi,x,z) = \underbrace{\mathbb{E}_{q_\phi(z|x)}[log\underbrace{p_\theta(x|z,c)}_{\text{Conditional likleyhood}}]}_{\text{Reconstruction error (decoder)}}-\beta\underbrace{ D_{KL}[\underbrace{q_\phi(z|x,c)}_{\text{Approximated posterior}}||\underbrace{p(z|c)}_{\text{conditioned-prior}}]}_{D_{KL},\text{ Kullback-lieber term (encoder)}}
@@ -97,21 +120,13 @@ $$
 p(z|x,c) = \frac{p(x|z,c)p(z|c)}{\underbrace{p(x|c)}_{\text{intractable}}}
 $$
 
-
 $$
 \underbrace{p(x|c)}_{\text{Marginal likleyhood/Evidence }} = \int p(x|z,c) p(z|c)dz
 $$
 
-
-
 Which would mean having to find the probability of all possible real-latent varible *c*-values (impossible). And especially in the case of smiles where they are discrete....
 
 So the encoder must approximate it, and the approximated posterior is denoted as: $q_\phi(z|x,c)$
-
-
-
-
-
 
 ## 1) Prepare SMILES property file
 

@@ -16,6 +16,8 @@ All notable changes to this project are documented in this file.
 
 - `train.py` / `utils.py`: Added run-folder controls directly in the training config (`training.run_name`, `training.use_run_subdir`). Training now resolves an effective run save path via `build_train_run_save_dir(...)`, so each run can write to its own subdirectory under `training.save_dir` without overwriting other runs.
 - `utils.py`: Added `resolve_checkpoint_path(...)` to resolve checkpoints either from an explicit file path or from a run directory (preferring `model_best.ckpt-*.pt`, then falling back to newest `.pt`).
+- `train_labels.py` / `model_labels.py`: Optional auxiliary label head that predicts selected properties from latent `z` (default: LogP-only for 2-prop `[MW, LogP]` setup).
+- `sample_labels.py`: Sampling output can include denormalized predicted label columns (e.g. `pred_LogP`) and a direct comparison column `pred_LogP_minus_rdkit_LogP`.
 
 ### Changed
 
