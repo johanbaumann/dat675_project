@@ -91,6 +91,7 @@ class CVAE(nn.Module):
         self.predict_labels = bool(self._get_arg_or_default(args, 'predict_labels', False))
         self.label_dim = int(self._get_arg_or_default(args, 'label_dim', 0))
         self.label_loss_weight = float(self._get_arg_or_default(args, 'label_loss_weight', 1.0))
+        self.include_condition_in_label_head = bool(self._get_arg_or_default(args, 'include_condition_in_label_head', False))
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if self.amp_dtype_name not in ('float16', 'bfloat16'):
@@ -153,11 +154,21 @@ class CVAE(nn.Module):
         if self.predict_labels:
             if self.label_dim <= 0:
                 raise ValueError('label_dim must be a positive integer when predict_labels=True')
-            self.label_head = nn.Sequential(
-                nn.Linear(self.latent_size, self.unit_size),
-                nn.ReLU(),
-                nn.Linear(self.unit_size, self.label_dim),
-            )
+
+            if self.include_condition_in_label_head:
+                # If we want to include conditioning properties 'c' in label prediction, we can modify the head accordingly.
+                self.label_head = nn.Sequential(
+                    nn.Linear(self.latent_size + self.num_prop, self.unit_size),
+                    nn.ReLU(),
+                    nn.Linear(self.unit_size, self.label_dim),
+                )
+            else:
+                # A simple 2-layer MLP head for label prediction from latent vector 'z'.
+                self.label_head = nn.Sequential(
+                    nn.Linear(self.latent_size, self.unit_size),
+                    nn.ReLU(),
+                    nn.Linear(self.unit_size, self.label_dim),
+                )
 
         if self.optimizer_name == 'adamw':
             if self.weight_decay > 0:
