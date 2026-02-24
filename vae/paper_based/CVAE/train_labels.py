@@ -20,60 +20,19 @@ CHANGELOG
 
 from model_labels import CVAE
 from utils import *
+from utils_labels import (
+    apply_training_preset,
+    get_kl_beta,
+    log_cuda_mem,
+    save_best_checkpoint,
+    save_current_checkpoint,
+    save_history_csv,
+)
 import numpy as np
 import time
 import pandas as pd
 import torch
 from copy import deepcopy
-import os
-import glob
-
-
-def log_cuda_mem(prefix: str = "") -> None:
-    if torch.cuda.is_available():
-        alloc = torch.cuda.memory_allocated() / (1024**2)
-        reserved = torch.cuda.memory_reserved() / (1024**2)
-        print(f"{prefix} cuda_mem_allocated={alloc:.1f} MiB reserved={reserved:.1f} MiB")
-
-
-def get_kl_beta(epoch:int, cfg:dict) -> float:
-    if not bool(cfg.get('kl_anneal_enabled', False)):
-        return 1.0
-    start_beta = float(cfg.get('kl_anneal_start_beta', 0.0))
-    max_beta = float(cfg.get('kl_anneal_max_beta', 1.0))
-    hold_epochs = int(cfg.get('kl_anneal_hold_epochs', 0))
-    warmup_epochs = max(1, int(cfg.get('kl_anneal_warmup_epochs', 20)))
-    if epoch < hold_epochs:
-        return start_beta
-    progress = (epoch - hold_epochs) / float(warmup_epochs)
-    progress = min(max(progress, 0.0), 1.0)
-    beta = start_beta + (max_beta - start_beta) * progress
-    return float(beta)
-
-
-def apply_training_preset(cfg:dict) -> dict:
-    preset = str(cfg.get('training_preset', 'custom')).strip().lower()
-    if preset in ('', 'custom', 'none'):
-        print('training preset: custom (no automatic overrides)')
-        return cfg
-
-    if preset == 'stable_transformer':
-        cfg.update({
-            'model_mode': 'transformer',
-            'optimizer': 'adamw',
-            'weight_decay': 0.001, # 
-            'use_amp': True,
-            'kl_anneal_enabled': True,
-            'kl_anneal_start_beta': 0.01,
-            'kl_anneal_max_beta': 1.0,
-            'kl_anneal_hold_epochs': 0,
-            'kl_anneal_warmup_epochs': 8,
-            'diagnostics_every': 1,
-        })
-        print('training preset: stable_transformer (applied)')
-        return cfg
-
-    raise ValueError("training_preset must be one of: 'custom', 'stable_transformer'")
 
 # Single source of truth for run configuration.
 # Grouped sections are easier to edit; utils will flatten this to legacy keys.
@@ -329,57 +288,6 @@ best_test_loss = float('inf')
 best_epoch = -1
 epochs_without_improvement = 0
 best_state_dict = None
-
-
-def save_history_csv(*, config: dict, history: dict) -> None:
-    history_df = pd.DataFrame(history)
-    history_df.to_csv(config['save_dir'] + '/history.csv', index=False)
-
-
-def save_current_checkpoint(*, epoch: int, config: dict, model: CVAE, model_config: dict, suffix: str = "") -> None:
-    """Save current in-memory model weights with epoch in filename."""
-    ckpt_path = config['save_dir'] + f'/model_{epoch}{suffix}.ckpt'
-    model.save(ckpt_path, epoch, model_config=model_config)
-
-
-def _delete_previous_best_checkpoints(save_dir: str) -> None:
-    """Keep only one rolling best checkpoint file on disk."""
-    patterns = [
-        os.path.join(save_dir, 'model_best.ckpt-*.pt'),
-        os.path.join(save_dir, 'model_*best*.ckpt-*.pt'),
-    ]
-    deleted = set()
-    for pattern in patterns:
-        for path in glob.glob(pattern):
-            if path in deleted:
-                continue
-            try:
-                os.remove(path)
-                deleted.add(path)
-            except OSError:
-                continue
-
-
-def save_best_checkpoint(
-    *,
-    epoch: int,
-    config: dict,
-    model: CVAE,
-    model_config: dict,
-    best_state_dict,
-    best_epoch: int,
-) -> None:
-    """Save a single rolling best checkpoint named model_best.ckpt-<best_epoch>.pt."""
-    if best_state_dict is None:
-        return
-
-    _delete_previous_best_checkpoints(config['save_dir'])
-
-    restore_after = deepcopy(model.state_dict())
-    model.load_state_dict(best_state_dict)
-    print(f'saving new best model from epoch {best_epoch} (found at epoch {epoch})')
-    model.save(config['save_dir'] + '/model_best.ckpt', best_epoch, model_config=model_config)
-    model.load_state_dict(restore_after)
 
 
 
