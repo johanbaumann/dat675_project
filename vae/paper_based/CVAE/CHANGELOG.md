@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file.
 ### Fixed
 
 - `sample.py` / `debug_sampling.py`: Sampling now prefers the `model_config` embedded in the checkpoint (`.pt`) payload. This prevents a subtle failure mode where `save/training_config.json` gets overwritten by later training runs (often Transformer experiments), causing sampling to use the wrong `prop_file` / `seq_length` / `num_prop` and especially the wrong `prop_norm_mean/std` (=> invalid SMILES and/or near-zero acceptance).
+- `model_labels.py`: Fixed a wiring bug where `include_condition_in_label_head=True` built a `(z, c)` label head but prediction still used `z` only.
 - `sample.py`: Default decoding is stochastic again (`do_sample=True`). During Transformer refactors the default was set to greedy decoding, which commonly collapses to a single repeated molecule ("not unique") and can also reduce validity.
 - `sample.py` / `utils.py`: Novelty and duplicate checks now use the same canonicalization pipeline for both generated molecules and training-set molecules, avoiding mismatches from inconsistent canonical forms.
 - `sample.py`: Generated molecule artifacts are now saved as compressed pickle (`.pckl.gz`) to avoid very large plain-text intermediate payloads.
@@ -17,7 +18,10 @@ All notable changes to this project are documented in this file.
 - `train.py` / `utils.py`: Added run-folder controls directly in the training config (`training.run_name`, `training.use_run_subdir`). Training now resolves an effective run save path via `build_train_run_save_dir(...)`, so each run can write to its own subdirectory under `training.save_dir` without overwriting other runs.
 - `utils.py`: Added `resolve_checkpoint_path(...)` to resolve checkpoints either from an explicit file path or from a run directory (preferring `model_best.ckpt-*.pt`, then falling back to newest `.pt`).
 - `train_labels.py` / `model_labels.py`: Optional auxiliary label head that predicts selected properties from latent `z` (default: LogP-only for 2-prop `[MW, LogP]` setup).
+- `train_labels.py` / `model_labels.py`: Added `include_condition_in_label_head` option so the label head can predict labels from `(z, c)` (latent + conditioning) instead of `z` only.
+- `train_labels.py` / `sample_labels.py`: Added `label_targets_use_raw_scale` (saved as `label_target_scale`) so the label head can be trained/evaluated in raw property units instead of normalized units.
 - `sample_labels.py`: Sampling output can include denormalized predicted label columns (e.g. `pred_LogP`) and a direct comparison column `pred_LogP_minus_rdkit_LogP`.
+- `sample_labels.py`: Added `training_dist` sampling mode (`run_training_dist`) to sample conditioning targets from an approximate training-property distribution (Gaussian fit via saved `prop_norm_mean/std`). This keeps conditioning near the training manifold, which often improves label-head calibration around typical training values.
 
 ### Changed
 

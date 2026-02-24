@@ -127,20 +127,13 @@ Which would mean having to find the probability of all possible real-latent vari
 
 So the encoder must approximate it, and the approximated posterior is denoted as: $q_\phi(z|x,c)$
 
-
-
 ## Label-Prediction head:
 
 The labels will be sampeled from latent space: $f(z)$. This head is separate from the decoder.  The shape of the MLP is:
 
 $$
-f(z) = 
+f(z) =
 $$
-
-
-
-
-
 
 ## 1) Prepare SMILES property file
 
@@ -179,6 +172,8 @@ Edit the grouped `config` block near the top of `train.py`.
 **Stable for lstm:**
 
 ```python
+# Single source of truth for run configuration.
+# Grouped sections are easier to edit; utils will flatten this to legacy keys.
 config = {
     'training_preset': 'custom',  # 'custom' or 'stable_transformer'
     'data': {
@@ -190,10 +185,31 @@ config = {
         'mode': 'lstm',  # 'lstm' or 'transformer'
         'latent_size': 200,
         'unit_size': 512,
-        'n_rnn_layer': 3,
+        'n_rnn_layer': 3, # 2 layers for transformers, 3 for lstm (memory constraints...)
         'mean': 0.0,
         'stddev': 1.0,
         'num_prop': None,  # inferred from property file
+
+        # Optional multi-task head:
+        # - predict_labels=False keeps the model identical to the base CVAE.
+        # - When enabled, the model predicts a label vector from latent `z`.
+        'predict_labels': True,
+        # Which conditioning columns to predict as labels.
+        # Example (for: MW, LogP setup): set to [1] to predict LogP only.
+        # If None and predict_labels=True, defaults to predicting all properties.
+        'label_target_indices': [1],  # predict LogP only by default for the MW/LogP setup
+        'label_dim': None,  # if None, inferred from property file
+        'label_loss_weight': 1.0, # relative weight of label prediction loss compared to reconstruction + KL loss (which are weighted by beta)
+
+        # Optional label-head variants:
+        # If True, the label head predicts from both (z, c) instead of z only.
+        # This can be useful if you want predicted labels to track the sampling
+        # target properties more directly.
+        'include_condition_in_label_head': True,
+
+        # If True, train the label head on *raw* (unnormalized) property values.
+        # If False (default), train it on the normalized conditioning vector.
+        'label_targets_use_raw_scale': False,
     },
     'transformer': {
         'heads': 8,
@@ -201,35 +217,37 @@ config = {
         'dropout': 0.15,
     },
     'optimization': {
-        'optimizer': 'adam',
-        'lr': 0.0001, # 10e-4, 1e-5 for transformer..
-        'weight_decay': 0.0, # 0.001 for transformer 
-        'use_amp': False, # true if using transformer with fp16, can cause instability with lstm
+        'optimizer': 'adam', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
+        'lr': 1e-3, # 10e-4, 1e-5 for transformer..
+        'weight_decay': 0.000, # 0.001 for transformer 
+        'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
         'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
         'grad_clip_norm': 4.0,
     },
     'training': {
-        'batch_size': 128, # 64 for transformer...
-        'num_epochs': 100,
+        'batch_size': 128, # 64 for transformer... 128 for lstm
+        'num_epochs': 100, # transformer need more
         'save_dir': 'save/',
+        'run_name': None,  # If None, auto-generated timestamped run folder is used.
+        'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
         'save_every': 10,
-        'early_stopping_patience': 20,
-        'early_stopping_min_delta': 0.0,
+        'early_stopping_patience': 10,
+        'early_stopping_min_delta': 0.001,
         'early_stopping_restore_best': True,
     },
     'scheduler': {
         'enabled': True,
         'factor': 0.5,
-        'patience': 5,
-        'threshold': 1e-5,
+        'patience': 2,
+        'threshold': 1e-3,
         'min_lr': 1e-6,
     },
     'kl': {
-        'enabled': False,
-        'start_beta': 0.0,
-        'max_beta': 1.0,
+        'enabled': True,
+        'start_beta': 1.0, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
+        'max_beta': 2.0,
         'hold_epochs': 0,
-        'warmup_epochs': 50,
+        'warmup_epochs': 8,
     },
     'diagnostics': {
         'every': 1,
@@ -240,6 +258,8 @@ config = {
 **Stable for Transformer:**
 
 ```python
+# Single source of truth for run configuration.
+# Grouped sections are easier to edit; utils will flatten this to legacy keys.
 config = {
     'training_preset': 'custom',  # 'custom' or 'stable_transformer'
     'data': {
@@ -248,13 +268,34 @@ config = {
         'train_ratio': 0.75,
     },
     'model': {
-        'mode': 'lstm',  # 'lstm' or 'transformer'
+        'mode': 'transformer',  # 'lstm' or 'transformer'
         'latent_size': 200,
         'unit_size': 512,
-        'n_rnn_layer': 2,
-        'mean': 0.0, # p(z) = N(0,1)... 
+        'n_rnn_layer': 2, # 2 layers for transformers, 3 for lstm (memory constraints...)
+        'mean': 0.0,
         'stddev': 1.0,
         'num_prop': None,  # inferred from property file
+
+        # Optional multi-task head:
+        # - predict_labels=False keeps the model identical to the base CVAE.
+        # - When enabled, the model predicts a label vector from latent `z`.
+        'predict_labels': True,
+        # Which conditioning columns to predict as labels.
+        # Example (for: MW, LogP setup): set to [1] to predict LogP only.
+        # If None and predict_labels=True, defaults to predicting all properties.
+        'label_target_indices': [1],  # predict LogP only by default for the MW/LogP setup
+        'label_dim': None,  # if None, inferred from property file
+        'label_loss_weight': 1.0, # relative weight of label prediction loss compared to reconstruction + KL loss (which are weighted by beta)
+
+        # Optional label-head variants:
+        # If True, the label head predicts from both (z, c) instead of z only.
+        # This can be useful if you want predicted labels to track the sampling
+        # target properties more directly.
+        'include_condition_in_label_head': True,
+
+        # If True, train the label head on *raw* (unnormalized) property values.
+        # If False (default), train it on the normalized conditioning vector.
+        'label_targets_use_raw_scale': False,
     },
     'transformer': {
         'heads': 8,
@@ -262,35 +303,37 @@ config = {
         'dropout': 0.15,
     },
     'optimization': {
-        'optimizer': 'adamw',
-        'lr': 0.00001, # 10e-4, 1e-5 for transformer..
+        'optimizer': 'adamw', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
+        'lr': 1e-5, # 10e-4, 1e-5 for transformer..
         'weight_decay': 0.001, # 0.001 for transformer 
         'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
         'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
         'grad_clip_norm': 4.0,
     },
     'training': {
-        'batch_size': 64, # 64 for transformer...
-        'num_epochs': 100,
+        'batch_size': 64, # 64 for transformer... 128 for lstm
+        'num_epochs': 200, # transformer need more
         'save_dir': 'save/',
+        'run_name': None,  # If None, auto-generated timestamped run folder is used.
+        'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
         'save_every': 10,
-        'early_stopping_patience': 20,
-        'early_stopping_min_delta': 0.0,
+        'early_stopping_patience': 10,
+        'early_stopping_min_delta': 0.001,
         'early_stopping_restore_best': True,
     },
     'scheduler': {
         'enabled': True,
         'factor': 0.5,
-        'patience': 5,
-        'threshold': 1e-5,
+        'patience': 2,
+        'threshold': 1e-3,
         'min_lr': 1e-6,
     },
     'kl': {
-        'enabled': False,
-        'start_beta': 0.01,
-        'max_beta': 1.0,
+        'enabled': True,
+        'start_beta': 1.0, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
+        'max_beta': 2.0,
         'hold_epochs': 0,
-        'warmup_epochs': 50,
+        'warmup_epochs': 8,
     },
     'diagnostics': {
         'every': 1,
@@ -344,6 +387,42 @@ python sample.py
 ```
 
 Output is written to `result_filename` (default `result.txt`).
+
+### Sampling with predicted labels (`sample_labels.py`)
+
+If you trained a checkpoint with the optional label head (`train_labels.py` / `model_labels.py`), you can sample with `sample_labels.py`.
+
+It writes the usual RDKit descriptors (MW/LogP/TPSA) plus:
+
+- `pred_label_<j>`: raw head outputs per dimension.
+- `pred_<name>`: denormalized predictions when the checkpoint contains label metadata (example: `pred_LogP`).
+
+### Sampling target properties near training data (`training_dist` mode)
+
+`sample_labels.py` supports a 3rd conditioning mode besides single-target and sweep:
+
+- **Single target:** fixed `target_prop` for all samples.
+- **Sweep:** `sweep.enabled=True` with a grid over target properties.
+- **Training distribution:** `training_dist.enabled=True` to sample target properties around the training-data distribution.
+
+This is useful when you care about the label head being accurate around *typical* training values, not just at a hand-picked target.
+
+It uses the training-property mean/std saved in the checkpoint config (`prop_norm_mean/std`) and samples in raw units:
+
+$$
+c_{raw} \sim \mathcal{N}(\mu, (\texttt{std\_scale} \cdot \sigma)^2)
+$$
+
+Then it applies the same normalization as training before feeding `c` to the model.
+
+Knobs in the `runtime_config` block inside `sample_labels.py`:
+
+- `training_dist.enabled`: enable this mode.
+- `training_dist.std_scale`: widen/narrow the sampled distribution (1.0 = match training std).
+- `training_dist.clip_n_std`: clip each dimension to `mean +/- clip_n_std * std` to avoid extreme tails.
+- `training_dist.seed`: optional reproducible seed.
+
+Note: in training-dist mode the per-sample targets vary, so the fixed-target acceptance predicate (MW/LogP tolerance around a single `target_prop`) is disabled by default.
 
 ### Sampling controls (diversity vs validity)
 

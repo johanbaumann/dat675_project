@@ -77,7 +77,12 @@ def _model_supports_label_prediction(model) -> bool:
     return bool(getattr(model, 'predict_labels', False)) and hasattr(model, 'predict_label')
 
 
-def _predict_labels_from_latent(*, model, latent_vector: np.ndarray) -> Optional[np.ndarray]:
+def _predict_labels_from_latent(
+    *,
+    model,
+    latent_vector: np.ndarray,
+    condition: Optional[np.ndarray] = None,
+) -> Optional[np.ndarray]:
     """Predict labels from a batch of sampled latent vectors.
 
     Notes:
@@ -88,8 +93,16 @@ def _predict_labels_from_latent(*, model, latent_vector: np.ndarray) -> Optional
         return None
 
     z = torch.as_tensor(latent_vector, dtype=torch.float32, device=model.device)
+    c = None
+    if bool(getattr(model, 'include_condition_in_label_head', False)):
+        if condition is None:
+            raise ValueError(
+                'Loaded model requires conditioning for label prediction '
+                '(include_condition_in_label_head=True), but no condition was provided.'
+            )
+        c = torch.as_tensor(condition, dtype=torch.float32, device=model.device)
     with torch.no_grad():
-        y_hat = model.predict_label(z)
+        y_hat = model.predict_label(z, c=c)
     return y_hat.detach().cpu().numpy().astype(np.float32)
 
 
@@ -134,7 +147,7 @@ def _sample_batch_strings(
         top_k=top_k,
     )
     raw_strings = [convert_to_smiles(generated[i], charset) for i in range(len(generated))]
-    pred_labels = _predict_labels_from_latent(model=model, latent_vector=latent_vector)
+    pred_labels = _predict_labels_from_latent(model=model, latent_vector=latent_vector, condition=target_prop)
     return raw_strings, latent_vector, pred_labels
 
 
@@ -604,6 +617,128 @@ def generate_unique_molecules(
     return mols_out, smiles_out, total_stats, pred_out
 
 
+def generate_unique_molecules_from_training_dist(
+    *,
+    model: CVAE,
+    charset: np.ndarray,
+    start_codon: np.ndarray,
+    seq_length: int,
+    num_unique: int,
+    max_batches: Optional[int],
+    mean: float,
+    stddev: float,
+    batch_size: int,
+    latent_size: int,
+    training_smiles: set,
+    do_sample: bool,
+    temperature: float,
+    top_k: Optional[int],
+    strip_salts: bool,
+    decharge: bool,
+    canonicalize_tautomer: bool,
+    prop_norm_mean: list,
+    prop_norm_std: list,
+    std_scale: float,
+    clip_n_std: Optional[float],
+    rng: Optional[np.random.Generator] = None,
+) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]], list[tuple[float, ...]]]:
+    """Generate unique molecules while sampling target properties near training data.
+
+    This mode samples a fresh conditioning target `c_raw` each batch from an
+    approximate training distribution, then normalizes it like training and
+    decodes with that `c_norm`.
+
+    Returns an extra `target_props_per_molecule` list aligned with `smiles_out`.
+    """
+    if num_unique <= 0:
+        return [], [], _new_stats(), None, []
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    unique_mols_by_smiles: dict[str, Chem.Mol] = {}
+    unique_labels_by_smiles: dict[str, np.ndarray] = {}
+    unique_targets_by_smiles: dict[str, tuple[float, ...]] = {}
+    seen_smiles: set = set()
+    batches = 0
+    total_stats = _new_stats()
+
+    while len(unique_mols_by_smiles) < num_unique:
+        batches += 1
+        if max_batches is not None and batches > int(max_batches):
+            print(f'stopping early: reached max_batches={max_batches}')
+            break
+
+        # Sample per-batch conditioning targets in raw units, then normalize like training.
+        target_prop_raw = sample_target_props_like_training(
+            batch_size=int(batch_size),
+            prop_norm_mean=list(prop_norm_mean),
+            prop_norm_std=list(prop_norm_std),
+            std_scale=float(std_scale),
+            clip_n_std=clip_n_std,
+            rng=rng,
+        )
+        target_prop = normalize_like_training(target_prop_raw, prop_norm_mean, prop_norm_std)
+
+        raw, _, pred_labels = _sample_batch_strings(
+            model=model,
+            charset=charset,
+            target_prop=target_prop,
+            start_codon=start_codon,
+            seq_length=int(seq_length),
+            mean=float(mean),
+            stddev=float(stddev),
+            batch_size=int(batch_size),
+            latent_size=int(latent_size),
+            do_sample=bool(do_sample),
+            temperature=float(temperature),
+            top_k=top_k,
+        )
+
+        # Note: accept_predicate is intentionally not used here.
+        # In training-dist mode the target differs per sample, and the existing
+        # predicate closure is defined for a single fixed (MW, LogP, ...) row.
+        accepted, inc_stats = _collect_new_unique_from_raw_with_payloads(
+            raw_strings=raw,
+            payload_a=pred_labels,
+            payload_b=target_prop_raw,
+            seen_smiles=seen_smiles,
+            training_smiles=training_smiles,
+            eos_token='E',
+            accept_predicate=None,
+            strip_salts=strip_salts,
+            decharge=decharge,
+            canonicalize_tautomer=canonicalize_tautomer,
+        )
+        _accumulate_stats(total_stats, inc_stats)
+
+        for can, mol, y_pred, y_target_raw in accepted:
+            if can in unique_mols_by_smiles:
+                continue
+            unique_mols_by_smiles[can] = mol
+            if y_pred is not None:
+                unique_labels_by_smiles[can] = np.asarray(y_pred, dtype=np.float32)
+            if y_target_raw is not None:
+                row = tuple(float(v) for v in np.asarray(y_target_raw, dtype=np.float32).reshape(-1).tolist())
+                unique_targets_by_smiles[can] = row
+
+        if batches % 10 == 0:
+            print(f'batches={batches} unique={len(unique_mols_by_smiles)}/{num_unique}')
+
+    _print_quality_stats(total_stats)
+
+    smiles_out = sorted(unique_mols_by_smiles.keys())[:num_unique]
+    mols_out = [unique_mols_by_smiles[s] for s in smiles_out]
+
+    pred_out = None
+    if len(unique_labels_by_smiles) > 0:
+        pred_out = [unique_labels_by_smiles.get(s) for s in smiles_out]
+
+    default_row = tuple(float('nan') for _ in range(int(len(prop_norm_mean))))
+    target_props_per_molecule = [unique_targets_by_smiles.get(s, default_row) for s in smiles_out]
+    return mols_out, smiles_out, total_stats, pred_out, target_props_per_molecule
+
+
 def generate_fixed_iterations(
     *,
     model: CVAE,
@@ -678,6 +813,105 @@ def generate_fixed_iterations(
     if len(unique_labels_by_smiles) > 0:
         pred_out = [unique_labels_by_smiles.get(s) for s in smiles_out]
     return mols_out, smiles_out, total_stats, pred_out
+
+
+def generate_fixed_iterations_from_training_dist(
+    *,
+    model: CVAE,
+    charset: np.ndarray,
+    start_codon: np.ndarray,
+    seq_length: int,
+    num_iteration: int,
+    mean: float,
+    stddev: float,
+    batch_size: int,
+    latent_size: int,
+    training_smiles: set,
+    do_sample: bool,
+    temperature: float,
+    top_k: Optional[int],
+    strip_salts: bool,
+    decharge: bool,
+    canonicalize_tautomer: bool,
+    prop_norm_mean: list,
+    prop_norm_std: list,
+    std_scale: float,
+    clip_n_std: Optional[float],
+    rng: Optional[np.random.Generator] = None,
+) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]], list[tuple[float, ...]]]:
+    """Fixed-iteration generation variant using training-distribution conditioning."""
+    if rng is None:
+        rng = np.random.default_rng()
+
+    unique_mols_by_smiles: dict[str, Chem.Mol] = {}
+    unique_labels_by_smiles: dict[str, np.ndarray] = {}
+    unique_targets_by_smiles: dict[str, tuple[float, ...]] = {}
+    seen_smiles: set = set()
+    total_stats = _new_stats()
+
+    for _ in range(int(num_iteration)):
+        target_prop_raw = sample_target_props_like_training(
+            batch_size=int(batch_size),
+            prop_norm_mean=list(prop_norm_mean),
+            prop_norm_std=list(prop_norm_std),
+            std_scale=float(std_scale),
+            clip_n_std=clip_n_std,
+            rng=rng,
+        )
+        target_prop = normalize_like_training(target_prop_raw, prop_norm_mean, prop_norm_std)
+
+        raw, _, pred_labels = _sample_batch_strings(
+            model=model,
+            charset=charset,
+            target_prop=target_prop,
+            start_codon=start_codon,
+            seq_length=int(seq_length),
+            mean=float(mean),
+            stddev=float(stddev),
+            batch_size=int(batch_size),
+            latent_size=int(latent_size),
+            do_sample=bool(do_sample),
+            temperature=float(temperature),
+            top_k=top_k,
+        )
+
+        accepted, inc_stats = _collect_new_unique_from_raw_with_payloads(
+            raw_strings=raw,
+            payload_a=pred_labels,
+            payload_b=target_prop_raw,
+            seen_smiles=seen_smiles,
+            training_smiles=training_smiles,
+            eos_token='E',
+            accept_predicate=None,
+            strip_salts=strip_salts,
+            decharge=decharge,
+            canonicalize_tautomer=canonicalize_tautomer,
+        )
+        _accumulate_stats(total_stats, inc_stats)
+
+        for can, mol, y_pred, y_target_raw in accepted:
+            if can in unique_mols_by_smiles:
+                continue
+            unique_mols_by_smiles[can] = mol
+            if y_pred is not None:
+                unique_labels_by_smiles[can] = np.asarray(y_pred, dtype=np.float32)
+            if y_target_raw is not None:
+                row = tuple(float(v) for v in np.asarray(y_target_raw, dtype=np.float32).reshape(-1).tolist())
+                unique_targets_by_smiles[can] = row
+
+    print(f'number of unique valid molecules : {len(unique_mols_by_smiles)}')
+    _print_quality_stats(total_stats)
+
+    smiles_out = sorted(unique_mols_by_smiles.keys())
+    mols_out = [unique_mols_by_smiles[s] for s in smiles_out]
+
+    pred_out = None
+    if len(unique_labels_by_smiles) > 0:
+        pred_out = [unique_labels_by_smiles.get(s) for s in smiles_out]
+
+    default_row = tuple(float('nan') for _ in range(int(len(prop_norm_mean))))
+    target_props_per_molecule = [unique_targets_by_smiles.get(s, default_row) for s in smiles_out]
+    return mols_out, smiles_out, total_stats, pred_out, target_props_per_molecule
 
 def generate_unique_over_param_sweeps(
     *, # for better readability....
@@ -898,6 +1132,132 @@ def normalize_like_training(
     return (target_prop - mean_arr) / std_arr
 
 
+def sample_target_props_like_training(
+    *,
+    batch_size: int,
+    prop_norm_mean: list,
+    prop_norm_std: list,
+    std_scale: float = 1.0,
+    clip_n_std: Optional[float] = None,
+    rng: Optional[np.random.Generator] = None,
+) -> np.ndarray:
+    """Sample target properties around the training distribution.
+
+    This is useful when you want to generate molecules where the label head is
+    expected to be most accurate: *near the training data manifold*.
+
+    Notes:
+      - We sample in *raw/original* property units using a diagonal Gaussian
+        approximation: N(mean, (std_scale * std)^2).
+      - The returned array is NOT normalized. Use normalize_like_training(...)
+        before feeding it to the model.
+      - If clip_n_std is provided, each dimension is clipped to
+        [mean - clip_n_std*std, mean + clip_n_std*std] to avoid extreme tails.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    mean_arr = np.asarray(prop_norm_mean, dtype=np.float32).reshape(1, -1)
+    std_arr = np.asarray(prop_norm_std, dtype=np.float32).reshape(1, -1)
+    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+
+    bs = int(batch_size)
+    sampled = rng.normal(loc=mean_arr, scale=(float(std_scale) * std_arr), size=(bs, int(mean_arr.shape[1]))).astype(
+        np.float32
+    )
+    if clip_n_std is not None:
+        clip = float(clip_n_std)
+        lo = (mean_arr - (clip * std_arr)).astype(np.float32)
+        hi = (mean_arr + (clip * std_arr)).astype(np.float32)
+        sampled = np.clip(sampled, lo, hi)
+    return sampled
+
+
+def _collect_new_unique_from_raw_with_payloads(
+    *,
+    raw_strings: list[str],
+    payload_a: Optional[np.ndarray],
+    payload_b: Optional[np.ndarray],
+    seen_smiles: set,
+    training_smiles: Optional[set] = None,
+    eos_token: str = 'E',
+    accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
+    strip_salts: bool = True,
+    decharge: bool = True,
+    canonicalize_tautomer: bool = False,
+) -> tuple[list[tuple[str, Chem.Mol, Optional[np.ndarray], Optional[np.ndarray]]], dict]:
+    """Like _collect_new_unique_from_raw_with_payload(), but carries 2 aligned payloads.
+
+    This is used to keep (canonical_smiles, mol) aligned with both:
+      - predicted labels (from latent z), and
+      - the raw target property row used for conditioning.
+    """
+    accepted: list[tuple[str, Chem.Mol, Optional[np.ndarray], Optional[np.ndarray]]] = []
+    stats = {
+        'total_generated': 0,
+        'accepted': 0,
+        'invalid_or_empty': 0,
+        'in_training': 0,
+        'duplicate': 0,
+        'rejected_by_filter': 0,
+        'salt_stripped': 0,
+        'tautomer_canonicalized': 0,
+    }
+
+    if training_smiles is None:
+        training_smiles = set()
+
+    if payload_a is not None and len(payload_a) != len(raw_strings):
+        raise ValueError('payload_a must be None or have same length as raw_strings')
+    if payload_b is not None and len(payload_b) != len(raw_strings):
+        raise ValueError('payload_b must be None or have same length as raw_strings')
+
+    for i, s in enumerate(raw_strings):
+        stats['total_generated'] += 1
+        s = s.split(eos_token)[0].strip()
+        if not s:
+            stats['invalid_or_empty'] += 1
+            continue
+
+        can, mol, can_info = canonicalize_for_filtering(
+            s,
+            strip_salts=strip_salts,
+            decharge=decharge,
+            canonicalize_tautomer=canonicalize_tautomer,
+        )
+        if can is None or mol is None:
+            stats['invalid_or_empty'] += 1
+            continue
+
+        stats['salt_stripped'] += int(can_info.get('salt_stripped', 0))
+        stats['tautomer_canonicalized'] += int(can_info.get('tautomer_canonicalized', 0))
+
+        if can in training_smiles:
+            stats['in_training'] += 1
+            continue
+
+        if can in seen_smiles:
+            stats['duplicate'] += 1
+            continue
+
+        if accept_predicate is not None:
+            try:
+                ok = bool(accept_predicate(can, mol))
+            except Exception:
+                ok = False
+            if not ok:
+                stats['rejected_by_filter'] += 1
+                continue
+
+        seen_smiles.add(can)
+        a_row = None if payload_a is None else payload_a[i]
+        b_row = None if payload_b is None else payload_b[i]
+        accepted.append((can, mol, a_row, b_row))
+        stats['accepted'] += 1
+
+    return accepted, stats
+
+
 def compose_runtime_sample_config(runtime_config: dict) -> dict:
     """Compose nested runtime config into a flat dict used by sampling code."""
     model = runtime_config.get('model', {})
@@ -907,6 +1267,7 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
     cleanup = runtime_config.get('cleanup', {})
     output = runtime_config.get('output', {})
     sweep = runtime_config.get('sweep', {})
+    training_dist = runtime_config.get('training_dist', {})
 
     return {
         'save_file': model.get('save_file', None),
@@ -952,6 +1313,12 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
                 'LogP': [1.0, 3.0, 5.0],
             },
         ),
+        # Optional: sample conditioning targets near the training-property distribution.
+        # This is a 3rd mode in addition to single-target and sweep.
+        'run_training_dist': training_dist.get('enabled', False),
+        'training_dist_std_scale': training_dist.get('std_scale', 1.0),
+        'training_dist_clip_n_std': training_dist.get('clip_n_std', 2.5),
+        'training_dist_seed': training_dist.get('seed', None),
     }
 
 
@@ -1039,6 +1406,19 @@ if __name__ == '__main__':
                 'MW': np.linspace(150.0, 500.0, num=10),
                 'LogP': np.linspace(-4.0, 6.0, num=10),
             },
+        },
+        'training_dist': {
+            # Optional 3rd conditioning mode:
+            # sample target properties from an approximate training-data distribution.
+            # Useful when you want to generate molecules where the label head tends
+            # to be most accurate (near the training manifold).
+            'enabled': False,
+            # Sample: N(mean, (std_scale * std)^2) in raw/original units.
+            'std_scale': 1.0,
+            # Clip each dimension to mean +/- clip_n_std * std.
+            'clip_n_std': 2.5,
+            # Optional fixed seed for reproducibility.
+            'seed': None,
         },
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
@@ -1129,7 +1509,13 @@ if __name__ == '__main__':
     target_prop = np.array([target_row for _ in range(int(model_config['batch_size']))], dtype=np.float32)
 
     # Build additional acceptance filter based on *original* (unnormalized) target_row.
-    accept_predicate = _build_accept_predicate(config=config, target_row=target_row)
+    # NOTE: In training-dist mode (run_training_dist=True), target properties vary per
+    # sample, so we disable this fixed-target predicate.
+    accept_predicate = None
+    if bool(config.get('run_training_dist', False)):
+        print('acceptance constraints: disabled for training-dist mode (targets vary per sample)')
+    else:
+        accept_predicate = _build_accept_predicate(config=config, target_row=target_row)
     if accept_predicate is None:
         print('acceptance constraints: disabled (no extra filtering)')
     else:
@@ -1205,6 +1591,67 @@ if __name__ == '__main__':
             sweep_total_stats,
             scope_label='WHOLE GENERATED SWEEP (all property pairs combined)',
         )
+    elif bool(config.get('run_training_dist', False)):
+        # Sample target properties near training distribution (mean/std from training).
+        if prop_norm_mean is None or prop_norm_std is None:
+            raise ValueError('run_training_dist=True requires prop_norm_mean/std in model_config (saved during training).')
+
+        seed = config.get('training_dist_seed')
+        rng = np.random.default_rng(None if seed is None else int(seed))
+        std_scale = float(config.get('training_dist_std_scale', 1.0))
+        clip_n_std = config.get('training_dist_clip_n_std', 2.5)
+        clip_n_std_val = None if clip_n_std is None else float(clip_n_std)
+
+        run_scope = 'training_dist'
+        if config['num_unique'] is not None:
+            ms, smiles, run_stats, pred_labels, target_props_per_molecule = generate_unique_molecules_from_training_dist(
+                model=model,
+                charset=charset,
+                start_codon=start_codon,
+                seq_length=int(model_config['seq_length']),
+                num_unique=int(config['num_unique']),
+                max_batches=config['max_batches'],
+                mean=float(model_config['mean']),
+                stddev=float(model_config['stddev']),
+                batch_size=int(model_config['batch_size']),
+                latent_size=int(model_config['latent_size']),
+                training_smiles=training_smiles,
+                do_sample=bool(config['do_sample']),
+                temperature=float(config['temperature']),
+                top_k=top_k,
+                strip_salts=bool(config.get('strip_salts', True)),
+                decharge=bool(config.get('decharge', True)),
+                canonicalize_tautomer=bool(config.get('canonicalize_tautomer', False)),
+                prop_norm_mean=list(prop_norm_mean),
+                prop_norm_std=list(prop_norm_std),
+                std_scale=std_scale,
+                clip_n_std=clip_n_std_val,
+                rng=rng,
+            )
+        else:
+            ms, smiles, run_stats, pred_labels, target_props_per_molecule = generate_fixed_iterations_from_training_dist(
+                model=model,
+                charset=charset,
+                start_codon=start_codon,
+                seq_length=int(model_config['seq_length']),
+                num_iteration=int(config['num_iteration']),
+                mean=float(model_config['mean']),
+                stddev=float(model_config['stddev']),
+                batch_size=int(model_config['batch_size']),
+                latent_size=int(model_config['latent_size']),
+                training_smiles=training_smiles,
+                do_sample=bool(config['do_sample']),
+                temperature=float(config['temperature']),
+                top_k=top_k,
+                strip_salts=bool(config.get('strip_salts', True)),
+                decharge=bool(config.get('decharge', True)),
+                canonicalize_tautomer=bool(config.get('canonicalize_tautomer', False)),
+                prop_norm_mean=list(prop_norm_mean),
+                prop_norm_std=list(prop_norm_std),
+                std_scale=std_scale,
+                clip_n_std=clip_n_std_val,
+                rng=rng,
+            )
     elif config['num_unique'] is not None:
         ms, smiles, run_stats, pred_labels = generate_unique_molecules(
             model=model,
@@ -1314,31 +1761,40 @@ if __name__ == '__main__':
         for j in range(int(pred_arr.shape[1])):
             df[f'pred_label_{j}'] = pred_arr[:, j]
 
-        # If the checkpoint contains label target metadata + prop normalization stats,
-        # denormalize the predicted labels so they can be compared to RDKit outputs.
+        # If the checkpoint contains label target metadata, try to expose human-friendly
+        # `pred_<name>` columns.
+        #
+        # IMPORTANT: The label head can be trained either on:
+        #   - normalized targets (same scale as conditioning `c`), or
+        #   - raw/original property values.
+        # We record this as `label_target_scale` in model_config.
         label_target_indices = model_config.get('label_target_indices')
         label_target_names = model_config.get('label_target_names')
+        label_target_scale = str(model_config.get('label_target_scale', 'normalized')).lower()
         prop_norm_mean = model_config.get('prop_norm_mean')
         prop_norm_std = model_config.get('prop_norm_std')
 
-        if (
-            label_target_indices is not None
-            and prop_norm_mean is not None
-            and prop_norm_std is not None
-            and len(label_target_indices) == int(pred_arr.shape[1])
-        ):
+        if label_target_indices is not None and len(label_target_indices) == int(pred_arr.shape[1]):
             idxs = [int(i) for i in label_target_indices]
-            mean_arr = np.asarray(prop_norm_mean, dtype=np.float32)[idxs]
-            std_arr = np.asarray(prop_norm_std, dtype=np.float32)[idxs]
-            std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
-            pred_denorm = (pred_arr * std_arr.reshape(1, -1)) + mean_arr.reshape(1, -1)
 
-            for j in range(int(pred_denorm.shape[1])):
-                if isinstance(label_target_names, list) and len(label_target_names) == int(pred_denorm.shape[1]):
+            pred_out = pred_arr
+            if label_target_scale == 'normalized':
+                # Denormalize only when targets were normalized during training.
+                if prop_norm_mean is None or prop_norm_std is None:
+                    print('WARNING: label_target_scale=normalized but prop_norm_mean/std missing; skipping denorm.')
+                    pred_out = pred_arr
+                else:
+                    mean_arr = np.asarray(prop_norm_mean, dtype=np.float32)[idxs]
+                    std_arr = np.asarray(prop_norm_std, dtype=np.float32)[idxs]
+                    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+                    pred_out = (pred_arr * std_arr.reshape(1, -1)) + mean_arr.reshape(1, -1)
+
+            for j in range(int(pred_out.shape[1])):
+                if isinstance(label_target_names, list) and len(label_target_names) == int(pred_out.shape[1]):
                     col_name = str(label_target_names[j])
                 else:
                     col_name = f'prop_{idxs[j]}'
-                df[f'pred_{col_name}'] = pred_denorm[:, j]
+                df[f'pred_{col_name}'] = pred_out[:, j]
 
             # Convenience comparisons when RDKit descriptor exists.
             if 'pred_LogP' in df.columns and 'LogP' in df.columns:

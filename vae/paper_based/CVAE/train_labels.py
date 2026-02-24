@@ -103,6 +103,16 @@ config = {
         'label_target_indices': [1],  # predict LogP only by default for the MW/LogP setup
         'label_dim': None,  # if None, inferred from property file
         'label_loss_weight': 1.0, # relative weight of label prediction loss compared to reconstruction + KL loss (which are weighted by beta)
+
+        # Optional label-head variants:
+        # If True, the label head predicts from both (z, c) instead of z only.
+        # This can be useful if you want predicted labels to track the sampling
+        # target properties more directly.
+        'include_condition_in_label_head': True,
+
+        # If True, train the label head on *raw* (unnormalized) property values.
+        # If False (default), train it on the normalized conditioning vector.
+        'label_targets_use_raw_scale': False,
     },
     'transformer': {
         'heads': 8,
@@ -110,9 +120,9 @@ config = {
         'dropout': 0.15,
     },
     'optimization': {
-        'optimizer': 'adamw',
-        'lr': 1e-4, # 10e-4, 1e-5 for transformer..
-        'weight_decay': 0.001, # 0.001 for transformer 
+        'optimizer': 'adam', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
+        'lr': 1e-3, # 10e-4, 1e-5 for transformer..
+        'weight_decay': 0.000, # 0.001 for transformer 
         'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
         'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
         'grad_clip_norm': 4.0,
@@ -136,9 +146,9 @@ config = {
         'min_lr': 1e-6,
     },
     'kl': {
-        'enabled': False,
-        'start_beta': 0.1, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
-        'max_beta': 1.0,
+        'enabled': True,
+        'start_beta': 1.0, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
+        'max_beta': 2.0,
         'hold_epochs': 0,
         'warmup_epochs': 8,
     },
@@ -152,7 +162,14 @@ config = {
 predict_labels_cfg = bool(config.get('model', {}).get('predict_labels', False))
 label_target_indices_cfg = config.get('model', {}).get('label_target_indices', None)
 label_dim_cfg = config.get('model', {}).get('label_dim', None)
-label_loss_weight_cfg = float(config.get('model', {}).get('label_loss_weight', 1.0))
+label_loss_weight_cfg = float(
+    config.get('model', {}).get(
+        'label_loss_weight',
+        config.get('model', {}).get('lambda_label', 1.0),
+    )
+)
+include_condition_in_label_head_cfg = bool(config.get('model', {}).get('include_condition_in_label_head', False))
+label_targets_use_raw_scale_cfg = bool(config.get('model', {}).get('label_targets_use_raw_scale', False))
 
 config = compose_train_config_from_dict(config)
 config = apply_training_preset(config)
@@ -239,6 +256,12 @@ train_molecules_output, test_molecules_output = split_train_test(molecules_outpu
 train_labels, test_labels = split_train_test(labels, config['train_ratio'])
 train_length, test_length = split_train_test(length, config['train_ratio'])
 
+# Keep unnormalized properties around if we want the label head to predict in
+# original units (e.g. LogP). Conditioning still uses the normalized vector for
+# numerical stability (especially with Transformer + AMP).
+train_labels_raw = train_labels
+test_labels_raw = test_labels
+
 # Normalize conditioning properties (MW/LogP/etc). Unnormalized properties can be large and
 # are a common cause of fp16 overflow -> NaN loss (especially with Transformer + AMP).
 # this was also done in paper...
@@ -257,7 +280,12 @@ model_config['prop_norm_std'] = prop_std.astype(np.float32).tolist()
 model_config['predict_labels'] = bool(predict_labels)
 model_config['label_dim'] = int(label_dim) if predict_labels else 0
 model_config['label_loss_weight'] = float(label_loss_weight_cfg)
+model_config['include_condition_in_label_head'] = bool(include_condition_in_label_head_cfg)
+model_config['label_target_scale'] = 'raw' if bool(label_targets_use_raw_scale_cfg) else 'normalized'
 if predict_labels:
+    # These are guaranteed to be populated when predict_labels=True.
+    assert label_target_indices is not None
+    assert label_target_names is not None
     model_config['label_target_indices'] = list(label_target_indices)
     model_config['label_target_names'] = list(label_target_names)
 
@@ -291,6 +319,11 @@ history = {
 if predict_labels:
     history['train_label_loss'] = []
     history['test_label_loss'] = []
+    # MAE reported in *raw/original property units* (e.g. LogP units).
+    # This stays interpretable regardless of whether the label head is trained on
+    # normalized or raw targets.
+    history['train_label_mae_raw'] = []
+    history['test_label_mae_raw'] = []
 
 best_test_loss = float('inf')
 best_epoch = -1
@@ -372,11 +405,13 @@ for epoch in range(config['num_epochs']):
     train_grad_norm = [] # gradient norm for stability monitoring (especially important for transformer + amp)
 
     train_label_loss = [] # auxiliary label prediction loss, if enabled
+    train_label_mae_raw = [] # auxiliary label MAE in raw/original units
 
     test_recon = [] # reconstruction loss
     test_kl = [] # KL divergence loss
 
     test_label_loss = [] # auxiliary label prediction loss on test set, if enabled
+    test_label_mae_raw = [] # auxiliary label MAE in raw/original units
 
     beta = get_kl_beta(epoch, config)
 
@@ -391,9 +426,16 @@ for epoch in range(config['num_epochs']):
         l = train_length[batch_idx] # length of each sequence (without padding)
         c = train_labels[batch_idx] # conditioning properties (normalized)
 
-        # If label prediction is enabled, reuse the same vector as prediction target.
-        # (For separate targets, split `train_labels` earlier and use the second part here.)
-        y_label = (c[:, label_target_indices] if predict_labels else None)
+        # Label prediction targets:
+        # - Default: normalized targets (same scale as conditioning `c`).
+        # - Optional: raw targets for interpretability in original units.
+        y_label = None
+        if predict_labels:
+            assert label_target_indices is not None
+            if bool(label_targets_use_raw_scale_cfg):
+                y_label = train_labels_raw[batch_idx][:, label_target_indices]
+            else:
+                y_label = c[:, label_target_indices]
         metrics = model.train_batch(x, y, l, c, y_label=y_label, beta=beta, return_metrics=True)
         # check that metrics is a dict and contains expected keys
         if not isinstance(metrics, dict):
@@ -403,6 +445,26 @@ for epoch in range(config['num_epochs']):
         train_kl.append(metrics['kl_loss'])
         if predict_labels:
             train_label_loss.append(metrics.get('label_loss', 0.0))
+            # Convert per-dim MAE to raw units if the label targets were normalized.
+            # For normalized targets: y_norm = (y_raw - mean) / std
+            # => |y_raw - y_true_raw| = |y_norm - y_true_norm| * std
+            mae_per_dim = metrics.get('label_mae_per_dim')
+            if mae_per_dim is None:
+                # Backward-compatible fallback: use scalar MAE.
+                mae_scalar = float(metrics.get('label_mae', 0.0))
+                if bool(label_targets_use_raw_scale_cfg):
+                    train_label_mae_raw.append(mae_scalar)
+                else:
+                    std_arr = np.asarray(prop_std, dtype=np.float32)[label_target_indices]
+                    train_label_mae_raw.append(float(mae_scalar * float(np.mean(std_arr))))
+            else:
+                mae_vec = np.asarray(mae_per_dim, dtype=np.float32)
+                if bool(label_targets_use_raw_scale_cfg):
+                    train_label_mae_raw.append(float(np.mean(mae_vec)))
+                else:
+                    std_arr = np.asarray(prop_std, dtype=np.float32)[label_target_indices]
+                    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+                    train_label_mae_raw.append(float(np.mean(mae_vec * std_arr)))
         train_mean_abs.append(metrics['mean_abs'])
         train_log_sigma_mean.append(metrics['log_sigma_mean'])
         train_log_sigma_min.append(metrics['log_sigma_min'])
@@ -419,7 +481,13 @@ for epoch in range(config['num_epochs']):
         l = test_length[batch_idx] # length of each sequence (without padding)
         c = test_labels[batch_idx] # conditioning properties (normalized)
 
-        y_label = (c[:, label_target_indices] if predict_labels else None)
+        y_label = None
+        if predict_labels:
+            assert label_target_indices is not None
+            if bool(label_targets_use_raw_scale_cfg):
+                y_label = test_labels_raw[batch_idx][:, label_target_indices]
+            else:
+                y_label = c[:, label_target_indices]
         metrics = model.test_batch(x, y, l, c, y_label=y_label, beta=beta, return_metrics=True)
         if not isinstance(metrics, dict):
             raise TypeError('test_batch(return_metrics=True) must return a metrics dict.')
@@ -428,6 +496,22 @@ for epoch in range(config['num_epochs']):
         test_kl.append(metrics['kl_loss'])
         if predict_labels:
             test_label_loss.append(metrics.get('label_loss', 0.0))
+            mae_per_dim = metrics.get('label_mae_per_dim')
+            if mae_per_dim is None:
+                mae_scalar = float(metrics.get('label_mae', 0.0))
+                if bool(label_targets_use_raw_scale_cfg):
+                    test_label_mae_raw.append(mae_scalar)
+                else:
+                    std_arr = np.asarray(prop_std, dtype=np.float32)[label_target_indices]
+                    test_label_mae_raw.append(float(mae_scalar * float(np.mean(std_arr))))
+            else:
+                mae_vec = np.asarray(mae_per_dim, dtype=np.float32)
+                if bool(label_targets_use_raw_scale_cfg):
+                    test_label_mae_raw.append(float(np.mean(mae_vec)))
+                else:
+                    std_arr = np.asarray(prop_std, dtype=np.float32)[label_target_indices]
+                    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+                    test_label_mae_raw.append(float(np.mean(mae_vec * std_arr)))
     
 
     train_loss = np.mean(np.array(train_loss))
@@ -452,6 +536,8 @@ for epoch in range(config['num_epochs']):
     if predict_labels:
         history['train_label_loss'].append(float(np.mean(np.array(train_label_loss))) if len(train_label_loss) else 0.0)
         history['test_label_loss'].append(float(np.mean(np.array(test_label_loss))) if len(test_label_loss) else 0.0)
+        history['train_label_mae_raw'].append(float(np.mean(np.array(train_label_mae_raw))) if len(train_label_mae_raw) else 0.0)
+        history['test_label_mae_raw'].append(float(np.mean(np.array(test_label_mae_raw))) if len(test_label_mae_raw) else 0.0)
 
     # robust early stopping with:
     # min_delta: least improvment to count as an improvment.
@@ -512,6 +598,9 @@ for epoch in range(config['num_epochs']):
                 f" label_loss(train/test)="
                 f"{np.mean(train_label_loss) if len(train_label_loss) else 0.0:.4f}/"
                 f"{np.mean(test_label_loss) if len(test_label_loss) else 0.0:.4f}"
+                f" label_mae_raw(train/test)="
+                f"{float(np.mean(train_label_mae_raw)) if len(train_label_mae_raw) else 0.0:.4f}/"
+                f"{float(np.mean(test_label_mae_raw)) if len(test_label_mae_raw) else 0.0:.4f}"
             )
         print(
             f"diag epoch={epoch} beta={beta:.3f} "

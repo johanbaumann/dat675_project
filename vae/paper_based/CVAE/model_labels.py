@@ -90,7 +90,12 @@ class CVAE(nn.Module):
         # Defaults are chosen to keep older configs/checkpoints working.
         self.predict_labels = bool(self._get_arg_or_default(args, 'predict_labels', False))
         self.label_dim = int(self._get_arg_or_default(args, 'label_dim', 0))
-        self.label_loss_weight = float(self._get_arg_or_default(args, 'label_loss_weight', 1.0))
+        # Alias: `lambda_label` matches common ELBO notation.
+        # Keep `label_loss_weight` as the canonical key for checkpoint compatibility.
+        if 'label_loss_weight' in args:
+            self.label_loss_weight = float(self._get_arg_or_default(args, 'label_loss_weight', 1.0))
+        else:
+            self.label_loss_weight = float(self._get_arg_or_default(args, 'lambda_label', 1.0))
         self.include_condition_in_label_head = bool(self._get_arg_or_default(args, 'include_condition_in_label_head', False))
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -294,21 +299,30 @@ class CVAE(nn.Module):
 
         return z, mean, log_sigma
 
-    def predict_label(self, z: torch.Tensor) -> torch.Tensor:
-        """
-        
-        Predict labels from latent vector. Label vector has dimensions:
-        'label_dim', which can be set to any positive integer. The specific meaning of the labels is task-dependent
+    def predict_label(self, z: torch.Tensor, c: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Predict auxiliary labels from latent vector (optionally conditioned).
 
-        initial_state is not used for label prediction since it's only based on 'z', which is derived from the encoder output.
-        
+        By default this predicts from `z` only:
+            y_hat = f_label(z)
+
+        If `include_condition_in_label_head=True`, then the label head predicts from
+        the concatenation of the latent vector and the conditioning properties:
+            y_hat = f_label([z, c])
 
         Notes:
-          - Only valid if 'self.predict_labels' is True.
-          - 'z' should have shape (batch, latent_size).
+          - Only valid if `self.predict_labels` is True.
+          - `z` should have shape (batch, latent_size).
+          - If `include_condition_in_label_head=True`, `c` must be provided with
+            shape (batch, num_prop).
         """
         if not self.predict_labels:
             raise RuntimeError('predict_label() called but predict_labels=False')
+
+        if self.include_condition_in_label_head:
+            if c is None:
+                raise RuntimeError('predict_label() requires conditioning `c` when include_condition_in_label_head=True')
+            return self.label_head(torch.cat([z, c], dim=-1))
+
         return self.label_head(z)
 
     def decode(self, x: torch.Tensor, z: torch.Tensor, c: torch.Tensor, initial_state=None, lengths: Optional[torch.Tensor] = None) -> tuple:
@@ -369,7 +383,8 @@ class CVAE(nn.Module):
         probs, logits, _ = self.decode(x, z, c, lengths=l)
 
         if self.predict_labels:
-            y_hat = self.predict_label(z)
+            # If configured, the label head can also use the conditioning vector `c`.
+            y_hat = self.predict_label(z, c=c)
             return probs, logits, z, mean, log_sigma, y_hat
         return probs, logits, z, mean, log_sigma
 
@@ -436,17 +451,27 @@ class CVAE(nn.Module):
         loss = reconstr_loss + (float(beta) * latent_loss)
 
         label_loss = torch.tensor(0.0, device=loss.device)
+        label_mae = torch.tensor(0.0, device=loss.device)
+        label_mae_per_dim: Optional[list[float]] = None
         # label loss computes what label value the model predicts from the latent vector 'z'
         # and compare with true predictor value (e.g LogP) using MSE. 
         if self.predict_labels and (y_true is not None):
             label_loss = self._label_loss(y_hat, y_true)
             loss = loss + (self.label_loss_weight * label_loss)
+            # Also compute MAE in the *training target scale* (raw or normalized).
+            # Raw-units MAE is derived in train_labels.py based on saved prop_std.
+            abs_err = torch.abs(y_hat.float() - y_true.float())
+            label_mae_per_dim_t = abs_err.mean(dim=0)
+            label_mae = label_mae_per_dim_t.mean()
+            label_mae_per_dim = [float(v.detach().item()) for v in label_mae_per_dim_t]
 
         mol_pred = torch.argmax(probs, dim=2)
         stats = {
             'recon_loss': float(reconstr_loss.detach().item()),
             'kl_loss': float(latent_loss.detach().item()),
             'label_loss': float(label_loss.detach().item()),
+            'label_mae': float(label_mae.detach().item()),
+            'label_mae_per_dim': label_mae_per_dim,
             'mean_abs': float(mean.detach().abs().mean().item()),
             'log_sigma_mean': float(log_sigma.detach().mean().item()),
             'log_sigma_min': float(log_sigma.detach().min().item()),
