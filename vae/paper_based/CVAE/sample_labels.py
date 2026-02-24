@@ -598,7 +598,8 @@ if __name__ == '__main__':
             'save_file': None,
             #'run_dir': 'save/huge_generation_lstm',
             #'run_dir': 'save/run_20260223_131822',
-            'run_dir': 'save/run_20260224_112850',
+            #'run_dir': 'save/run_20260224_112850',
+            'run_dir': 'save/run_20260224_160237',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },

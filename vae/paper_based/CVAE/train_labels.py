@@ -67,7 +67,7 @@ config = {
         # If True, the label head predicts from both (z, c) instead of z only.
         # This can be useful if you want predicted labels to track the sampling
         # target properties more directly.
-        'include_condition_in_label_head': True,
+        'include_condition_in_label_head': False,
 
         # If True, train the label head on *raw* (unnormalized) property values.
         # If False (default), train it on the normalized conditioning vector.
@@ -79,9 +79,9 @@ config = {
         'dropout': 0.15,
     },
     'optimization': {
-        'optimizer': 'adam', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
-        'lr': 1e-3, # 10e-4, 1e-5 for transformer..
-        'weight_decay': 0.000, # 0.001 for transformer 
+        'optimizer': 'adamw', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
+        'lr': 1e-4, # 10e-4, 1e-5 for transformer..
+        'weight_decay': 0.001, # 0.001 for transformer 
         'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
         'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
         'grad_clip_norm': 4.0,
@@ -107,7 +107,7 @@ config = {
     'kl': {
         'enabled': True,
         'start_beta': 1.0, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
-        'max_beta': 2.0,
+        'max_beta': 4.0,
         'hold_epochs': 0,
         'warmup_epochs': 8,
     },
