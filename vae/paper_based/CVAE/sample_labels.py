@@ -597,7 +597,8 @@ if __name__ == '__main__':
             # If save_file is provided, it takes precedence over run_dir.
             'save_file': None,
             #'run_dir': 'save/huge_generation_lstm',
-            'run_dir': 'save/run_20260223_131822',
+            #'run_dir': 'save/run_20260223_131822',
+            'run_dir': 'save/run_20260224_112850',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
@@ -614,9 +615,9 @@ if __name__ == '__main__':
         },
         'sampling': {
             # Sampling controls. Greedy decoding (do_sample=False) 
-            'do_sample': False,
+            'do_sample': True,
             # Sweep for this checkpoint suggests ~temperature=0.6, top_k=20 gives much higher unique+novel acceptance.
-            'temperature': 0.6, # higher temperature -> more random, lower temperature -> more valid, less diverse
+            'temperature': 0.8, # higher temperature -> more random, lower temperature -> more valid, less diverse
             'top_k': 20, # limits sampling to the top_k most probable tokens at each step. Can help improve validity at low temperatures.
         },
         'filters': {
@@ -663,13 +664,13 @@ if __name__ == '__main__':
         },
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
-            'result_filename': 'label_CVAE_transformer_300k_test.txt',
+            'result_filename': 'temp_100k_test.txt',
             # If None, defaults to result filename stem + '.pckl.gz'.
             'molecules_pickle_filename': None,
             # If None, defaults to result filename stem + '_quality_summary.csv'.
             'quality_summary_filename': None,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
-            'sweep_stats_filename': 'label_CVAE_transformer_300k_test.csv',
+            'sweep_stats_filename': 'temp_100k_test.csv',
             
         },
     }
