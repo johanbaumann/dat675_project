@@ -44,10 +44,10 @@ config = {
         'train_ratio': 0.75,
     },
     'model': {
-        'mode': 'lstm',  # 'lstm' or 'transformer'
+        'mode': 'transformer',  # 'lstm' or 'transformer'
         'latent_size': 200,
         'unit_size': 512,
-        'n_rnn_layer': 3, # 2 layers for transformers, 3 for lstm (memory constraints...)
+        'n_rnn_layer': 2, # 2 layers for transformers, 3 for lstm (memory constraints...)
         'mean': 0.0,
         'stddev': 1.0,
         'num_prop': None,  # inferred from property file
@@ -80,15 +80,15 @@ config = {
     },
     'optimization': {
         'optimizer': 'adamw', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
-        'lr': 1e-4, # 10e-4, 1e-5 for transformer..
+        'lr': 1e-5, # 10e-4, 1e-5 for transformer..
         'weight_decay': 0.001, # 0.001 for transformer 
         'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
         'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
         'grad_clip_norm': 4.0,
     },
     'training': {
-        'batch_size': 128, # 64 for transformer... 128 for lstm
-        'num_epochs': 100, # transformer need more
+        'batch_size': 64, # 64 for transformer... 128 for lstm
+        'num_epochs': 200, # transformer need more
         'save_dir': 'save/',
         'run_name': None,  # If None, auto-generated timestamped run folder is used.
         'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
@@ -101,7 +101,7 @@ config = {
         'enabled': True,
         'factor': 0.5,
         'patience': 2,
-        'threshold': 1e-3,
+        'threshold': 1e-3, # minimum change in the monitored quantity to qualify as an improvement (for 'min' mode).
         'min_lr': 1e-6,
     },
     'kl': {
