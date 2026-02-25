@@ -244,7 +244,7 @@ def generate_unique_molecules_from_training_dist(
             canonicalize_tautomer=canonicalize_tautomer,
         )
         _accumulate_stats(total_stats, inc_stats)
-
+        # can is the canonical smiles string.
         for can, mol, y_pred, y_target_raw in accepted:
             if can in unique_mols_by_smiles:
                 continue
