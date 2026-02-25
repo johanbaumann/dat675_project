@@ -10,7 +10,8 @@ All notable changes to this project are documented in this file.
 - `model_labels.py`: Fixed a wiring bug where `include_condition_in_label_head=True` built a `(z, c)` label head but prediction still used `z` only.
 - `sample.py`: Default decoding is stochastic again (`do_sample=True`). During Transformer refactors the default was set to greedy decoding, which commonly collapses to a single repeated molecule ("not unique") and can also reduce validity.
 - `sample.py` / `utils.py`: Novelty and duplicate checks now use the same canonicalization pipeline for both generated molecules and training-set molecules, avoiding mismatches from inconsistent canonical forms.
-- `sample.py`: Generated molecule artifacts are now saved as compressed pickle (`.pckl.gz`) to avoid very large plain-text intermediate payloads.
+- `utils.py`: Cleanup/standardization during filtering is now strict: if a requested cleanup step (salt stripping / uncharging / tautomer canonicalization) fails, the molecule is discarded instead of silently passing.
+- `sample.py` / `sample_labels.py` / `utils_labels.py`: Cleanup-step failures are now counted explicitly as `discarded_cleanup` (instead of being lumped into `invalid_or_empty`), and quality summaries include the corresponding count and rate.
 - `sample.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup no longer calls full `load_data(...)` just to get charset/vocab/num_prop. Scripts now use a lightweight metadata loader with cache, avoiding long startup stalls on very large property files.
 
 ### Added
@@ -32,8 +33,10 @@ All notable changes to this project are documented in this file.
 - `sample.py`: Sampling now also persists a run-level quality summary CSV (default: `<result_filename>_quality_summary.csv`) containing aggregated V/U/N/Acceptance plus detailed not-ok breakdown counters and rates (`not_ok_count/rate`, `invalid_or_empty_rate`, `in_training_rate`, `duplicate_rate`, `rejected_by_filter_rate`) so sweep-level totals no longer need to be recomputed from per-pair rows.
 - `sample.py`: Added explicit runtime canonicalization logging and counters in quality stats (`salt_stripped`, `tautomer_canonicalized`).
 - `utils.py`: Added robust canonicalization helper for filtering/novelty (`canonicalize_for_filtering(...)`) with configurable salt stripping, decharge, and optional tautomer canonicalization.
-- `utils.py`: Added reusable compressed persistence helpers `save_pickle_gz(...)` and `load_pickle_gz(...)` for storing/loading large generated molecule payloads.
+- `utils.py`: Added persistence helpers: uncompressed `save_pickle(...)` / `load_pickle(...)` for optional outputs, and gzip-pickle helpers (`save_pickle_gz(...)` / `load_pickle_gz(...)`) reserved for internal caches.
 - `utils.py`: Added `load_sampling_metadata(...)` for fast, cached extraction of charset/vocab/num_prop from large property files without constructing full training tensors.
+
+- `sample.py` / `sample_labels.py`: Optional molecule artifact outputs now use plain pickle (`.pkl`) instead of gzip pickles. Gzip pickles remain in use for internal caches only.
 
 ### Changed
 

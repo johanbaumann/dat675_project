@@ -17,7 +17,7 @@ from utils import (
     load_checkpoint_model_config,
     load_json,
     resolve_checkpoint_path,
-    save_pickle_gz,
+    save_pickle,
     load_training_canonical_smiles,
 )
 
@@ -30,7 +30,6 @@ from utils_labels import (
     _collect_new_unique_from_raw_with_payloads,
     _compute_quality_metrics,
     _compute_rdkit_descriptors,
-    _default_pickle_output_path,
     _default_prop_names,
     _default_quality_summary_output_path,
     _model_supports_label_prediction,
@@ -71,6 +70,7 @@ def generate_unique_molecules(
     decharge: bool,
     canonicalize_tautomer: bool,
     accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
+    require_neutral: bool = False,
 ) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]]]:
     """Generate molecules until `num_unique` unique valid molecules are collected."""
     if num_unique <= 0:
@@ -115,6 +115,7 @@ def generate_unique_molecules(
             training_smiles=training_smiles,
             eos_token='E',
             accept_predicate=accept_predicate,
+            require_neutral=bool(require_neutral),
             strip_salts=strip_salts,
             decharge=decharge,
             canonicalize_tautomer=canonicalize_tautomer,
@@ -134,7 +135,7 @@ def generate_unique_molecules(
                 f"after {batches} batches ({total_trials} trials)"
             )
             print(
-                f"  batch quality -> accepted: {batch_stats['accepted']}, invalid_or_empty: {batch_stats['invalid_or_empty']}, "
+                f"  batch quality -> accepted: {batch_stats['accepted']}, invalid_or_empty: {batch_stats['invalid_or_empty']}, discarded_cleanup: {int(batch_stats.get('discarded_cleanup', 0))}, "
                 f"in_training: {batch_stats['in_training']}, duplicate: {batch_stats['duplicate']}, rejected_by_filter: {batch_stats.get('rejected_by_filter', 0)}, "
                 f"salt_stripped: {batch_stats.get('salt_stripped', 0)}, tautomer_canonicalized: {batch_stats.get('tautomer_canonicalized', 0)}"
             )
@@ -173,6 +174,7 @@ def generate_unique_molecules_from_training_dist(
     prop_norm_std: list,
     std_scale: float,
     clip_n_std: Optional[float],
+    require_neutral: bool = False,
     rng: Optional[np.random.Generator] = None,
 ) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]], list[tuple[float, ...]]]:
     """Generate unique molecules while sampling target properties near training data.
@@ -239,6 +241,7 @@ def generate_unique_molecules_from_training_dist(
             training_smiles=training_smiles,
             eos_token='E',
             accept_predicate=None,
+            require_neutral=bool(require_neutral),
             strip_salts=strip_salts,
             decharge=decharge,
             canonicalize_tautomer=canonicalize_tautomer,
@@ -292,6 +295,7 @@ def generate_fixed_iterations(
     decharge: bool,
     canonicalize_tautomer: bool,
     accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
+    require_neutral: bool = False,
 ) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]]]:
     """Old behavior: run for a fixed number of iterations, then deduplicate."""
     unique_mols_by_smiles: dict[str, Chem.Mol] = {}
@@ -324,6 +328,7 @@ def generate_fixed_iterations(
             training_smiles=training_smiles,
             eos_token='E',
             accept_predicate=accept_predicate,
+            require_neutral=bool(require_neutral),
             strip_salts=strip_salts,
             decharge=decharge,
             canonicalize_tautomer=canonicalize_tautomer,
@@ -370,6 +375,7 @@ def generate_fixed_iterations_from_training_dist(
     prop_norm_std: list,
     std_scale: float,
     clip_n_std: Optional[float],
+    require_neutral: bool = False,
     rng: Optional[np.random.Generator] = None,
 ) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]], list[tuple[float, ...]]]:
     """Fixed-iteration generation variant using training-distribution conditioning."""
@@ -416,6 +422,7 @@ def generate_fixed_iterations_from_training_dist(
             training_smiles=training_smiles,
             eos_token='E',
             accept_predicate=None,
+            require_neutral=bool(require_neutral),
             strip_salts=strip_salts,
             decharge=decharge,
             canonicalize_tautomer=canonicalize_tautomer,
@@ -538,6 +545,7 @@ def generate_unique_over_param_sweeps(
             decharge=bool(config.get('decharge', True)),
             canonicalize_tautomer=bool(config.get('canonicalize_tautomer', False)),
             accept_predicate=accept_predicate,
+            require_neutral=bool(config.get('require_neutral', False)),
         )
         metrics = _compute_quality_metrics(stats)
 
@@ -550,6 +558,7 @@ def generate_unique_over_param_sweeps(
             'total_generated': int(stats['total_generated']),
             'accepted': int(stats['accepted']),
             'invalid_or_empty': int(stats['invalid_or_empty']),
+            'discarded_cleanup': int(stats.get('discarded_cleanup', 0)),
             'in_training': int(stats['in_training']),
             'duplicate': int(stats['duplicate']),
             'rejected_by_filter': int(stats.get('rejected_by_filter', 0)),
@@ -607,7 +616,7 @@ if __name__ == '__main__':
         'generation': {
             'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
-            'num_unique': 300_000,#3_000,  # 30k unique molecules for each sweep point.
+            'num_unique': 1000,#300_000,#3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
             'target_prop': '300.0 3.0',
             'prop_file': None,
@@ -632,6 +641,8 @@ if __name__ == '__main__':
             'min_tpsa': None,
             # Hard caps (optional) to prevent very large molecules due to halogen-heavy strings.
             'max_heavy_atoms': 60,
+            # If True, reject any molecule that still has a non-zero formal charge after cleanup.
+            'require_neutral': True,
             # Canonical SMILES can be longer than seq_length because RDKit may insert brackets.
             'max_canonical_smiles_len': None,
             # If True, molecules already present in training/property file are rejected.
@@ -642,7 +653,7 @@ if __name__ == '__main__':
             # Fast default: parse + canonical SMILES + decharge; tautomer optional.
             'strip_salts': True,
             'decharge': True,
-            'canonicalize_tautomer': False,
+            'canonicalize_tautomer': True,
         },
         'sweep': {
             'enabled': False,
@@ -666,13 +677,15 @@ if __name__ == '__main__':
         },
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
-            'result_filename': 'train_dist_temp_transformer_300k_test.txt',
-            # If None, defaults to result filename stem + '.pckl.gz'.
+            #'result_filename': 'train_dist_temp_transformer_300k_test.txt',
+            'result_filename': 'tiny_test.txt',
+            # Optional: if set, save generated molecules to this `.pkl` file.
             'molecules_pickle_filename': None,
             # If None, defaults to result filename stem + '_quality_summary.csv'.
             'quality_summary_filename': None,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
-            'sweep_stats_filename': 'train_dist_temp_transformer_300k_test.csv',
+            #'sweep_stats_filename': 'train_dist_temp_transformer_300k_test.csv',
+            'sweep_stats_filename': 'tiny_test.csv',
             
         },
     }
@@ -767,8 +780,13 @@ if __name__ == '__main__':
             'acceptance constraints: '
             f"mw_tol={config.get('mw_tolerance')} logp_tol={config.get('logp_tolerance')} "
             f"min_tpsa={config.get('min_tpsa')} max_heavy_atoms={config.get('max_heavy_atoms')} "
-            f"max_canonical_smiles_len={config.get('max_canonical_smiles_len')}"
+            f"max_canonical_smiles_len={config.get('max_canonical_smiles_len')} "
+            f"require_neutral={config.get('require_neutral')}"
         )
+    if bool(config.get('require_neutral', False)):
+        print('neutrality filter: enabled (reject non-zero formal charge)')
+    else:
+        print('neutrality filter: disabled')
     print(
         'canonicalization options: '
         f"strip_salts={bool(config.get('strip_salts', True))} "
@@ -821,7 +839,7 @@ if __name__ == '__main__':
 
         heatmap_cols = [
             col for col in ['MW', 'LogP', 'validity', 'uniqueness', 'novelty', 'acceptance_rate',
-                            'total_generated', 'accepted', 'invalid_or_empty', 'in_training',
+                            'total_generated', 'accepted', 'invalid_or_empty', 'discarded_cleanup', 'in_training',
                             'duplicate', 'rejected_by_filter', 'salt_stripped', 'tautomer_canonicalized']
             if col in sweep_results.columns
         ]
@@ -870,6 +888,7 @@ if __name__ == '__main__':
                 prop_norm_std=list(prop_norm_std),
                 std_scale=std_scale,
                 clip_n_std=clip_n_std_val,
+                require_neutral=bool(config.get('require_neutral', False)),
                 rng=rng,
             )
         else:
@@ -894,6 +913,7 @@ if __name__ == '__main__':
                 prop_norm_std=list(prop_norm_std),
                 std_scale=std_scale,
                 clip_n_std=clip_n_std_val,
+                require_neutral=bool(config.get('require_neutral', False)),
                 rng=rng,
             )
     elif config['num_unique'] is not None:
@@ -917,6 +937,7 @@ if __name__ == '__main__':
             decharge=bool(config.get('decharge', True)),
             canonicalize_tautomer=bool(config.get('canonicalize_tautomer', False)),
             accept_predicate=accept_predicate,
+            require_neutral=bool(config.get('require_neutral', False)),
         )
     else:
         ms, smiles, run_stats, pred_labels = generate_fixed_iterations(
@@ -938,20 +959,16 @@ if __name__ == '__main__':
             decharge=bool(config.get('decharge', True)),
             canonicalize_tautomer=bool(config.get('canonicalize_tautomer', False)),
             accept_predicate=accept_predicate,
+            require_neutral=bool(config.get('require_neutral', False)),
         )
 
     print('number of valid smiles : ', len(ms))
 
-    # Save generated molecules in compressed binary form to reduce output size.
+    # Optional: save generated molecules as an uncompressed pickle payload.
     molecules_pickle_filename = config.get('molecules_pickle_filename')
-    if molecules_pickle_filename is None:
-        # do not save!
-    
-        #molecules_pickle_filename = _default_pickle_output_path(config['result_filename'])
-        print('no pickle path, not saving compressed mols')
-    if molecules_pickle_filename is not None:
-        save_pickle_gz(
-            molecules_pickle_filename,
+    if molecules_pickle_filename:
+        save_pickle(
+            str(molecules_pickle_filename),
             {
                 'smiles': smiles,
                 'molecules': ms,
@@ -960,7 +977,9 @@ if __name__ == '__main__':
                 'saved_at_unix': t.time(),
             },
         )
-        print(f'saved compressed molecules: {molecules_pickle_filename}')
+        print(f'saved molecules pickle: {molecules_pickle_filename}')
+    else:
+        print('no pickle path, not saving molecule pickle')
 
     quality_summary_filename = _save_quality_summary_csv(
         stats=run_stats,

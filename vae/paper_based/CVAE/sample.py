@@ -24,7 +24,7 @@ from utils import (
     load_checkpoint_model_config,
     load_json,
     resolve_checkpoint_path,
-    save_pickle_gz,
+    save_pickle,
     load_training_canonical_smiles,
 )
 
@@ -71,6 +71,7 @@ def _new_stats() -> dict:
         'total_generated': 0,
         'accepted': 0,
         'invalid_or_empty': 0,
+        'discarded_cleanup': 0,
         'in_training': 0,
         'duplicate': 0,
         'rejected_by_filter': 0,
@@ -90,6 +91,7 @@ def _compute_quality_metrics(
 ) -> dict:
     total_generated = int(stats.get('total_generated', 0))
     invalid_or_empty = int(stats.get('invalid_or_empty', 0))
+    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
     in_training = int(stats.get('in_training', 0))
     duplicate = int(stats.get('duplicate', 0))
     accepted = int(stats.get('accepted', 0))
@@ -107,6 +109,7 @@ def _compute_quality_metrics(
             'novel_count': 0,
             'unique_count': 0,
             'rejected_by_filter': rejected_by_filter,
+            'discarded_cleanup': discarded_cleanup,
             'salt_stripped': salt_stripped,
             'tautomer_canonicalized': tautomer_canonicalized,
         }
@@ -118,7 +121,7 @@ def _compute_quality_metrics(
                     metrics[metric_name] = np.nan
         return metrics
 
-    valid_count = total_generated - invalid_or_empty
+    valid_count = total_generated - invalid_or_empty - discarded_cleanup
     unique_count = total_generated - duplicate
     novel_count = total_generated - in_training
 
@@ -131,6 +134,7 @@ def _compute_quality_metrics(
         'novel_count': int(novel_count),
         'unique_count': int(unique_count),
         'rejected_by_filter': rejected_by_filter,
+        'discarded_cleanup': discarded_cleanup,
         'salt_stripped': salt_stripped,
         'tautomer_canonicalized': tautomer_canonicalized,
     }
@@ -185,6 +189,7 @@ def _print_quality_stats(
     total_generated = int(stats['total_generated'])
     accepted = int(stats['accepted'])
     invalid_or_empty = int(stats['invalid_or_empty'])
+    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
     in_training = int(stats['in_training'])
     duplicate = int(stats['duplicate'])
 
@@ -199,7 +204,7 @@ def _print_quality_stats(
 
     print(80*'=')
     print('Detailed quality stats:')
-    not_ok = invalid_or_empty + in_training + duplicate
+    not_ok = invalid_or_empty + discarded_cleanup + in_training + duplicate
     not_ok_share = (float(not_ok) / float(total_generated)) if total_generated > 0 else 0.0
     rejected_by_filter = int(stats.get('rejected_by_filter', 0))
     salt_stripped = int(stats.get('salt_stripped', 0))
@@ -210,24 +215,20 @@ def _print_quality_stats(
     print(f'not ok molecules: {not_ok} ({not_ok_share:.2%})')
     print(
         f'not ok breakdown -> invalid_or_empty: {invalid_or_empty}, '
+        f'discarded_cleanup: {discarded_cleanup}, '
         f'in_training: {in_training}, duplicate: {duplicate}'
     )
 
     if rejected_by_filter:
         print(f'additional rejected_by_filter: {rejected_by_filter}')
+    if discarded_cleanup:
+        print(f'additional discarded_cleanup: {discarded_cleanup}')
     if salt_stripped:
         print(f'additional salt_stripped: {salt_stripped}')
     if tautomer_canonicalized:
         print(f'additional tautomer_canonicalized: {tautomer_canonicalized}')
     print(80*'=')
     print('\n \n')
-
-
-
-def _default_pickle_output_path(result_filename: str) -> str:
-    """Build default compressed molecule filename next to CSV output."""
-    root, _ = os.path.splitext(str(result_filename))
-    return f'{root}.pckl.gz'
 
 
 def _default_quality_summary_output_path(result_filename: str) -> str:
@@ -247,13 +248,30 @@ def _build_quality_summary_row(
     total_generated = int(stats.get('total_generated', 0))
     accepted = int(stats.get('accepted', 0))
     invalid_or_empty = int(stats.get('invalid_or_empty', 0))
+    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
     in_training = int(stats.get('in_training', 0))
     duplicate = int(stats.get('duplicate', 0))
     rejected_by_filter = int(stats.get('rejected_by_filter', 0))
     salt_stripped = int(stats.get('salt_stripped', 0))
     tautomer_canonicalized = int(stats.get('tautomer_canonicalized', 0))
 
-    not_ok_count = invalid_or_empty + in_training + duplicate
+    not_ok_count = invalid_or_empty + discarded_cleanup + in_training + duplicate
+
+    def _int_or_nan(x) -> float:
+        if x is None:
+            return float('nan')
+        if isinstance(x, (bool,)):
+            return float(int(x))
+        if isinstance(x, (int, np.integer)):
+            return float(int(x))
+        if isinstance(x, (float, np.floating)):
+            return float(int(x))
+        if isinstance(x, str) and x.strip() != '':
+            try:
+                return float(int(float(x)))
+            except Exception:
+                return float('nan')
+        return float('nan')
 
     def _ratio(x: int) -> float:
         if total_generated <= 0:
@@ -265,14 +283,15 @@ def _build_quality_summary_row(
         'run_scope': str(run_scope),
         'run_property_sweep': bool(config.get('run_property_sweep', False)),
         'num_molecules_saved': int(num_molecules_saved),
-        'num_unique_requested': int(config.get('num_unique')) if config.get('num_unique') is not None else np.nan,
-        'max_batches': int(config.get('max_batches')) if config.get('max_batches') is not None else np.nan,
+        'num_unique_requested': _int_or_nan(config.get('num_unique')),
+        'max_batches': _int_or_nan(config.get('max_batches')),
         'do_sample': bool(config.get('do_sample', True)),
         'temperature': float(config.get('temperature', 1.0)),
-        'top_k': int(config.get('top_k')) if config.get('top_k') is not None else np.nan,
+        'top_k': _int_or_nan(config.get('top_k')),
         'total_generated': total_generated,
         'accepted': accepted,
         'invalid_or_empty': invalid_or_empty,
+        'discarded_cleanup': discarded_cleanup,
         'in_training': in_training,
         'duplicate': duplicate,
         'rejected_by_filter': rejected_by_filter,
@@ -285,6 +304,7 @@ def _build_quality_summary_row(
         'acceptance_rate': float(metrics['acceptance_rate']),
         'not_ok_rate': _ratio(not_ok_count),
         'invalid_or_empty_rate': _ratio(invalid_or_empty),
+        'discarded_cleanup_rate': _ratio(discarded_cleanup),
         'in_training_rate': _ratio(in_training),
         'duplicate_rate': _ratio(duplicate),
         'rejected_by_filter_rate': _ratio(rejected_by_filter),
@@ -430,7 +450,7 @@ def generate_unique_molecules(
                 f"after {batches} batches ({total_trials} trials)"
             )
             print(
-                f"  batch quality -> accepted: {batch_stats['accepted']}, invalid_or_empty: {batch_stats['invalid_or_empty']}, "
+                f"  batch quality -> accepted: {batch_stats['accepted']}, invalid_or_empty: {batch_stats['invalid_or_empty']}, discarded_cleanup: {int(batch_stats.get('discarded_cleanup', 0))}, "
                 f"in_training: {batch_stats['in_training']}, duplicate: {batch_stats['duplicate']}, rejected_by_filter: {batch_stats.get('rejected_by_filter', 0)}, "
                 f"salt_stripped: {batch_stats.get('salt_stripped', 0)}, tautomer_canonicalized: {batch_stats.get('tautomer_canonicalized', 0)}"
             )
@@ -800,7 +820,7 @@ if __name__ == '__main__':
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
             'result_filename': 'CVAE_transformer_300k_test.txt',
-            # If None, defaults to result filename stem + '.pckl.gz'.
+            # Optional: if set, save generated molecules to this `.pkl` file.
             'molecules_pickle_filename': None,
             # If None, defaults to result filename stem + '_quality_summary.csv'.
             'quality_summary_filename': None,
@@ -1002,16 +1022,11 @@ if __name__ == '__main__':
 
     print('number of valid smiles : ', len(ms))
 
-    # Save generated molecules in compressed binary form to reduce output size.
+    # Optional: save generated molecules as an uncompressed pickle payload.
     molecules_pickle_filename = config.get('molecules_pickle_filename')
-    if molecules_pickle_filename is None:
-        # do not save!
-    
-        #molecules_pickle_filename = _default_pickle_output_path(config['result_filename'])
-        print('no pickle path, not saving compressed mols')
-    if molecules_pickle_filename is not None:
-        save_pickle_gz(
-            molecules_pickle_filename,
+    if molecules_pickle_filename:
+        save_pickle(
+            str(molecules_pickle_filename),
             {
                 'smiles': smiles,
                 'molecules': ms,
@@ -1019,7 +1034,9 @@ if __name__ == '__main__':
                 'saved_at_unix': t.time(),
             },
         )
-        print(f'saved compressed molecules: {molecules_pickle_filename}')
+        print(f'saved molecules pickle: {molecules_pickle_filename}')
+    else:
+        print('no pickle path, not saving molecule pickle')
 
     quality_summary_filename = _save_quality_summary_csv(
         stats=run_stats,

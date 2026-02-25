@@ -64,6 +64,7 @@ TRAIN_CONFIG_DEFAULTS = {
 # Build standardization tools once (best effort).
 _UNCHARGER = None
 _TAUTOMER_ENUM = None
+_LARGEST_FRAGMENT_CHOOSER = None
 if rdMolStandardize is not None:
     try:
         _UNCHARGER = rdMolStandardize.Uncharger()
@@ -73,20 +74,164 @@ if rdMolStandardize is not None:
         _TAUTOMER_ENUM = rdMolStandardize.TautomerEnumerator()
     except Exception:
         _TAUTOMER_ENUM = None
+    try:
+        _LARGEST_FRAGMENT_CHOOSER = rdMolStandardize.LargestFragmentChooser()
+    except Exception:
+        _LARGEST_FRAGMENT_CHOOSER = None
 
 
 def _largest_fragment(mol:Chem.Mol) -> tuple[Chem.Mol, bool]:
-    """Keep the largest fragment (salt stripping) and report if stripping happened."""
+    """Keep the largest fragment (salt stripping).
+
+    Returns:
+      (mol_out, stripped) where `stripped` indicates whether a multi-fragment
+      input was reduced to a single parent fragment.
+    """
     try:
         frags = Chem.GetMolFrags(mol, asMols=True)
-    except Exception:
-        return mol, False
+    except Exception as e:
+        raise ValueError('Failed to get molecule fragments for salt stripping.') from e
 
-    if not frags or len(frags) <= 1:
+    if not frags:
+        raise ValueError('No fragments found for molecule during salt stripping.')
+
+    if len(frags) <= 1:
         return mol, False
 
     best = max(frags, key=lambda m: int(m.GetNumHeavyAtoms()))
     return best, True
+
+
+def _standardize_mol(
+    mol: Chem.Mol,
+    *,
+    strip_salts: bool,
+    decharge: bool,
+    canonicalize_tautomer: bool,
+) -> tuple[Chem.Mol, dict]:
+    """DEPRECATED: kept for backward compatibility.
+
+    Use `clean_mol(...)` instead.
+    """
+    smi, out, info = clean_mol(
+        mol,
+        strip_salts=strip_salts,
+        decharge=decharge,
+        canonicalize_tautomer=canonicalize_tautomer,
+        canonical=True,
+    )
+    if out is None:
+        raise ValueError('Standardization failed')
+    return out, info
+
+
+def clean_mol(
+    mol: Chem.Mol,
+    *,
+    strip_salts: bool = True,
+    decharge: bool = True,
+    canonicalize_tautomer: bool = False,
+    canonical: bool = True,
+) -> tuple[Optional[str], Optional[Chem.Mol], dict]:
+    """Clean a molecule with a small, predictable pipeline.
+
+    Steps (skips disabled ones):
+    - sanitize
+    - keep largest fragment (salt stripping)
+    - uncharge (neutralize)
+    - (optional) tautomer canonicalize
+    - re-sanitize and emit SMILES
+
+    Strict behavior: if an enabled step fails, returns (None, None, info).
+    """
+    info = {'salt_stripped': 0, 'tautomer_canonicalized': 0, 'cleanup_failed': 0}
+    if mol is None:
+        return None, None, info
+
+    def _fail() -> tuple[None, None, dict]:
+        info['cleanup_failed'] = 1
+        return None, None, info
+
+    try:
+        Chem.SanitizeMol(mol)
+    except Exception:
+        return _fail()
+
+    if strip_salts:
+        try:
+            before = len(Chem.GetMolFrags(mol))
+        except Exception:
+            before = None
+
+        try:
+            if _LARGEST_FRAGMENT_CHOOSER is not None:
+                mol = _LARGEST_FRAGMENT_CHOOSER.choose(mol)
+            else:
+                mol, _ = _largest_fragment(mol)
+        except Exception:
+            return _fail()
+
+        if before is not None:
+            info['salt_stripped'] = int(before > 1)
+
+    if decharge:
+        if _UNCHARGER is None:
+            return _fail()
+        try:
+            mol = _UNCHARGER.uncharge(mol)
+        except Exception:
+            return _fail()
+
+    if canonicalize_tautomer:
+        if _TAUTOMER_ENUM is None:
+            return _fail()
+        try:
+            before = Chem.MolToSmiles(mol, canonical=True)
+            mol = _TAUTOMER_ENUM.Canonicalize(mol)
+            after = Chem.MolToSmiles(mol, canonical=True)
+            info['tautomer_canonicalized'] = int(before != after)
+        except Exception:
+            return _fail()
+
+    try:
+        Chem.SanitizeMol(mol)
+    except Exception:
+        return _fail()
+
+    try:
+        smi = Chem.MolToSmiles(mol, canonical=bool(canonical))
+    except Exception:
+        return _fail()
+    if not smi:
+        return _fail()
+    return smi, mol, info
+
+
+def clean_smiles(
+    smiles: str,
+    *,
+    strip_salts: bool = True,
+    decharge: bool = True,
+    canonicalize_tautomer: bool = False,
+    canonical: bool = True,
+) -> tuple[Optional[str], Optional[Chem.Mol], dict]:
+    """Parse SMILES, then run `clean_mol(...)`."""
+    info = {'salt_stripped': 0, 'tautomer_canonicalized': 0, 'cleanup_failed': 0}
+    if smiles is None:
+        return None, None, info
+    s = str(smiles).strip()
+    if not s:
+        return None, None, info
+    mol = Chem.MolFromSmiles(s)
+    if mol is None:
+        return None, None, info
+    return clean_mol(
+        mol,
+        strip_salts=strip_salts,
+        decharge=decharge,
+        canonicalize_tautomer=canonicalize_tautomer,
+        canonical=canonical,
+    )
 
 
 def canonicalize_for_filtering(
@@ -96,56 +241,39 @@ def canonicalize_for_filtering(
     decharge: bool = True,
     canonicalize_tautomer: bool = False,
 ) -> tuple[Optional[str], Optional[Chem.Mol], dict]:
-    """Return canonicalized parent SMILES + mol for robust filtering.
+    """Canonicalize a SMILES string for duplicate/novelty filtering.
 
-    Pipeline (best effort):
-      1) Parse/decode from SMILES
-      2) Remove salts/mixtures by selecting largest fragment
-      3) Neutralize where possible
-      4) Optionally canonicalize tautomer representation
-      5) Return canonical SMILES used for duplicate/novelty checks
+    This intentionally stays small and predictable:
+    parse -> largest fragment -> (optional) uncharge -> (optional) tautomer -> canonical SMILES.
     """
-    info = {
-        'salt_stripped': 0,
-        'tautomer_canonicalized': 0,
-    }
+    return clean_smiles(
+        smiles,
+        strip_salts=bool(strip_salts),
+        decharge=bool(decharge),
+        canonicalize_tautomer=bool(canonicalize_tautomer),
+        canonical=True,
+    )
 
-    if smiles is None:
-        return None, None, info
 
-    s = str(smiles).strip()
-    if not s:
-        return None, None, info
+def save_pickle(
+    path: str,
+    payload: Any,
+    *,
+    protocol: int = pickle.HIGHEST_PROTOCOL,
+) -> str:
+    """Serialize payload to an uncompressed pickle file."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, 'wb') as f:
+        pickle.dump(payload, f, protocol=protocol)
+    return path
 
-    mol = Chem.MolFromSmiles(s)
-    if mol is None:
-        return None, None, info
 
-    if strip_salts:
-        mol, stripped = _largest_fragment(mol)
-        if stripped:
-            info['salt_stripped'] = 1
-
-    if decharge and _UNCHARGER is not None:
-        try:
-            mol = _UNCHARGER.uncharge(mol)
-        except Exception:
-            pass
-
-    if canonicalize_tautomer and _TAUTOMER_ENUM is not None:
-        try:
-            before = Chem.MolToSmiles(mol, canonical=True)
-            mol = _TAUTOMER_ENUM.Canonicalize(mol)
-            after = Chem.MolToSmiles(mol, canonical=True)
-            if before != after:
-                info['tautomer_canonicalized'] = 1
-        except Exception:
-            pass
-
-    can = Chem.MolToSmiles(mol, canonical=True)
-    if not can:
-        return None, None, info
-    return can, mol, info
+def load_pickle(path: str) -> Any:
+    """Load and return an object from an uncompressed pickle file."""
+    with open(path, 'rb') as f:
+        return pickle.load(f)
 
 
 def _flatten_grouped_train_config(config_override:dict) -> dict:
@@ -494,6 +622,7 @@ def collect_new_unique_from_raw(
         'total_generated': 0,
         'accepted': 0,
         'invalid_or_empty': 0,
+        'discarded_cleanup': 0,
         'in_training': 0,
         'duplicate': 0,
         'rejected_by_filter': 0,
@@ -523,7 +652,10 @@ def collect_new_unique_from_raw(
             canonicalize_tautomer=canonicalize_tautomer,
         )
         if can is None or mol is None:
-            stats['invalid_or_empty'] += 1
+            if int(can_info.get('cleanup_failed', 0)):
+                stats['discarded_cleanup'] += 1
+            else:
+                stats['invalid_or_empty'] += 1
             continue
 
         stats['salt_stripped'] += int(can_info.get('salt_stripped', 0))
@@ -743,8 +875,9 @@ def save_pickle_gz(
 ) -> str:
     """Serialize payload to a gzip-compressed pickle file.
 
-    This is intended for large Python objects (e.g., generated molecule lists)
-    where plain text/CSV outputs can become very large.
+    NOTE: This project only uses gzip-pickles for caching internal metadata
+    and preprocessed training sets. Generated outputs should prefer plain
+    CSV and/or uncompressed pickle for clarity.
     """
     parent = os.path.dirname(path)
     if parent:

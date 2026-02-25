@@ -247,6 +247,7 @@ def _collect_new_unique_from_raw_with_payload(
     training_smiles: Optional[set] = None,
     eos_token: str = 'E',
     accept_predicate: Optional[Callable[[str, object], bool]] = None,
+    require_neutral: bool = False,
     strip_salts: bool = True,
     decharge: bool = True,
     canonicalize_tautomer: bool = False,
@@ -259,6 +260,7 @@ def _collect_new_unique_from_raw_with_payload(
         'total_generated': 0,
         'accepted': 0,
         'invalid_or_empty': 0,
+        'discarded_cleanup': 0,
         'in_training': 0,
         'duplicate': 0,
         'rejected_by_filter': 0,
@@ -286,7 +288,10 @@ def _collect_new_unique_from_raw_with_payload(
             canonicalize_tautomer=canonicalize_tautomer,
         )
         if can is None or mol is None:
-            stats['invalid_or_empty'] += 1
+            if int(can_info.get('cleanup_failed', 0)):
+                stats['discarded_cleanup'] += 1
+            else:
+                stats['invalid_or_empty'] += 1
             continue
 
         stats['salt_stripped'] += int(can_info.get('salt_stripped', 0))
@@ -299,6 +304,17 @@ def _collect_new_unique_from_raw_with_payload(
         if can in seen_smiles:
             stats['duplicate'] += 1
             continue
+
+        if require_neutral:
+            from rdkit import Chem
+
+            try:
+                if int(Chem.GetFormalCharge(mol)) != 0:
+                    stats['rejected_by_filter'] += 1
+                    continue
+            except Exception:
+                stats['rejected_by_filter'] += 1
+                continue
 
         if accept_predicate is not None:
             try:
@@ -324,6 +340,7 @@ def _new_stats() -> dict:
         'total_generated': 0,
         'accepted': 0,
         'invalid_or_empty': 0,
+        'discarded_cleanup': 0,
         'in_training': 0,
         'duplicate': 0,
         'rejected_by_filter': 0,
@@ -343,6 +360,7 @@ def _compute_quality_metrics(
 ) -> dict:
     total_generated = int(stats.get('total_generated', 0))
     invalid_or_empty = int(stats.get('invalid_or_empty', 0))
+    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
     in_training = int(stats.get('in_training', 0))
     duplicate = int(stats.get('duplicate', 0))
     accepted = int(stats.get('accepted', 0))
@@ -360,6 +378,7 @@ def _compute_quality_metrics(
             'novel_count': 0,
             'unique_count': 0,
             'rejected_by_filter': rejected_by_filter,
+            'discarded_cleanup': discarded_cleanup,
             'salt_stripped': salt_stripped,
             'tautomer_canonicalized': tautomer_canonicalized,
         }
@@ -371,7 +390,7 @@ def _compute_quality_metrics(
                     metrics[metric_name] = np.nan
         return metrics
 
-    valid_count = total_generated - invalid_or_empty
+    valid_count = total_generated - invalid_or_empty - discarded_cleanup
     unique_count = total_generated - duplicate
     novel_count = total_generated - in_training
 
@@ -384,6 +403,7 @@ def _compute_quality_metrics(
         'novel_count': int(novel_count),
         'unique_count': int(unique_count),
         'rejected_by_filter': rejected_by_filter,
+        'discarded_cleanup': discarded_cleanup,
         'salt_stripped': salt_stripped,
         'tautomer_canonicalized': tautomer_canonicalized,
     }
@@ -437,6 +457,7 @@ def _print_quality_stats(
     total_generated = int(stats['total_generated'])
     accepted = int(stats['accepted'])
     invalid_or_empty = int(stats['invalid_or_empty'])
+    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
     in_training = int(stats['in_training'])
     duplicate = int(stats['duplicate'])
 
@@ -450,7 +471,7 @@ def _print_quality_stats(
 
     print(80 * '=')
     print('Detailed quality stats:')
-    not_ok = invalid_or_empty + in_training + duplicate
+    not_ok = invalid_or_empty + discarded_cleanup + in_training + duplicate
     not_ok_share = (float(not_ok) / float(total_generated)) if total_generated > 0 else 0.0
     rejected_by_filter = int(stats.get('rejected_by_filter', 0))
     salt_stripped = int(stats.get('salt_stripped', 0))
@@ -461,22 +482,20 @@ def _print_quality_stats(
     print(f'not ok molecules: {not_ok} ({not_ok_share:.2%})')
     print(
         f'not ok breakdown -> invalid_or_empty: {invalid_or_empty}, '
+        f'discarded_cleanup: {discarded_cleanup}, '
         f'in_training: {in_training}, duplicate: {duplicate}'
     )
 
     if rejected_by_filter:
         print(f'additional rejected_by_filter: {rejected_by_filter}')
+    if discarded_cleanup:
+        print(f'additional discarded_cleanup: {discarded_cleanup}')
     if salt_stripped:
         print(f'additional salt_stripped: {salt_stripped}')
     if tautomer_canonicalized:
         print(f'additional tautomer_canonicalized: {tautomer_canonicalized}')
     print(80 * '=')
     print('\n \n')
-
-
-def _default_pickle_output_path(result_filename: str) -> str:
-    root, _ = os.path.splitext(str(result_filename))
-    return f'{root}.pckl.gz'
 
 
 def _default_quality_summary_output_path(result_filename: str) -> str:
@@ -488,13 +507,14 @@ def _build_quality_summary_row(*, stats: dict, run_scope: str, num_molecules_sav
     total_generated = int(stats.get('total_generated', 0))
     accepted = int(stats.get('accepted', 0))
     invalid_or_empty = int(stats.get('invalid_or_empty', 0))
+    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
     in_training = int(stats.get('in_training', 0))
     duplicate = int(stats.get('duplicate', 0))
     rejected_by_filter = int(stats.get('rejected_by_filter', 0))
     salt_stripped = int(stats.get('salt_stripped', 0))
     tautomer_canonicalized = int(stats.get('tautomer_canonicalized', 0))
 
-    not_ok_count = invalid_or_empty + in_training + duplicate
+    not_ok_count = invalid_or_empty + discarded_cleanup + in_training + duplicate
 
     def _ratio(x: int) -> float:
         if total_generated <= 0:
@@ -531,6 +551,7 @@ def _build_quality_summary_row(*, stats: dict, run_scope: str, num_molecules_sav
         'total_generated': total_generated,
         'accepted': accepted,
         'invalid_or_empty': invalid_or_empty,
+        'discarded_cleanup': discarded_cleanup,
         'in_training': in_training,
         'duplicate': duplicate,
         'rejected_by_filter': rejected_by_filter,
@@ -543,6 +564,7 @@ def _build_quality_summary_row(*, stats: dict, run_scope: str, num_molecules_sav
         'acceptance_rate': float(metrics['acceptance_rate']),
         'not_ok_rate': _ratio(not_ok_count),
         'invalid_or_empty_rate': _ratio(invalid_or_empty),
+        'discarded_cleanup_rate': _ratio(discarded_cleanup),
         'in_training_rate': _ratio(in_training),
         'duplicate_rate': _ratio(duplicate),
         'rejected_by_filter_rate': _ratio(rejected_by_filter),
@@ -664,6 +686,7 @@ def _collect_new_unique_from_raw_with_payloads(
     training_smiles: Optional[set] = None,
     eos_token: str = 'E',
     accept_predicate: Optional[Callable[[str, object], bool]] = None,
+    require_neutral: bool = False,
     strip_salts: bool = True,
     decharge: bool = True,
     canonicalize_tautomer: bool = False,
@@ -675,6 +698,7 @@ def _collect_new_unique_from_raw_with_payloads(
         'total_generated': 0,
         'accepted': 0,
         'invalid_or_empty': 0,
+        'discarded_cleanup': 0,
         'in_training': 0,
         'duplicate': 0,
         'rejected_by_filter': 0,
@@ -704,7 +728,10 @@ def _collect_new_unique_from_raw_with_payloads(
             canonicalize_tautomer=canonicalize_tautomer,
         )
         if can is None or mol is None:
-            stats['invalid_or_empty'] += 1
+            if int(can_info.get('cleanup_failed', 0)):
+                stats['discarded_cleanup'] += 1
+            else:
+                stats['invalid_or_empty'] += 1
             continue
 
         stats['salt_stripped'] += int(can_info.get('salt_stripped', 0))
@@ -717,6 +744,17 @@ def _collect_new_unique_from_raw_with_payloads(
         if can in seen_smiles:
             stats['duplicate'] += 1
             continue
+
+        if require_neutral:
+            from rdkit import Chem
+
+            try:
+                if int(Chem.GetFormalCharge(mol)) != 0:
+                    stats['rejected_by_filter'] += 1
+                    continue
+            except Exception:
+                stats['rejected_by_filter'] += 1
+                continue
 
         if accept_predicate is not None:
             try:
@@ -846,6 +884,7 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
         'top_k': sampling.get('top_k', 20),
         'mw_tolerance': filters.get('mw_tolerance', 200.0),
         'logp_tolerance': filters.get('logp_tolerance', 5.0),
+        'require_neutral': filters.get('require_neutral', False),
         'min_tpsa': filters.get('min_tpsa', None),
         'max_heavy_atoms': filters.get('max_heavy_atoms', 60),
         'max_canonical_smiles_len': filters.get('max_canonical_smiles_len', None),

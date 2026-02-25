@@ -86,7 +86,14 @@ def main() -> None:
     start_codon = np.array([np.array([vocab["X"]]) for _ in range(int(model_config["batch_size"]))])
 
     seen_smiles: set[str] = set()
-    totals = {"total_generated": 0, "accepted": 0, "invalid_or_empty": 0, "in_training": 0, "duplicate": 0}
+    totals = {
+        "total_generated": 0,
+        "accepted": 0,
+        "invalid_or_empty": 0,
+        "discarded_cleanup": 0,
+        "in_training": 0,
+        "duplicate": 0,
+    }
 
     for b in range(1, int(config["batches"]) + 1):
         latent_vector = np.random.normal(float(model_config["mean"]), float(model_config["stddev"]), (int(model_config["batch_size"]), int(model_config["latent_size"])))
@@ -105,6 +112,7 @@ def main() -> None:
         if b == 1 or b % 10 == 0:
             print(
                 f"batch={b:4d} accepted={stats['accepted']:3d} invalid={stats['invalid_or_empty']:3d} "
+                f"discarded_cleanup={int(stats.get('discarded_cleanup', 0)):3d} "
                 f"in_training={stats['in_training']:3d} dup={stats['duplicate']:3d} "
                 f"total_unique_seen={len(seen_smiles)}"
             )

@@ -51,7 +51,14 @@ def run_setting(
     start_codon = np.array([np.array([vocab["X"]]) for _ in range(batch_size)])
 
     seen_smiles: set[str] = set()
-    totals = {"total_generated": 0, "accepted": 0, "invalid_or_empty": 0, "in_training": 0, "duplicate": 0}
+    totals = {
+        "total_generated": 0,
+        "accepted": 0,
+        "invalid_or_empty": 0,
+        "discarded_cleanup": 0,
+        "in_training": 0,
+        "duplicate": 0,
+    }
 
     for _ in range(int(batches)):
         latent_vector = rng.normal(
@@ -88,10 +95,12 @@ def run_setting(
         "accepted": int(totals["accepted"]),
         "unique_novel": int(totals["accepted"]),
         "invalid": int(totals["invalid_or_empty"]),
+        "discarded_cleanup": int(totals["discarded_cleanup"]),
         "in_training": int(totals["in_training"]),
         "dup": int(totals["duplicate"]),
         "accepted_rate": float(totals["accepted"]) / float(total),
         "invalid_rate": float(totals["invalid_or_empty"]) / float(total),
+        "discarded_cleanup_rate": float(totals["discarded_cleanup"]) / float(total),
         "dup_rate": float(totals["duplicate"]) / float(total),
         "in_training_rate": float(totals["in_training"]) / float(total),
     }
