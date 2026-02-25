@@ -599,14 +599,15 @@ if __name__ == '__main__':
             #'run_dir': 'save/huge_generation_lstm',
             #'run_dir': 'save/run_20260223_131822',
             #'run_dir': 'save/run_20260224_112850',
-            'run_dir': 'save/run_20260224_160237',
+            #'run_dir': 'save/run_20260224_160237',
+            'run_dir': 'save/run_20260224_205844',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
-            'batch_size': 256,  # Paper used 256, but that may cause OOM on smaller GPUs.
+            'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
-            'num_unique': 1000,#3_000,  # 30k unique molecules for each sweep point.
+            'num_unique': 300_000,#3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
             'target_prop': '300.0 3.0',
             'prop_file': None,
@@ -618,15 +619,15 @@ if __name__ == '__main__':
             # Sampling controls. Greedy decoding (do_sample=False) 
             'do_sample': True,
             # Sweep for this checkpoint suggests ~temperature=0.6, top_k=20 gives much higher unique+novel acceptance.
-            'temperature': 0.8, # higher temperature -> more random, lower temperature -> more valid, less diverse
+            'temperature': 0.9, # higher temperature -> more random, lower temperature -> more valid, less diverse
             'top_k': 20, # limits sampling to the top_k most probable tokens at each step. Can help improve validity at low temperatures.
         },
         'filters': {
             # Optional constraints to keep outputs close to target properties.
             # These values assume target_prop is MW then LogP.
             # If you set them to None, sampling accepts any valid/novel molecule.
-            'mw_tolerance': 200.0, #200
-            'logp_tolerance': 2.5, # 5.0
+            'mw_tolerance': 100.0, #200
+            'logp_tolerance': 2.0, # 5.0
             # Optional: enforce polarity so TPSA isn't ~0.0 for hydrocarbon-only molecules.
             'min_tpsa': None,
             # Hard caps (optional) to prevent very large molecules due to halogen-heavy strings.
@@ -644,7 +645,7 @@ if __name__ == '__main__':
             'canonicalize_tautomer': False,
         },
         'sweep': {
-            'enabled': True,
+            'enabled': False,
             'prop_profile': {
                 'MW': np.linspace(150.0, 500.0, num=10),
                 'LogP': np.linspace(-4.0, 6.0, num=10),
@@ -655,7 +656,7 @@ if __name__ == '__main__':
             # sample target properties from an approximate training-data distribution.
             # Useful when you want to generate molecules where the label head tends
             # to be most accurate (near the training manifold).
-            'enabled': False,
+            'enabled': True,
             # Sample: N(mean, (std_scale * std)^2) in raw/original units.
             'std_scale': 1.0,
             # Clip each dimension to mean +/- clip_n_std * std.
@@ -665,13 +666,13 @@ if __name__ == '__main__':
         },
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
-            'result_filename': 'temp_100k_test.txt',
+            'result_filename': 'train_dist_temp_transformer_300k_test.txt',
             # If None, defaults to result filename stem + '.pckl.gz'.
             'molecules_pickle_filename': None,
             # If None, defaults to result filename stem + '_quality_summary.csv'.
             'quality_summary_filename': None,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
-            'sweep_stats_filename': 'temp_100k_test.csv',
+            'sweep_stats_filename': 'train_dist_temp_transformer_300k_test.csv',
             
         },
     }
