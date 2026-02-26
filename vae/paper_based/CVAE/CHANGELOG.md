@@ -16,6 +16,11 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- `analysis_modules/` package and `run_viz_pipeline.py`: Added reusable Python modules that mirror the major `viz.ipynb` analysis flow (data loading, canonicalization, validity flags, Tanimoto-to-reference, diversity score, scaffold overlap, and CSV/JSON outputs) while keeping the notebook unchanged.
+- `analysis_modules/config.py`: Added starter profile configs for both `zinc_logp` and `bace_pic50_10k` with explicit path knobs (`train_folder`, `train_data_path`, `generated_data_path`, `output_dir`) so runs can be re-pointed quickly.
+- `run_viz_pipeline.py`: Added CLI/runtime overrides for profile paths and row caps so the same module pipeline works for the generated BACE pIC50 dataset and 10k generated-molecule files.
+- `analysis_run_config.json`: Added a file-based starter run config so the whole analysis pipeline can be executed from config without passing per-run path arguments.
+
 - `train.py` / `utils.py`: Added run-folder controls directly in the training config (`training.run_name`, `training.use_run_subdir`). Training now resolves an effective run save path via `build_train_run_save_dir(...)`, so each run can write to its own subdirectory under `training.save_dir` without overwriting other runs.
 - `utils.py`: Added `resolve_checkpoint_path(...)` to resolve checkpoints either from an explicit file path or from a run directory (preferring `model_best.ckpt-*.pt`, then falling back to newest `.pt`).
 - `train_labels.py` / `model_labels.py`: Optional auxiliary label head that predicts selected properties from latent `z` (default: LogP-only for 2-prop `[MW, LogP]` setup).
@@ -25,6 +30,14 @@ All notable changes to this project are documented in this file.
 - `sample_labels.py`: Added `training_dist` sampling mode (`run_training_dist`) to sample conditioning targets from an approximate training-property distribution (Gaussian fit via saved `prop_norm_mean/std`). This keeps conditioning near the training manifold, which often improves label-head calibration around typical training values.
 
 ### Changed
+
+- `run_viz_pipeline.py`: Runner now primarily loads settings from a JSON config file (`--config`, default `analysis_run_config.json`) instead of many path/column CLI arguments.
+- `analysis_modules/pipeline.py`: Extended coverage to include notebook-equivalent train-loss plotting, Tanimoto histogram, chemical-space PCA+t-SNE, and descriptor-space PCA+t-SNE in addition to similarity/distribution/scaffold outputs.
+- `analysis_modules/pipeline.py` / `analysis_modules/config.py`: Added notebook-parity scaffold grid outputs for top train and generated scaffolds (plus novel generated scaffolds), toggle-controlled via config.
+- `analysis_modules/pipeline.py`: Added explicit scaffold stats artifact (`scaffold_stats.json`) with unique scaffold counts for train vs generated sets, overlap, and novel scaffold counts.
+- `analysis_modules/pipeline.py`: Added prediction-error scatter plot (`absolute error vs ground truth`) and summary metrics (MSE/MAE/median/std) when target/predicted property columns are available.
+- `analysis_modules/pipeline.py`: Corrected distribution plotting semantics so histogram y-axis is explicit `Count`, generated-property x-axis uses predicted property when available (e.g., `pred_pIC50`), and MW comparison now includes computed train MW fallback from SMILES when MW is not present in train file.
+- `analysis_modules/pipeline.py` / `analysis_modules/config.py`: Added MW distribution-difference artifact (`mw_distribution_diff_train_minus_generated.png`) showing per-bin count delta (`train - generated`).
 
 - `sample.py`: Runtime model config now supports `run_dir` + `checkpoint_glob` (in addition to `save_file`) and resolves checkpoint paths through shared utility logic.
 - `debug_sampling.py` / `sweep_sampling.py`: Updated defaults to support run-folder based checkpoint selection, matching training output layout.

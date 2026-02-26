@@ -518,6 +518,60 @@ The cache is best-effort and automatically invalidated if the property file is n
 
 ## Numerical stability notes
 
+## Module-based analysis pipeline (keeps `viz.ipynb` intact)
+
+If you want the same analysis flow as `viz.ipynb` but from reusable Python modules,
+use the module runner:
+
+```bash
+python run_viz_pipeline.py --config analysis_run_config.json
+```
+
+The analysis config is file-driven (JSON), so you do **not** need to pass many CLI
+arguments anymore.
+
+### Starter config file
+
+Use and edit:
+
+```text
+analysis_run_config.json
+```
+
+Key fields to edit:
+
+- `profile`: `bace_pic50_10k` or `zinc_logp`
+- `overrides.train_folder`
+- `overrides.train_data_path`
+- `overrides.generated_data_path`
+- `overrides.output_dir`
+- `overrides.target_property_column`
+- `overrides.predicted_property_column`
+
+### What the module pipeline now covers
+
+The pipeline in `analysis_modules/` includes the main parts of the notebook workflow:
+
+- training history plot (`train_loss` / `test_loss`) from `train_folder/history.csv`
+- Tanimoto similarity to training set + diversity score
+- Tanimoto distribution histogram
+- prediction-error scatter (`abs error vs ground truth`) + summary metrics (MSE/MAE/median/std)
+- train/generated property distributions (y-axis is `Count`; generated uses predicted property when available)
+- MW train-vs-generated difference plot (`train - generated` counts per bin)
+- chemical-space PCA (Morgan fp) and chemical-space t-SNE
+- descriptor-space PCA and descriptor-space t-SNE
+- generated-space coloring by max Tanimoto where applicable
+- scaffold overlap/distribution summary
+- top-scaffold grid images for train and generated sets (+ optional novel generated scaffolds grid)
+- explicit scaffold stats artifact with unique scaffold counts (train vs generated, overlap, novel)
+
+It writes processed CSV + analysis summary JSON + figures under `output_dir`.
+
+### BACE pIC50 + 10k generated molecules
+
+`analysis_run_config.json` defaults are set up for BACE pIC50 with 10k generated molecules.
+You can switch to ZINC/LogP by changing `profile` and the path overrides.
+
 - Transformer encoder/decoder blocks run in fp32 under AMP (`selective autocast`) to avoid fp16 softmax/masked-attention NaNs.
 - Reconstruction loss is length-masked (padded tokens do not contribute to CE).
 - If you see instability/NaNs with Transformer, try disabling AMP (`use_amp=False`) until the model is stable.
