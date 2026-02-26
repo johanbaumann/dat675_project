@@ -155,8 +155,8 @@ config = {
         'lr': 5e-5,
         'weight_decay': 0.001,
         'use_amp': False,
-        'amp_dtype': 'float16',
-        'grad_clip_norm': 2.0,
+        'amp_dtype': 'float16', # use bfloat16 for transformer + amp.
+        'grad_clip_norm': 2.0, # dont be too harh with clipping, can hinder learning. 
     },
     'training': {
         'batch_size': 64,
@@ -171,10 +171,10 @@ config = {
     },
     'scheduler': {
         'enabled': True,
-        'factor': 0.5,
-        'patience': 2,
-        'threshold': 1e-3,
-        'min_lr': 1e-6,
+        'factor': 0.5, # reduce LR by this factor when test loss plateaus.
+        'patience': 2, # number of epochs with no improvement after which LR will be reduced.
+        'threshold': 1e-3, # minimum change in the monitored quantity to qualify as an improvement (for 'min' mode).
+        'min_lr': 1e-6, # lower bound on the learning rate after reductions.
     },
     'kl': {
         'enabled': True,

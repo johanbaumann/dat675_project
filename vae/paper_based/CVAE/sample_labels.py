@@ -245,11 +245,11 @@ def generate_unique_molecules_from_training_dist(
 ) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]], list[tuple[float, ...]]]:
     """Generate unique molecules while sampling target properties near training data.
 
-    This mode samples a fresh conditioning target `c_raw` each batch from an
+    This mode samples a fresh conditioning target 'c_raw' each batch from an
     approximate training distribution, then normalizes it like training and
-    decodes with that `c_norm`.
+    decodes with that 'c_norm'.
 
-    Returns an extra `target_props_per_molecule` list aligned with `smiles_out`.
+    Returns an extra 'target_props_per_molecule' list aligned with 'smiles_out'.
     """
     if num_unique <= 0:
         return [], [], _new_stats(), None, []
@@ -676,14 +676,14 @@ if __name__ == '__main__':
             #'run_dir': 'save/run_20260224_112850',
             #'run_dir': 'save/run_20260224_160237',
             #'run_dir': 'save/run_20260224_205844',
-            'run_dir': 'save/run_20260226_095012',
+            'run_dir': 'save/run_20260226_100922',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
         'generation': {
             'batch_size': 128,  # Paper used 256, but that may cause OOM on smaller GPUs.
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
-            'num_unique': 1000,#300_000,#3_000,  # 30k unique molecules for each sweep point.
+            'num_unique': 10_000,#300_000,#3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
             # For BACE pIC50-only conditioning, use a single value, e.g. '7.0'.
             # For MW/LogP two-property runs, keep two values like '300.0 3.0'.
@@ -747,14 +747,14 @@ if __name__ == '__main__':
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
             #'result_filename': 'train_dist_temp_transformer_300k_test.txt',
-            'result_filename': 'tiny_test.txt',
+            'result_filename': '10k_bace_test.txt',
             # Optional: if set, save generated molecules to this `.pkl` file.
             'molecules_pickle_filename': None,
             # If None, defaults to result filename stem + '_quality_summary.csv'.
             'quality_summary_filename': None,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
             #'sweep_stats_filename': 'train_dist_temp_transformer_300k_test.csv',
-            'sweep_stats_filename': 'tiny_test.csv',
+            'sweep_stats_filename': '10k_bace_test.csv',
             
         },
     }
