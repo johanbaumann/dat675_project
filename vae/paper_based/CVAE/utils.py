@@ -51,6 +51,7 @@ TRAIN_CONFIG_DEFAULTS = {
     'transformer_ff_size': 2048,
     'transformer_dropout': 0.1,
     'train_ratio': 0.75,
+    'smiles_augmentation_duplicates': 0,
     'save_every': 10,
     'diagnostics_every': 1,
     'kl_anneal_enabled': True,
@@ -299,6 +300,8 @@ def _flatten_grouped_train_config(config_override:dict) -> dict:
             flat['seq_length'] = data['seq_length']
         if 'train_ratio' in data:
             flat['train_ratio'] = data['train_ratio']
+        if 'smiles_augmentation_duplicates' in data:
+            flat['smiles_augmentation_duplicates'] = data['smiles_augmentation_duplicates']
 
     model = config_override.get('model')
     if isinstance(model, dict):
@@ -460,6 +463,9 @@ def _normalize_train_config(config_override:dict) -> dict:
     config['transformer_ff_size'] = int(config['transformer_ff_size'])
     config['transformer_dropout'] = float(config['transformer_dropout'])
     config['train_ratio'] = float(config.get('train_ratio', 0.75))
+    config['smiles_augmentation_duplicates'] = int(config.get('smiles_augmentation_duplicates', 0))
+    if config['smiles_augmentation_duplicates'] < 0:
+        raise ValueError('smiles_augmentation_duplicates must be >= 0')
     config['diagnostics_every'] = int(config.get('diagnostics_every', 1))
     config['kl_anneal_enabled'] = bool(config.get('kl_anneal_enabled', True))
     config['kl_anneal_start_beta'] = float(config.get('kl_anneal_start_beta', 0.0))
@@ -919,6 +925,44 @@ def load_checkpoint_model_config(ckpt_path: str) -> Optional[dict]:
 def load_json(path:str) -> dict:
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+def infer_prop_metadata_path(prop_file: str) -> str:
+    return f'{prop_file}.meta.json'
+
+
+def load_prop_metadata(prop_file: str) -> Optional[dict]:
+    """Best-effort load for sidecar metadata written next to property files."""
+    path = infer_prop_metadata_path(prop_file)
+    if not os.path.exists(path):
+        return None
+    try:
+        payload = load_json(path)
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def load_condition_property_names(prop_file: str, num_prop: int) -> list[str]:
+    """Resolve conditioning property names for reporting/sampling.
+
+    Priority:
+    1) sidecar metadata: <prop_file>.meta.json with key `property_names`
+    2) built-in fallback names (`MW`, `LogP` for two-prop case)
+    """
+    metadata = load_prop_metadata(prop_file)
+    if isinstance(metadata, dict):
+        names = metadata.get('property_names')
+        if isinstance(names, list):
+            names = [str(x) for x in names]
+            if len(names) == int(num_prop):
+                return names
+
+    if int(num_prop) == 2:
+        return ['MW', 'LogP']
+    return [f'prop_{i}' for i in range(int(num_prop))]
 
 
 def save_training_config(config:dict, save_dir:str, filename:str = 'training_config.json') -> str:

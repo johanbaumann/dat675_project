@@ -33,9 +33,14 @@ All notable changes to this project are documented in this file.
 - `sample.py`: Sampling now also persists a run-level quality summary CSV (default: `<result_filename>_quality_summary.csv`) containing aggregated V/U/N/Acceptance plus detailed not-ok breakdown counters and rates (`not_ok_count/rate`, `invalid_or_empty_rate`, `in_training_rate`, `duplicate_rate`, `rejected_by_filter_rate`) so sweep-level totals no longer need to be recomputed from per-pair rows.
 - `sample.py`: Added explicit runtime canonicalization logging and counters in quality stats (`salt_stripped`, `tautomer_canonicalized`).
 - `utils.py`: Added robust canonicalization helper for filtering/novelty (`canonicalize_for_filtering(...)`) with configurable salt stripping, decharge, and optional tautomer canonicalization.
+- `train_labels.py`: Added an active, smaller default Transformer config block (while keeping the previous larger example block commented out) for easier baseline runs.
+- `train_labels.py` / `utils.py`: Added configurable train-only SMILES augmentation via `data.smiles_augmentation_duplicates` (number of randomized SMILES variants generated per original training molecule).
+- `train_labels.py`: Augmentation metadata is now persisted in `training_config.json` (`smiles_augmentation_duplicates`, train set size before/after augmentation) for run reproducibility.
 - `utils.py`: Added persistence helpers: uncompressed `save_pickle(...)` / `load_pickle(...)` for optional outputs, and gzip-pickle helpers (`save_pickle_gz(...)` / `load_pickle_gz(...)`) reserved for internal caches.
 - `utils.py`: Added `load_sampling_metadata(...)` for fast, cached extraction of charset/vocab/num_prop from large property files without constructing full training tensors.
 
+
+- `sample_labels.py`: Added an explicit re-canonicalization pass of generated outputs right before descriptor evaluation/export to keep evaluation rows canonicalized and aligned with optional payload columns.
 - `sample.py` / `sample_labels.py`: Optional molecule artifact outputs now use plain pickle (`.pkl`) instead of gzip pickles. Gzip pickles remain in use for internal caches only.
 
 ### Changed

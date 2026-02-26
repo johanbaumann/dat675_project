@@ -32,66 +32,138 @@ import numpy as np
 import time
 import pandas as pd
 import torch
+from rdkit import Chem
 from copy import deepcopy
 
-# Single source of truth for run configuration.
-# Grouped sections are easier to edit; utils will flatten this to legacy keys.
+## Single source of truth for run configuration.
+## Grouped sections are easier to edit; utils will flatten this to legacy keys.
+#config = {
+#    'training_preset': 'custom',  # 'custom' or 'stable_transformer'
+#    'data': {
+#        'prop_file': 'bace_pic50.txt',
+#        'seq_length': 120,
+#        'train_ratio': 0.8,
+#        # Number of randomized SMILES to add per original TRAIN sample.
+#        # 0 disables augmentation.
+#        'smiles_augmentation_duplicates': 0,
+#    },
+#    'model': {
+#        'mode': 'transformer',  # 'lstm' or 'transformer'
+#        'latent_size': 200,
+#        'unit_size': 512,
+#        'n_rnn_layer': 2, # 2 layers for transformers, 2-3 for lstm
+#        'mean': 0.0,
+#        'stddev': 1.0,
+#        'num_prop': None,  # inferred from property file
+#
+#        # Optional multi-task head:
+#        # - predict_labels=False keeps the model identical to the base CVAE.
+#        # - When enabled, the model predicts a label vector from latent `z`.
+#        'predict_labels': True,
+#        # Which conditioning columns to predict as labels.
+#        # Example (for: MW, LogP setup): set to [1] to predict LogP only.
+#        # If None and predict_labels=True, defaults to predicting all properties.
+#        'label_target_indices': None,
+#        'label_dim': None,  # if None, inferred from property file
+#        'label_loss_weight': 1.0, # relative weight of label prediction loss compared to reconstruction + KL loss (which are weighted by beta)
+#
+#        # Optional label-head variants:
+#        # If True, the label head predicts from both (z, c) instead of z only.
+#        # This can be useful if you want predicted labels to track the sampling
+#        # target properties more directly.
+#        'include_condition_in_label_head': False,
+#
+#        # If True, train the label head on *raw* (unnormalized) property values.
+#        # If False (default), train it on the normalized conditioning vector.
+#        'label_targets_use_raw_scale': False,
+#    },
+#    'transformer': {
+#        'heads': 8,
+#        'ff_size': 1024,
+#        'dropout': 0.15,
+#    },
+#    'optimization': {
+#        'optimizer': 'adamw', # 'adam' for lstm, 'adamw' for transformer
+#        'lr': 1e-5,
+#        'weight_decay': 0.001, # 0.001 for transformer
+#        'use_amp': False,
+#        'amp_dtype': 'float16',
+#        'grad_clip_norm': 4.0,
+#    },
+#    'training': {
+#        'batch_size': 64,
+#        'num_epochs': 120,
+#        'save_dir': 'save/',
+#        'run_name': None,  # If None, auto-generated timestamped run folder is used.
+#        'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
+#        'save_every': 10,
+#        'early_stopping_patience': 10,
+#        'early_stopping_min_delta': 0.001,
+#        'early_stopping_restore_best': True,
+#    },
+#    'scheduler': {
+#        'enabled': True,
+#        'factor': 0.5,
+#        'patience': 2,
+#        'threshold': 1e-3, # minimum change in the monitored quantity to qualify as an improvement (for 'min' mode).
+#        'min_lr': 1e-6,
+#    },
+#    'kl': {
+#        'enabled': True,
+#        'start_beta': 1.0, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
+#        'max_beta': 4.0,
+#        'hold_epochs': 0,
+#        'warmup_epochs': 8,
+#    },
+#    'diagnostics': {
+#        'every': 1,
+#    },
+#}
+
 config = {
-    'training_preset': 'custom',  # 'custom' or 'stable_transformer'
+    'training_preset': 'custom',
     'data': {
-        'prop_file': '250k_zinc_clean.txt',
+        'prop_file': 'bace_pic50.txt',
         'seq_length': 120,
-        'train_ratio': 0.75,
+        'train_ratio': 0.8,
+        # Number of randomized SMILES strings generated per original train sample.
+        # 0 disables augmentation.
+        'smiles_augmentation_duplicates': 10,
     },
     'model': {
-        'mode': 'transformer',  # 'lstm' or 'transformer'
-        'latent_size': 200,
-        'unit_size': 512,
-        'n_rnn_layer': 2, # 2 layers for transformers, 3 for lstm (memory constraints...)
+        'mode': 'transformer',
+        'latent_size': 128,
+        'unit_size': 256,
+        'n_rnn_layer': 2,
         'mean': 0.0,
         'stddev': 1.0,
-        'num_prop': None,  # inferred from property file
-
-        # Optional multi-task head:
-        # - predict_labels=False keeps the model identical to the base CVAE.
-        # - When enabled, the model predicts a label vector from latent `z`.
+        'num_prop': None,
         'predict_labels': True,
-        # Which conditioning columns to predict as labels.
-        # Example (for: MW, LogP setup): set to [1] to predict LogP only.
-        # If None and predict_labels=True, defaults to predicting all properties.
-        'label_target_indices': [1],  # predict LogP only by default for the MW/LogP setup
-        'label_dim': None,  # if None, inferred from property file
-        'label_loss_weight': 1.0, # relative weight of label prediction loss compared to reconstruction + KL loss (which are weighted by beta)
-
-        # Optional label-head variants:
-        # If True, the label head predicts from both (z, c) instead of z only.
-        # This can be useful if you want predicted labels to track the sampling
-        # target properties more directly.
+        'label_target_indices': None,
+        'label_dim': None,
+        'label_loss_weight': 1.0,
         'include_condition_in_label_head': False,
-
-        # If True, train the label head on *raw* (unnormalized) property values.
-        # If False (default), train it on the normalized conditioning vector.
         'label_targets_use_raw_scale': False,
     },
     'transformer': {
-        'heads': 8,
-        'ff_size': 1024,
-        'dropout': 0.15,
+        'heads': 4,
+        'ff_size': 512,
+        'dropout': 0.1,
     },
     'optimization': {
-        'optimizer': 'adamw', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
-        'lr': 1e-5, # 10e-4, 1e-5 for transformer..
-        'weight_decay': 0.001, # 0.001 for transformer 
-        'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
-        'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
-        'grad_clip_norm': 4.0,
+        'optimizer': 'adamw',
+        'lr': 5e-5,
+        'weight_decay': 0.001,
+        'use_amp': False,
+        'amp_dtype': 'float16',
+        'grad_clip_norm': 2.0,
     },
     'training': {
-        'batch_size': 64, # 64 for transformer... 128 for lstm
-        'num_epochs': 200, # transformer need more
+        'batch_size': 64,
+        'num_epochs': 120,
         'save_dir': 'save/',
-        'run_name': None,  # If None, auto-generated timestamped run folder is used.
-        'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
+        'run_name': None,
+        'use_run_subdir': True,
         'save_every': 10,
         'early_stopping_patience': 10,
         'early_stopping_min_delta': 0.001,
@@ -101,12 +173,12 @@ config = {
         'enabled': True,
         'factor': 0.5,
         'patience': 2,
-        'threshold': 1e-3, # minimum change in the monitored quantity to qualify as an improvement (for 'min' mode).
+        'threshold': 1e-3,
         'min_lr': 1e-6,
     },
     'kl': {
         'enabled': True,
-        'start_beta': 1.0, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
+        'start_beta': 1.0,
         'max_beta': 4.0,
         'hold_epochs': 0,
         'warmup_epochs': 8,
@@ -115,6 +187,94 @@ config = {
         'every': 1,
     },
 }
+
+
+def _augment_train_split_with_random_smiles(
+    *,
+    train_input: np.ndarray,
+    train_output: np.ndarray,
+    train_labels: np.ndarray,
+    train_length: np.ndarray,
+    charset,
+    vocab: dict,
+    seq_length: int,
+    duplicates_per_smiles: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Augment TRAIN split by adding randomized SMILES variants.
+
+    This keeps the original train/test split intact to avoid leakage from
+    augmenting before splitting.
+    """
+    dups = int(duplicates_per_smiles)
+    if dups <= 0:
+        return train_input, train_output, train_labels, train_length, {
+            'aug_added': 0,
+            'skipped_invalid': 0,
+            'skipped_too_long': 0,
+            'skipped_unknown_token': 0,
+        }
+
+    charset_arr = np.asarray(charset)
+    aug_input = []
+    aug_output = []
+    aug_labels = []
+    aug_length = []
+
+    skipped_invalid = 0
+    skipped_too_long = 0
+    skipped_unknown_token = 0
+
+    for row_idx in range(int(train_output.shape[0])):
+        base = convert_to_smiles(train_output[row_idx], charset_arr)
+        base = base.split('E', 1)[0].strip()
+        if not base:
+            skipped_invalid += dups
+            continue
+
+        mol = Chem.MolFromSmiles(base)
+        if mol is None:
+            skipped_invalid += dups
+            continue
+
+        for _ in range(dups):
+            aug_smi = Chem.MolToSmiles(mol, canonical=False, doRandom=True)
+            if not aug_smi:
+                skipped_invalid += 1
+                continue
+            if len(aug_smi) >= int(seq_length) - 2:
+                skipped_too_long += 1
+                continue
+            if any(ch not in vocab for ch in aug_smi):
+                skipped_unknown_token += 1
+                continue
+
+            x_str = ('X' + aug_smi).ljust(int(seq_length), 'E')
+            y_str = aug_smi.ljust(int(seq_length), 'E')
+
+            aug_input.append(np.asarray(list(map(vocab.get, x_str)), dtype=np.int64))
+            aug_output.append(np.asarray(list(map(vocab.get, y_str)), dtype=np.int64))
+            aug_labels.append(np.asarray(train_labels[row_idx], dtype=np.float32))
+            aug_length.append(int(len(aug_smi) + 1))
+
+    if len(aug_input) == 0:
+        return train_input, train_output, train_labels, train_length, {
+            'aug_added': 0,
+            'skipped_invalid': int(skipped_invalid),
+            'skipped_too_long': int(skipped_too_long),
+            'skipped_unknown_token': int(skipped_unknown_token),
+        }
+
+    train_input_aug = np.concatenate([train_input, np.stack(aug_input, axis=0)], axis=0)
+    train_output_aug = np.concatenate([train_output, np.stack(aug_output, axis=0)], axis=0)
+    train_labels_aug = np.concatenate([train_labels, np.stack(aug_labels, axis=0)], axis=0)
+    train_length_aug = np.concatenate([train_length, np.asarray(aug_length, dtype=train_length.dtype)], axis=0)
+
+    return train_input_aug, train_output_aug, train_labels_aug, train_length_aug, {
+        'aug_added': int(len(aug_input)),
+        'skipped_invalid': int(skipped_invalid),
+        'skipped_too_long': int(skipped_too_long),
+        'skipped_unknown_token': int(skipped_unknown_token),
+    }
 
 # NOTE: compose_train_config_from_dict() may flatten/override nested config values.
 # Capture optional label-prediction settings here so they remain stable.
@@ -172,7 +332,7 @@ print(f'inferred num_prop from {config["prop_file"]}: {config["num_prop"]}')
 predict_labels = bool(predict_labels_cfg)
 
 num_prop = int(config['num_prop'])
-default_prop_names = ['MW', 'LogP'] if num_prop == 2 else [f'prop_{i}' for i in range(num_prop)]
+default_prop_names = load_condition_property_names(config['prop_file'], num_prop)
 
 label_target_indices = None
 label_target_names = None
@@ -215,6 +375,31 @@ train_molecules_output, test_molecules_output = split_train_test(molecules_outpu
 train_labels, test_labels = split_train_test(labels, config['train_ratio'])
 train_length, test_length = split_train_test(length, config['train_ratio'])
 
+num_train_before_aug = int(len(train_molecules_input))
+smiles_aug_duplicates = int(config.get('smiles_augmentation_duplicates', 0))
+if smiles_aug_duplicates > 0:
+    train_molecules_input, train_molecules_output, train_labels, train_length, aug_stats = _augment_train_split_with_random_smiles(
+        train_input=train_molecules_input,
+        train_output=train_molecules_output,
+        train_labels=train_labels,
+        train_length=train_length,
+        charset=char,
+        vocab=vocab,
+        seq_length=int(config['seq_length']),
+        duplicates_per_smiles=smiles_aug_duplicates,
+    )
+    print(
+        'smiles augmentation: '
+        f'duplicates_per_smiles={smiles_aug_duplicates}, '
+        f'train_before={num_train_before_aug}, train_after={len(train_molecules_input)}, '
+        f'added={aug_stats["aug_added"]}, '
+        f'skipped_invalid={aug_stats["skipped_invalid"]}, '
+        f'skipped_too_long={aug_stats["skipped_too_long"]}, '
+        f'skipped_unknown_token={aug_stats["skipped_unknown_token"]}'
+    )
+else:
+    print('smiles augmentation disabled (smiles_augmentation_duplicates=0).')
+
 # Keep unnormalized properties around if we want the label head to predict in
 # original units (e.g. LogP). Conditioning still uses the normalized vector for
 # numerical stability (especially with Transformer + AMP).
@@ -232,8 +417,12 @@ test_labels = (test_labels - prop_mean) / prop_std
 print(f'property normalization: mean={prop_mean.tolist()} std={prop_std.tolist()}')
 
 model_config = get_model_config(config, vocab_size=vocab_size)
+model_config['smiles_augmentation_duplicates'] = int(smiles_aug_duplicates)
+model_config['num_train_before_augmentation'] = int(num_train_before_aug)
+model_config['num_train_after_augmentation'] = int(len(train_molecules_input))
 model_config['prop_norm_mean'] = prop_mean.astype(np.float32).tolist()
 model_config['prop_norm_std'] = prop_std.astype(np.float32).tolist()
+model_config['condition_property_names'] = list(default_prop_names)
 
 # Wire optional label predictor settings into the model config.
 model_config['predict_labels'] = bool(predict_labels)

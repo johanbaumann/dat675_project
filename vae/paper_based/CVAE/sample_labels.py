@@ -11,9 +11,11 @@ import pandas as pd
 from rdkit import Chem
 from rdkit import RDLogger
 from utils import (
+    canonicalize_for_filtering,
     compose_train_config_from_dict,
     infer_training_config_path,
     load_sampling_metadata,
+    load_condition_property_names,
     load_checkpoint_model_config,
     load_json,
     resolve_checkpoint_path,
@@ -47,6 +49,70 @@ from utils_labels import (
     normalize_like_training,
     sample_target_props_like_training,
 )
+
+
+def _recanonicalize_outputs_for_evaluation(
+    *,
+    mols: list[Chem.Mol],
+    smiles: list[str],
+    pred_labels: Optional[list[np.ndarray]],
+    target_props_per_molecule: Optional[list[tuple[float, ...]]],
+    strip_salts: bool,
+    decharge: bool,
+    canonicalize_tautomer: bool,
+) -> tuple[list[Chem.Mol], list[str], Optional[list[np.ndarray]], Optional[list[tuple[float, ...]]], dict]:
+    """Re-canonicalize generated outputs before descriptor evaluation/export."""
+    if len(smiles) == 0:
+        return mols, smiles, pred_labels, target_props_per_molecule, {
+            'num_input': 0,
+            'num_output': 0,
+            'num_changed': 0,
+            'num_dropped': 0,
+        }
+
+    out_mols: list[Chem.Mol] = []
+    out_smiles: list[str] = []
+    out_pred: list[np.ndarray] = []
+    out_targets: list[tuple[float, ...]] = []
+    changed = 0
+    dropped = 0
+
+    use_pred = pred_labels is not None and len(pred_labels) == len(smiles)
+    use_targets = target_props_per_molecule is not None and len(target_props_per_molecule) == len(smiles)
+    if use_pred:
+        assert pred_labels is not None
+    if use_targets:
+        assert target_props_per_molecule is not None
+
+    for i, s in enumerate(smiles):
+        can, can_mol, _ = canonicalize_for_filtering(
+            s,
+            strip_salts=bool(strip_salts),
+            decharge=bool(decharge),
+            canonicalize_tautomer=bool(canonicalize_tautomer),
+        )
+        if can is None or can_mol is None:
+            dropped += 1
+            continue
+        if can != s:
+            changed += 1
+
+        out_smiles.append(can)
+        out_mols.append(can_mol)
+        if use_pred and pred_labels is not None:
+            out_pred.append(pred_labels[i])
+        if use_targets and target_props_per_molecule is not None:
+            out_targets.append(target_props_per_molecule[i])
+
+    pred_out: Optional[list[np.ndarray]] = out_pred if use_pred else None
+    targets_out: Optional[list[tuple[float, ...]]] = out_targets if use_targets else None
+
+    return out_mols, out_smiles, pred_out, targets_out, {
+        'num_input': int(len(smiles)),
+        'num_output': int(len(out_smiles)),
+        'num_changed': int(changed),
+        'num_dropped': int(dropped),
+    }
 
 
 def generate_unique_molecules(
@@ -609,7 +675,8 @@ if __name__ == '__main__':
             #'run_dir': 'save/run_20260223_131822',
             #'run_dir': 'save/run_20260224_112850',
             #'run_dir': 'save/run_20260224_160237',
-            'run_dir': 'save/run_20260224_205844',
+            #'run_dir': 'save/run_20260224_205844',
+            'run_dir': 'save/run_20260226_095012',
             'checkpoint_glob': 'model_best.ckpt-*.pt',
             'training_config_file': None, # If None, will try to infer from checkpoint metadata or filename patterns.
         },
@@ -618,7 +685,9 @@ if __name__ == '__main__':
             'num_iteration': 10,  # Number of batches to sample (legacy fixed-iteration mode).
             'num_unique': 1000,#300_000,#3_000,  # 30k unique molecules for each sweep point.
             'max_batches': 5000,
-            'target_prop': '300.0 3.0',
+            # For BACE pIC50-only conditioning, use a single value, e.g. '7.0'.
+            # For MW/LogP two-property runs, keep two values like '300.0 3.0'.
+            'target_prop': '7.0',
             'prop_file': None,
             'seq_length': None,
             'mean': None,
@@ -633,10 +702,10 @@ if __name__ == '__main__':
         },
         'filters': {
             # Optional constraints to keep outputs close to target properties.
-            # These values assume target_prop is MW then LogP.
-            # If you set them to None, sampling accepts any valid/novel molecule.
-            'mw_tolerance': 100.0, #200
-            'logp_tolerance': 2.0, # 5.0
+            # For pIC50-only conditioning, keep MW/LogP tolerances disabled.
+            # If set to None, sampling accepts any valid/novel molecule.
+            'mw_tolerance': None,
+            'logp_tolerance': None,
             # Optional: enforce polarity so TPSA isn't ~0.0 for hydrocarbon-only molecules.
             'min_tpsa': None,
             # Hard caps (optional) to prevent very large molecules due to halogen-heavy strings.
@@ -816,7 +885,12 @@ if __name__ == '__main__':
     run_stats = _new_stats()
 
     target_props_per_molecule = None
-    target_prop_names = _default_prop_names(int(model_config['num_prop']))
+    target_prop_names = model_config.get('condition_property_names')
+    if not isinstance(target_prop_names, list) or len(target_prop_names) != int(model_config['num_prop']):
+        target_prop_names = load_condition_property_names(
+            model_config['prop_file'],
+            int(model_config['num_prop']),
+        )
 
     if bool(config.get('run_property_sweep', False)):
         # Sweep ranges are defined at the top in runtime_config['sweep']['prop_profile'].
@@ -961,6 +1035,21 @@ if __name__ == '__main__':
             accept_predicate=accept_predicate,
             require_neutral=bool(config.get('require_neutral', False)),
         )
+
+    ms, smiles, pred_labels, target_props_per_molecule, recanon_stats = _recanonicalize_outputs_for_evaluation(
+        mols=ms,
+        smiles=smiles,
+        pred_labels=pred_labels,
+        target_props_per_molecule=target_props_per_molecule,
+        strip_salts=bool(config.get('strip_salts', True)),
+        decharge=bool(config.get('decharge', True)),
+        canonicalize_tautomer=bool(config.get('canonicalize_tautomer', False)),
+    )
+    print(
+        're-canonicalization before evaluation: '
+        f"input={recanon_stats['num_input']}, output={recanon_stats['num_output']}, "
+        f"changed={recanon_stats['num_changed']}, dropped={recanon_stats['num_dropped']}"
+    )
 
     print('number of valid smiles : ', len(ms))
 

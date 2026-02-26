@@ -148,6 +148,64 @@ The labels will be sampeled from latent space: $f(z)$. This head is separate fro
 ---
 
 
+## BACE baseline workflow (pIC50-only conditioning)
+
+This repo now supports a full BACE pipeline where the conditioning target is only `pIC50`.
+
+### 1) Build BACE property file + descriptor stats
+
+Run:
+
+```bash
+python cal_prop.py
+```
+
+With the default `args` in `cal_prop.py` (`mode='from_csv_columns'`), this will:
+
+- read `bace.csv` (`mol` as SMILES, `pIC50` as target),
+- write `bace_pic50.txt` in training format: `SMILES<TAB>pIC50`,
+- write metadata sidecar `bace_pic50.txt.meta.json` with property names,
+- extract descriptor inventory/stats from the original BACE CSV and write:
+  - `bace_descriptor_stats.csv` (per-descriptor summary),
+  - `bace_descriptor_summary.json` (descriptor list + dataset counts),
+- print descriptor summary counts to console.
+
+### 2) Train baseline CVAE on BACE
+
+`train_labels.py` defaults are set for a small-dataset baseline run:
+
+- `data.prop_file='bace_pic50.txt'`
+- `model.mode='lstm'`
+- `training.batch_size=32`
+- `training.num_epochs=120`
+- `model.label_target_indices=None` (auto-selects valid target columns)
+
+Run:
+
+```bash
+python train_labels.py
+```
+
+### 3) Sample molecules without MW/LogP tolerance filtering
+
+For pIC50-only runs, there is no direct RDKit pIC50 descriptor to enforce by tolerance at sampling time.
+
+So in `sample_labels.py` defaults:
+
+- `filters.mw_tolerance=None`
+- `filters.logp_tolerance=None`
+
+Sampling therefore accepts valid/novel molecules after canonicalization/cleanup filters, without target-proximity rejection based on MW/LogP.
+
+Run:
+
+```bash
+python sample_labels.py
+```
+
+The generated table still includes RDKit-computed `MW`, `LogP`, `TPSA` for inspection, plus any predicted label columns from the label head.
+
+
 
 
 

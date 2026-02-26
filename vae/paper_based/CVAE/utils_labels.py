@@ -602,11 +602,26 @@ def _build_accept_predicate(*, config: dict, target_row: list[float]):
     max_heavy_atoms = config.get('max_heavy_atoms')
     max_canonical_len = config.get('max_canonical_smiles_len')
 
+    row = [float(v) for v in target_row]
+
+    mw_target = None
+    if mw_tol is not None:
+        if len(row) >= 1:
+            mw_target = float(row[0])
+        else:
+            print('warning: mw_tolerance is set but target_row has no MW slot; disabling mw_tolerance filter')
+            mw_tol = None
+
+    logp_target = None
+    if logp_tol is not None:
+        if len(row) >= 2:
+            logp_target = float(row[1])
+        else:
+            print('warning: logp_tolerance is set but target_row has no LogP slot; disabling logp_tolerance filter')
+            logp_tol = None
+
     if all(v is None for v in [mw_tol, logp_tol, min_tpsa, max_heavy_atoms, max_canonical_len]):
         return None
-
-    mw_target = float(target_row[0])
-    logp_target = float(target_row[1])
 
     def predicate(can: str, mol) -> bool:
         if max_canonical_len is not None and len(can) > int(max_canonical_len):
@@ -615,12 +630,12 @@ def _build_accept_predicate(*, config: dict, target_row: list[float]):
         if max_heavy_atoms is not None and int(mol.GetNumHeavyAtoms()) > int(max_heavy_atoms):
             return False
 
-        if mw_tol is not None:
+        if mw_tol is not None and mw_target is not None:
             mw = float(ExactMolWt(mol))
             if abs(mw - mw_target) > float(mw_tol):
                 return False
 
-        if logp_tol is not None:
+        if logp_tol is not None and logp_target is not None:
             lp = float(MolLogP(mol))
             if abs(lp - logp_target) > float(logp_tol):
                 return False
@@ -882,8 +897,8 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
         'do_sample': sampling.get('do_sample', False),
         'temperature': sampling.get('temperature', 0.6),
         'top_k': sampling.get('top_k', 20),
-        'mw_tolerance': filters.get('mw_tolerance', 200.0),
-        'logp_tolerance': filters.get('logp_tolerance', 5.0),
+        'mw_tolerance': filters.get('mw_tolerance', None),
+        'logp_tolerance': filters.get('logp_tolerance', None),
         'require_neutral': filters.get('require_neutral', False),
         'min_tpsa': filters.get('min_tpsa', None),
         'max_heavy_atoms': filters.get('max_heavy_atoms', 60),
