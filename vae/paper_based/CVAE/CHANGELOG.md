@@ -20,6 +20,7 @@ All notable changes to this project are documented in this file.
 - `analysis_modules/config.py`: Added starter profile configs for both `zinc_logp` and `bace_pic50_10k` with explicit path knobs (`train_folder`, `train_data_path`, `generated_data_path`, `output_dir`) so runs can be re-pointed quickly.
 - `run_viz_pipeline.py`: Added CLI/runtime overrides for profile paths and row caps so the same module pipeline works for the generated BACE pIC50 dataset and 10k generated-molecule files.
 - `analysis_run_config.json`: Added a file-based starter run config so the whole analysis pipeline can be executed from config without passing per-run path arguments.
+- `analysis_modules/config.py` / `analysis_modules/pipeline.py` / `analysis_run_config.json`: Added config-driven analysis debug mode (`debug`) that prints stage progress, resolved target/prediction columns, validity/similarity progress, and every written analysis artifact path.
 
 - `train.py` / `utils.py`: Added run-folder controls directly in the training config (`training.run_name`, `training.use_run_subdir`). Training now resolves an effective run save path via `build_train_run_save_dir(...)`, so each run can write to its own subdirectory under `training.save_dir` without overwriting other runs.
 - `utils.py`: Added `resolve_checkpoint_path(...)` to resolve checkpoints either from an explicit file path or from a run directory (preferring `model_best.ckpt-*.pt`, then falling back to newest `.pt`).

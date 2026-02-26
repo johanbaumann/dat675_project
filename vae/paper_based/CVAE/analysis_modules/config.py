@@ -51,6 +51,7 @@ class AnalysisConfig:
     run_tanimoto_histogram: bool = True
     run_chemical_space: bool = True
     run_descriptor_space: bool = True
+    debug: bool = False
 
     embedding_train_sample: int = 10_000
     embedding_generated_sample: int = 10_000

@@ -30,8 +30,21 @@ from .config import AnalysisConfig
 from .io_utils import load_generated_dataframe, load_train_dataframe
 
 
+def _debug_log(cfg: AnalysisConfig, message: str) -> None:
+    if bool(cfg.debug):
+        print(f'[analysis:debug] {message}')
+
+
+def _save_figure(cfg: AnalysisConfig, filename: str, *, dpi: int = 180) -> str:
+    out_path = os.path.join(cfg.output_dir, filename)
+    plt.savefig(out_path, dpi=dpi)
+    _debug_log(cfg, f'Wrote figure: {out_path}')
+    return out_path
+
+
 def _maybe_plot_property_distributions(train_df: pd.DataFrame, gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
     if not bool(cfg.save_distribution_plot):
+        _debug_log(cfg, 'Skipping property distribution plots (save_distribution_plot=False).')
         return
 
     os.makedirs(cfg.output_dir, exist_ok=True)
@@ -97,6 +110,10 @@ def _maybe_plot_property_distributions(train_df: pd.DataFrame, gen_df: pd.DataFr
     train_prop_vals = _extract_numeric_series(train_df, train_target_col)
     gen_prop_col_used = gen_pred_col if gen_pred_col else gen_target_col
     gen_prop_vals = _extract_numeric_series(gen_df, gen_prop_col_used)
+    _debug_log(
+        cfg,
+        f'Property distribution columns -> train_target={train_target_col!r}, generated_property={gen_prop_col_used!r}',
+    )
 
     if train_prop_vals.size > 0:
         axes[1].hist(
@@ -123,7 +140,7 @@ def _maybe_plot_property_distributions(train_df: pd.DataFrame, gen_df: pd.DataFr
         axes[1].legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.distribution_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.distribution_plot_filename, dpi=180)
     plt.close(fig)
 
     if train_mw_vals.size > 0 and gen_mw_vals.size > 0:
@@ -144,19 +161,22 @@ def _maybe_plot_property_distributions(train_df: pd.DataFrame, gen_df: pd.DataFr
             plt.xlabel('MW')
             plt.ylabel('Count difference per bin')
             plt.tight_layout()
-            plt.savefig(os.path.join(cfg.output_dir, cfg.mw_distribution_diff_plot_filename), dpi=180)
+            _save_figure(cfg, cfg.mw_distribution_diff_plot_filename, dpi=180)
             plt.close(fig)
 
 
 def _maybe_plot_train_loss(cfg: AnalysisConfig) -> None:
     if not bool(cfg.run_train_loss_plot):
+        _debug_log(cfg, 'Skipping train-loss plot (run_train_loss_plot=False).')
         return
     history_path = os.path.join(cfg.train_folder, 'history.csv')
     if not os.path.exists(history_path):
+        _debug_log(cfg, f'Skipping train-loss plot (history file not found): {history_path}')
         return
 
     df = pd.read_csv(history_path)
     if 'train_loss' not in df.columns or 'test_loss' not in df.columns:
+        _debug_log(cfg, 'Skipping train-loss plot (train_loss/test_loss columns missing in history.csv).')
         return
 
     x = np.arange(len(df), dtype=np.int32)
@@ -170,18 +190,21 @@ def _maybe_plot_train_loss(cfg: AnalysisConfig) -> None:
     plt.title('Training and Validation Loss')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.train_loss_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.train_loss_plot_filename, dpi=180)
     plt.close(fig)
 
 
 def _maybe_plot_tanimoto_histogram(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
     if not bool(cfg.run_tanimoto_histogram):
+        _debug_log(cfg, 'Skipping Tanimoto histogram (run_tanimoto_histogram=False).')
         return
     if 'tanimoto_max_to_ref' not in gen_df.columns:
+        _debug_log(cfg, "Skipping Tanimoto histogram ('tanimoto_max_to_ref' column missing).")
         return
 
     vals = gen_df['tanimoto_max_to_ref'].dropna().to_numpy(dtype=float)
     if vals.size == 0:
+        _debug_log(cfg, 'Skipping Tanimoto histogram (no valid tanimoto values).')
         return
 
     fig = plt.figure(figsize=(8, 5))
@@ -190,7 +213,7 @@ def _maybe_plot_tanimoto_histogram(gen_df: pd.DataFrame, cfg: AnalysisConfig) ->
     plt.xlabel('Max Tanimoto Similarity to train Set')
     plt.ylabel('Frequency')
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.tanimoto_histogram_filename), dpi=180)
+    _save_figure(cfg, cfg.tanimoto_histogram_filename, dpi=180)
     plt.close(fig)
 
 
@@ -220,9 +243,11 @@ def _resolve_property_column(df: pd.DataFrame, requested: str | None, *, role: s
 
 def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> dict:
     if not bool(cfg.run_prediction_error_plot):
+        _debug_log(cfg, 'Skipping prediction-error plot (run_prediction_error_plot=False).')
         return {}
     target_col = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
     pred_col = _resolve_property_column(gen_df, cfg.predicted_property_column, role='pred')
+    _debug_log(cfg, f'Prediction error columns -> target={target_col!r}, prediction={pred_col!r}')
     if not target_col or not pred_col:
         return {}
 
@@ -230,6 +255,7 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
     pred = pd.to_numeric(gen_df[pred_col], errors='coerce').to_numpy(dtype=float)
     valid_mask = np.isfinite(gt) & np.isfinite(pred)
     if int(np.sum(valid_mask)) == 0:
+        _debug_log(cfg, 'Skipping prediction-error plot (no finite target/prediction pairs).')
         return {}
 
     gt = gt[valid_mask]
@@ -246,7 +272,7 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
     plt.ylabel('Absolute Error')
     plt.title(f'Absolute Error vs Ground Truth ({target_col})')
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.prediction_error_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.prediction_error_plot_filename, dpi=180)
     plt.close(fig)
 
     return {
@@ -283,6 +309,7 @@ def _sample_smiles_for_embeddings(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
 
 def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
     if not bool(cfg.run_chemical_space):
+        _debug_log(cfg, 'Skipping chemical-space embedding (run_chemical_space=False).')
         return
 
     train_smiles, _, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(train_df, gen_df, cfg)
@@ -291,7 +318,13 @@ def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
     x_train, _ = smiles_list_to_fp_matrix(fp_gen, train_smiles, dtype=np.int8)
     x_gen, gen_valid_mask = smiles_list_to_fp_matrix(fp_gen, gen_smiles, dtype=np.int8)
     if x_train.shape[0] == 0 or x_gen.shape[0] == 0:
+        _debug_log(cfg, 'Skipping chemical-space embedding (no valid fingerprint rows in train or generated sample).')
         return
+
+    _debug_log(
+        cfg,
+        f'Chemical-space molecules -> train_valid={x_train.shape[0]}, generated_valid={x_gen.shape[0]}',
+    )
 
     if gen_tanimoto is not None:
         gen_tanimoto = gen_tanimoto[gen_valid_mask]
@@ -309,7 +342,7 @@ def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
     plt.colorbar(sc, label='Class (0=train, 1=generated)')
     plt.title('PCA (2D) on Morgan fingerprints colored by Class')
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.chemical_pca_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.chemical_pca_plot_filename, dpi=180)
     plt.close(fig)
 
     pre_dim = int(cfg.chemical_pca_pre_dim)
@@ -336,7 +369,7 @@ def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
     plt.legend()
     plt.title(f't-SNE on Morgan fingerprints (PCA-{pre_dim} preprojection)')
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.chemical_tsne_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.chemical_tsne_plot_filename, dpi=180)
     plt.close(fig)
 
     if gen_tanimoto is not None and gen_tanimoto.shape[0] == gen_tsne.shape[0]:
@@ -355,12 +388,13 @@ def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
         plt.colorbar(sc2, label='Max Tanimoto to train')
         plt.title('Generated t-SNE colored by max Tanimoto to train')
         plt.tight_layout()
-        plt.savefig(os.path.join(cfg.output_dir, cfg.chemical_tsne_tanimoto_plot_filename), dpi=180)
+        _save_figure(cfg, cfg.chemical_tsne_tanimoto_plot_filename, dpi=180)
         plt.close(fig)
 
 
 def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
     if not bool(cfg.run_descriptor_space):
+        _debug_log(cfg, 'Skipping descriptor-space embedding (run_descriptor_space=False).')
         return
 
     train_smiles, _, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(train_df, gen_df, cfg)
@@ -368,7 +402,13 @@ def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame
     x_train_desc, _ = smiles_list_to_descriptor_matrix(train_smiles, cfg.descriptor_names)
     x_gen_desc, gen_desc_valid_mask = smiles_list_to_descriptor_matrix(gen_smiles, cfg.descriptor_names)
     if x_train_desc.shape[0] == 0 or x_gen_desc.shape[0] == 0:
+        _debug_log(cfg, 'Skipping descriptor-space embedding (no valid descriptor rows in train or generated sample).')
         return
+
+    _debug_log(
+        cfg,
+        f'Descriptor-space molecules -> train_valid={x_train_desc.shape[0]}, generated_valid={x_gen_desc.shape[0]}',
+    )
 
     if gen_tanimoto is not None:
         gen_tanimoto = gen_tanimoto[gen_desc_valid_mask]
@@ -386,7 +426,7 @@ def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame
     plt.colorbar(sc, label='Class (0=train, 1=generated)')
     plt.title('PCA (2D) on RDKit descriptors (scaled)')
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.descriptor_pca_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.descriptor_pca_plot_filename, dpi=180)
     plt.close(fig)
 
     pre_dim = int(cfg.descriptor_pca_pre_dim)
@@ -412,7 +452,7 @@ def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame
     plt.legend()
     plt.title('t-SNE on RDKit descriptors (scaled)')
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.descriptor_tsne_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.descriptor_tsne_plot_filename, dpi=180)
     plt.close(fig)
 
     if gen_tanimoto is not None and gen_tanimoto.shape[0] == gen_tsne.shape[0]:
@@ -431,12 +471,13 @@ def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame
         plt.colorbar(sc2, label='Max Tanimoto to train')
         plt.title('Generated descriptor t-SNE colored by max Tanimoto to train')
         plt.tight_layout()
-        plt.savefig(os.path.join(cfg.output_dir, cfg.descriptor_tsne_tanimoto_plot_filename), dpi=180)
+        _save_figure(cfg, cfg.descriptor_tsne_tanimoto_plot_filename, dpi=180)
         plt.close(fig)
 
 
 def _maybe_plot_scaffold_distribution(train_scaffolds: list, gen_scaffolds: list, cfg: AnalysisConfig) -> None:
     if not bool(cfg.save_scaffold_plot):
+        _debug_log(cfg, 'Skipping scaffold distribution plot (save_scaffold_plot=False).')
         return
 
     train_counts = scaffold_counts(train_scaffolds)
@@ -445,6 +486,7 @@ def _maybe_plot_scaffold_distribution(train_scaffolds: list, gen_scaffolds: list
     keys_sorted = sorted(keys, key=lambda k: train_counts.get(k, 0) + gen_counts.get(k, 0), reverse=True)[:20]
 
     if len(keys_sorted) == 0:
+        _debug_log(cfg, 'Skipping scaffold distribution plot (no scaffold keys to plot).')
         return
 
     os.makedirs(cfg.output_dir, exist_ok=True)
@@ -462,11 +504,11 @@ def _maybe_plot_scaffold_distribution(train_scaffolds: list, gen_scaffolds: list
     ax.set_ylabel('Frequency')
     ax.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(cfg.output_dir, cfg.scaffold_plot_filename), dpi=180)
+    _save_figure(cfg, cfg.scaffold_plot_filename, dpi=180)
     plt.close(fig)
 
 
-def _draw_scaffold_grid(scaffold_counts_dict: dict[str, int], out_path: str, n_top: int, n_cols: int, title: str) -> dict:
+def _draw_scaffold_grid(scaffold_counts_dict: dict[str, int], out_path: str, n_top: int, n_cols: int, title: str, cfg: AnalysisConfig) -> dict:
     items = sorted(scaffold_counts_dict.items(), key=lambda x: x[1], reverse=True)[: max(0, int(n_top))]
     mols = []
     legends = []
@@ -503,6 +545,7 @@ def _draw_scaffold_grid(scaffold_counts_dict: dict[str, int], out_path: str, n_t
     plt.tight_layout()
     plt.savefig(out_path, dpi=180)
     plt.close(fig)
+    _debug_log(cfg, f'Wrote scaffold grid: {out_path}')
     return {'saved': True, 'num_drawn': int(len(mols))}
 
 
@@ -537,6 +580,7 @@ def _maybe_save_scaffold_grids_and_stats(train_scaffolds: list, gen_scaffolds: l
     stats_path = os.path.join(cfg.output_dir, cfg.scaffold_stats_filename)
     with open(stats_path, 'w', encoding='utf-8') as f:
         json.dump(scaffold_stats, f, indent=2)
+    _debug_log(cfg, f'Wrote scaffold stats: {stats_path}')
 
     grid_meta = {
         'train_top_scaffold_grid': {'saved': False, 'num_drawn': 0},
@@ -551,6 +595,7 @@ def _maybe_save_scaffold_grids_and_stats(train_scaffolds: list, gen_scaffolds: l
             n_top=int(cfg.scaffold_grid_top_n),
             n_cols=int(cfg.scaffold_grid_n_cols),
             title='Train set',
+            cfg=cfg,
         )
         grid_meta['generated_top_scaffold_grid'] = _draw_scaffold_grid(
             dict(gen_counts),
@@ -558,6 +603,7 @@ def _maybe_save_scaffold_grids_and_stats(train_scaffolds: list, gen_scaffolds: l
             n_top=int(cfg.scaffold_grid_top_n),
             n_cols=int(cfg.scaffold_grid_n_cols),
             title='Generated set',
+            cfg=cfg,
         )
         grid_meta['novel_top_scaffold_grid'] = _draw_scaffold_grid(
             novel_gen_counts,
@@ -565,6 +611,7 @@ def _maybe_save_scaffold_grids_and_stats(train_scaffolds: list, gen_scaffolds: l
             n_top=int(cfg.scaffold_grid_top_n),
             n_cols=int(cfg.scaffold_grid_n_cols),
             title='Novel generated scaffolds',
+            cfg=cfg,
         )
 
     scaffold_stats['scaffold_stats_file'] = stats_path
@@ -580,10 +627,14 @@ def _subset_df(df: pd.DataFrame, max_rows: int, seed: int) -> pd.DataFrame:
 
 def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     os.makedirs(cfg.output_dir, exist_ok=True)
+    _debug_log(cfg, f'Output directory ready: {cfg.output_dir}')
+    _debug_log(cfg, f'Inputs -> train_data_path={cfg.train_data_path}, generated_data_path={cfg.generated_data_path}')
+    _debug_log(cfg, f'Target settings -> target_property_column={cfg.target_property_column!r}, predicted_property_column={cfg.predicted_property_column!r}')
     _maybe_plot_train_loss(cfg)
 
     train_df = load_train_dataframe(cfg.train_data_path, smiles_column=cfg.smiles_column, sep=cfg.train_sep)
     gen_df = load_generated_dataframe(cfg.generated_data_path, sep=cfg.generated_sep)
+    _debug_log(cfg, f'Loaded rows -> train={len(train_df)}, generated={len(gen_df)}')
 
     if cfg.smiles_column not in train_df.columns:
         raise ValueError(f"Train data is missing smiles column '{cfg.smiles_column}'")
@@ -592,6 +643,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
 
     train_df = _subset_df(train_df, cfg.train_max, cfg.random_seed)
     gen_df = _subset_df(gen_df, cfg.generated_max, cfg.random_seed)
+    _debug_log(cfg, f'Subset rows -> train={len(train_df)} (max={cfg.train_max}), generated={len(gen_df)} (max={cfg.generated_max})')
 
     train_smiles = train_df[cfg.smiles_column].astype(str).tolist()
     gen_smiles = gen_df[cfg.smiles_column].astype(str).tolist()
@@ -602,6 +654,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     gen_df = gen_df.copy()
     gen_df['is_valid'] = [m is not None for m in gen_mols]
     gen_df['canonical_smiles'] = [canonicalize_smiles(s) for s in gen_smiles]
+    _debug_log(cfg, f'Validity progress -> valid_generated={int(np.sum(gen_df["is_valid"].to_numpy(dtype=bool)))}/{len(gen_df)}')
 
     train_scaffolds = [safe_murcko_scaffold_smiles(m) for m in train_mols]
     gen_scaffolds = [safe_murcko_scaffold_smiles(m) for m in gen_mols]
@@ -620,16 +673,20 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
 
     diversity = float(1.0 - mean_similarity) if not np.isnan(mean_similarity) else 0.0
     gen_df['diversity_score'] = diversity
+    _debug_log(cfg, f'Similarity stats -> mean_tanimoto={mean_similarity}, diversity_score={diversity}')
 
     target_col = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
     pred_col = _resolve_property_column(gen_df, cfg.predicted_property_column, role='pred')
+    _debug_log(cfg, f'Resolved generated columns -> target={target_col!r}, prediction={pred_col!r}')
     if target_col and pred_col:
         if target_col in gen_df.columns and pred_col in gen_df.columns:
             diff = gen_df[target_col].astype(float) - gen_df[pred_col].astype(float)
             gen_df['abs_prediction_error'] = diff.abs()
+            _debug_log(cfg, "Computed 'abs_prediction_error' column.")
 
     processed_csv_path = os.path.join(cfg.output_dir, cfg.processed_csv_filename)
     gen_df.to_csv(processed_csv_path, index=False)
+    _debug_log(cfg, f'Wrote processed CSV: {processed_csv_path}')
 
     _maybe_plot_property_distributions(train_df, gen_df, cfg)
     _maybe_plot_scaffold_distribution(train_scaffolds, gen_scaffolds, cfg)
@@ -671,5 +728,6 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     summary_path = os.path.join(cfg.output_dir, cfg.summary_json_filename)
     with open(summary_path, 'w', encoding='utf-8') as f:
         json.dump({'config': asdict(cfg), 'summary': summary}, f, indent=2)
+    _debug_log(cfg, f'Wrote summary JSON: {summary_path}')
 
     return summary

@@ -25,6 +25,8 @@ def main() -> None:
         )
 
     cfg = load_analysis_config_from_file(args.config)
+    if bool(cfg.debug):
+        print('[analysis:debug] Debug mode enabled from config.')
     summary = run_analysis_pipeline(cfg)
 
     print(80 * '=')
