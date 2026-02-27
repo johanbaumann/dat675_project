@@ -90,19 +90,39 @@ def _run_subprocess(command: list[str], *, cwd: str, log_file: str, step_name: s
     print(f'[{step_name}] running command: {command}')
     print(f'[{step_name}] cwd: {cwd}')
     started = time.time()
-    proc = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
-    duration = time.time() - started
-
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+    env = dict(os.environ)
+    env['PYTHONUNBUFFERED'] = '1'
+
     with open(log_file, 'w', encoding='utf-8') as f:
         f.write(f'command: {command}\n')
         f.write(f'cwd: {cwd}\n')
+        f.write('streaming: stdout+stderr (tee to console + file)\n')
+        f.write('\n=== LIVE OUTPUT ===\n')
+        f.flush()
+
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                print(f'[{step_name}] {line}', end='')
+                f.write(line)
+                f.flush()
+
+        proc.wait()
+        duration = time.time() - started
+        f.write('\n=== PROCESS SUMMARY ===\n')
         f.write(f'exit_code: {proc.returncode}\n')
         f.write(f'duration_sec: {duration:.3f}\n')
-        f.write('\n=== STDOUT ===\n')
-        f.write(proc.stdout or '')
-        f.write('\n=== STDERR ===\n')
-        f.write(proc.stderr or '')
 
     print(f'[{step_name}] exit_code={proc.returncode}, duration={duration:.1f}s, log={log_file}')
     if proc.returncode != 0:
@@ -114,6 +134,9 @@ def _build_train_config_for_fold(base_train_config: dict, *, fold_dir: str, trai
         'data': {
             'prop_file': train_prop_txt,
             'test_prop_file': test_prop_txt,
+            # Explicitly ignored by train_labels.py when test_prop_file is provided.
+            # Keep a valid value here to make behavior obvious in saved config.
+            'train_ratio': 1.0,
         },
         'training': {
             'save_dir': os.path.join(fold_dir, 'training'),
@@ -163,6 +186,88 @@ def _contains_predicted_column(generated_csv_path: str, label_column: str) -> bo
     except Exception:
         return False
     return f'pred_{label_column}' in cols
+
+
+def _print_fold_start_summary(
+    *,
+    fold_name: str,
+    converted,
+    fold_dir: str,
+    train_cfg_path: str,
+    train_dir: str,
+    sample_dir: str,
+    analysis_dir: str,
+    logs_dir: str,
+    sampling_cfg: dict,
+    analysis_enabled: bool,
+) -> None:
+    expected_generated_csv = os.path.abspath(
+        os.path.join(sample_dir, str(sampling_cfg.get('result_filename', 'generated.csv')))
+    )
+    expected_quality_csv = os.path.abspath(
+        os.path.join(sample_dir, str(sampling_cfg.get('quality_summary_filename', 'quality_summary.csv')))
+    )
+
+    print('')
+    print('-' * 90)
+    print(f'[{fold_name}] fold-start summary')
+    print('-' * 90)
+    print(f'[{fold_name}] input.train_csv            : {converted.train_csv}')
+    print(f'[{fold_name}] input.test_csv             : {converted.test_csv}')
+    print(f'[{fold_name}] input.train_prop_txt       : {converted.train_prop_txt}')
+    print(f'[{fold_name}] input.test_prop_txt        : {converted.test_prop_txt}')
+    print(f'[{fold_name}] input.train_rows           : {converted.train_rows}')
+    print(f'[{fold_name}] input.test_rows            : {converted.test_rows}')
+    print(f'[{fold_name}] write.train_config_json    : {train_cfg_path}')
+    print(f'[{fold_name}] write.train_run_dir        : {train_dir}')
+    print(f'[{fold_name}] write.sampling_dir         : {sample_dir}')
+    print(f'[{fold_name}] write.analysis_dir         : {analysis_dir}')
+    print(f'[{fold_name}] write.logs_dir             : {logs_dir}')
+    print(f'[{fold_name}] expected.generated_csv     : {expected_generated_csv}')
+    print(f'[{fold_name}] expected.quality_summary   : {expected_quality_csv}')
+    print(f'[{fold_name}] expected.train_log         : {os.path.join(logs_dir, "train.log")}')
+    print(f'[{fold_name}] expected.analysis_log      : {os.path.join(logs_dir, "analysis.log")}')
+    print(f'[{fold_name}] analysis.enabled           : {bool(analysis_enabled)}')
+    print('-' * 90)
+    print('')
+
+
+def _print_fold_end_summary(
+    *,
+    fold_name: str,
+    converted,
+    train_cfg_path: str,
+    train_dir: str,
+    sample_dir: str,
+    analysis_dir: str,
+    logs_dir: str,
+    sampling_result,
+    analysis_enabled: bool,
+    analysis_config_path: Optional[str],
+    fold_manifest_path: str,
+) -> None:
+    print('')
+    print('=' * 90)
+    print(f'[{fold_name}] fold-end summary')
+    print('=' * 90)
+    print(f'[{fold_name}] split.train_rows            : {converted.train_rows}')
+    print(f'[{fold_name}] split.test_rows             : {converted.test_rows}')
+    print(f'[{fold_name}] used.train_config_json      : {train_cfg_path}')
+    print(f'[{fold_name}] output.train_run_dir        : {train_dir}')
+    print(f'[{fold_name}] output.sampling_dir         : {sample_dir}')
+    print(f'[{fold_name}] output.analysis_dir         : {analysis_dir}')
+    print(f'[{fold_name}] output.logs_dir             : {logs_dir}')
+    print(f'[{fold_name}] output.checkpoint_used      : {sampling_result.checkpoint_path}')
+    print(f'[{fold_name}] output.generated_csv        : {sampling_result.generated_csv_path}')
+    print(f'[{fold_name}] output.quality_summary_csv  : {sampling_result.quality_summary_csv_path}')
+    print(f'[{fold_name}] output.num_generated_saved  : {sampling_result.num_saved}')
+    print(f'[{fold_name}] output.train_log            : {os.path.join(logs_dir, "train.log")}')
+    print(f'[{fold_name}] output.analysis_log         : {os.path.join(logs_dir, "analysis.log")}')
+    print(f'[{fold_name}] output.analysis_enabled     : {bool(analysis_enabled)}')
+    print(f'[{fold_name}] output.analysis_config_json : {analysis_config_path}')
+    print(f'[{fold_name}] output.fold_manifest_json   : {fold_manifest_path}')
+    print('=' * 90)
+    print('')
 
 
 def main() -> None:
@@ -246,6 +351,8 @@ def main() -> None:
             f'[{fold_name}] data converted: train_rows={converted.train_rows}, test_rows={converted.test_rows}, '
             f'train_prop_txt={converted.train_prop_txt}, test_prop_txt={converted.test_prop_txt}'
         )
+        print(f'[{fold_name}] input files: train_csv={converted.train_csv}')
+        print(f'[{fold_name}] input files: test_csv={converted.test_csv}')
 
         fold_train_cfg = _build_train_config_for_fold(
             base_train_config,
@@ -254,6 +361,25 @@ def main() -> None:
             test_prop_txt=converted.test_prop_txt,
         )
         train_cfg_path = _write_json(os.path.join(fold_dir, 'train_config.json'), fold_train_cfg)
+        print(f'[{fold_name}] wrote train config: {train_cfg_path}')
+        print(
+            f'[{fold_name}] split policy: external files only (no random split). '
+            f'train_ratio in config is ignored in this mode.'
+        )
+
+        run_analysis = bool(analysis_cfg.get('enabled', True))
+        _print_fold_start_summary(
+            fold_name=fold_name,
+            converted=converted,
+            fold_dir=fold_dir,
+            train_cfg_path=train_cfg_path,
+            train_dir=train_dir,
+            sample_dir=sample_dir,
+            analysis_dir=analysis_dir,
+            logs_dir=logs_dir,
+            sampling_cfg=sampling_cfg,
+            analysis_enabled=run_analysis,
+        )
 
         _run_subprocess(
             [python_exe, train_script, '--config-json', train_cfg_path],
@@ -277,7 +403,6 @@ def main() -> None:
         )
         print(f'[{fold_name}] sampling complete: saved={sampling_result.num_saved}')
 
-        run_analysis = bool(analysis_cfg.get('enabled', True))
         analysis_config_path = None
         if run_analysis:
             label_for_analysis = label_columns[0] if len(label_columns) > 0 else 'prop_0'
@@ -292,6 +417,7 @@ def main() -> None:
                 label_column=label_for_analysis,
             )
             analysis_config_path = _write_json(os.path.join(analysis_dir, 'analysis_config.json'), fold_analysis_cfg)
+            print(f'[{fold_name}] wrote analysis config: {analysis_config_path}')
 
             _run_subprocess(
                 [python_exe, analysis_script, '--config', analysis_config_path],
@@ -316,10 +442,23 @@ def main() -> None:
             'analysis_config_path': analysis_config_path,
             'completed_unix': time.time(),
         }
-        _write_json(os.path.join(fold_dir, 'fold_manifest.json'), fold_manifest)
+        fold_manifest_path = _write_json(os.path.join(fold_dir, 'fold_manifest.json'), fold_manifest)
         global_manifest['folds'].append(fold_manifest)
 
         _write_json(os.path.join(output_root, 'global_manifest.partial.json'), global_manifest)
+        _print_fold_end_summary(
+            fold_name=fold_name,
+            converted=converted,
+            train_cfg_path=train_cfg_path,
+            train_dir=train_dir,
+            sample_dir=sample_dir,
+            analysis_dir=analysis_dir,
+            logs_dir=logs_dir,
+            sampling_result=sampling_result,
+            analysis_enabled=run_analysis,
+            analysis_config_path=analysis_config_path,
+            fold_manifest_path=fold_manifest_path,
+        )
         print(f'[{fold_name}] fold complete and manifest saved')
 
     global_manifest['finished_unix'] = time.time()

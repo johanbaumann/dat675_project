@@ -15,7 +15,6 @@
       "training_preset": "custom",
       "data": {
         "seq_length": 120,
-        "train_ratio": 0.8,
         "smiles_augmentation_duplicates": 10
       },
       "model": {

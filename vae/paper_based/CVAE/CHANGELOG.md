@@ -18,6 +18,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- `fold_pipeline/` module: added a standalone cross-validation orchestrator (`run_fold_pipeline.py`) with modular helpers for fold discovery/conversion (`fold_data.py`) and sampling (`sampling_pipeline.py`). The runner executes train -> sample -> analysis per fold and stores all artifacts under `fold_<k>/`.
+
+- `train_labels.py`: added runtime config override support via `--config-json` (and `TRAIN_LABELS_CONFIG_JSON` env fallback) to enable non-interactive orchestration without removing existing in-file config workflow.
+
+- `train_labels.py`: added external split mode support through `data.test_prop_file`, including aligned tokenization for separate train/test files via shared vocabulary, preventing accidental fold mixing when scaffold-split files are provided.
+
 - `sample_labels.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup now prints resolved sampling metadata including `vocab_size` (plus inferred `num_prop` and `prop_file`) so runs show the active vocabulary immediately.
 - `run_viz_pipeline.py`: Added an optional, backward-compatible sampling-metadata print path; when `overrides.prop_file` and `overrides.seq_length` are present in the analysis config JSON, the runner prints inferred `vocab_size` before analysis starts.
 - `run_viz_pipeline.py` / `analysis_run_config.json`: Added `overrides.print_vocab_size` toggle to enable/disable vocab-size printing without affecting analysis pipeline execution.
@@ -38,6 +44,12 @@ All notable changes to this project are documented in this file.
 - `sample_labels.py`: Added `training_dist` sampling mode (`run_training_dist`) to sample conditioning targets from an approximate training-property distribution (Gaussian fit via saved `prop_norm_mean/std`). This keeps conditioning near the training manifold, which often improves label-head calibration around typical training values.
 
 ### Changed
+
+- `fold_pipeline/run_fold_pipeline.py`: subprocess execution now streams logs live to console while simultaneously writing to per-fold log files (`logs/train.log`, `logs/analysis.log`) so epoch/loss diagnostics are visible during pipeline runs.
+
+- `fold_pipeline/fold_pipeline_config.example.json`: removed `data.train_ratio` from the example fold config to avoid confusion in external split mode; fold pipeline now explicitly prints that train/test come from pre-split fold files and that random split is bypassed.
+
+- `train_labels.py`: when `data.test_prop_file` is set, startup now logs that `train_ratio` is ignored and external split files are used directly.
 
 - `run_viz_pipeline.py`: Runner now primarily loads settings from a JSON config file (`--config`, default `analysis_run_config.json`) instead of many path/column CLI arguments.
 - `analysis_modules/pipeline.py`: Extended coverage to include notebook-equivalent train-loss plotting, Tanimoto histogram, chemical-space PCA+t-SNE, and descriptor-space PCA+t-SNE in addition to similarity/distribution/scaffold outputs.

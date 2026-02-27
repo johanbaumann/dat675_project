@@ -498,6 +498,9 @@ if external_test_prop_file_cfg:
     print('using external test split file to prevent train/test leakage')
     print(f'  train file: {config["prop_file"]}')
     print(f'  test file : {external_test_prop_file_cfg}')
+    print(
+        f'  note: train_ratio={config.get("train_ratio")} is ignored because external test split is active.'
+    )
     train_molecules_input = molecules_input
     train_molecules_output = molecules_output
     train_labels = labels

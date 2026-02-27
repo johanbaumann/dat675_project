@@ -7,6 +7,11 @@ This folder contains a standalone modular runner for 5x5 fold workflows:
 3. Sample molecules from the trained checkpoint.
 4. Run analysis/statistics pipeline on generated molecules.
 
+No fold mixing:
+- Train fold is always loaded from `combination_1000.../fold_iteration_k.csv`.
+- Test fold is always loaded from `combination_500.../fold_iteration_k.csv`.
+- `train_labels.py` runs in external-split mode (`data.test_prop_file`) so internal random splitting is bypassed.
+
 ## Files
 
 - `run_fold_pipeline.py`: top-level orchestrator.
@@ -42,3 +47,10 @@ For each fold, artifacts are grouped in one folder:
 A global manifest is saved at:
 
 - `.../global_manifest.json`
+
+## Logging
+
+- Training and analysis subprocess logs are streamed live to console.
+- The same output is also written to per-fold log files:
+	- `.../fold_<k>/logs/train.log`
+	- `.../fold_<k>/logs/analysis.log`
