@@ -131,6 +131,11 @@ def main() -> None:
     model_config["num_prop"] = int(inferred_num_prop)
 
     vocab_size = len(charset)
+    # Print the resolved vocabulary size used during this sweep run.
+    print(
+        f"sampling metadata: vocab_size={vocab_size}, "
+        f"num_prop={int(inferred_num_prop)}, prop_file={model_config['prop_file']}"
+    )
     model = CVAE(vocab_size, model_config)
     model.restore(save_file)
 

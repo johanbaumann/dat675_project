@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- `analysis_modules/config.py`: `load_analysis_config_from_file(...)` now ignores unknown config override keys before building `AnalysisConfig`, preventing crashes like `unexpected keyword argument 'print_vocab_size'` when runner-only toggles are present.
+
 - `sample.py` / `debug_sampling.py`: Sampling now prefers the `model_config` embedded in the checkpoint (`.pt`) payload. This prevents a subtle failure mode where `save/training_config.json` gets overwritten by later training runs (often Transformer experiments), causing sampling to use the wrong `prop_file` / `seq_length` / `num_prop` and especially the wrong `prop_norm_mean/std` (=> invalid SMILES and/or near-zero acceptance).
 - `model_labels.py`: Fixed a wiring bug where `include_condition_in_label_head=True` built a `(z, c)` label head but prediction still used `z` only.
 - `sample.py`: Default decoding is stochastic again (`do_sample=True`). During Transformer refactors the default was set to greedy decoding, which commonly collapses to a single repeated molecule ("not unique") and can also reduce validity.
@@ -15,6 +17,10 @@ All notable changes to this project are documented in this file.
 - `sample.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup no longer calls full `load_data(...)` just to get charset/vocab/num_prop. Scripts now use a lightweight metadata loader with cache, avoiding long startup stalls on very large property files.
 
 ### Added
+
+- `sample_labels.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup now prints resolved sampling metadata including `vocab_size` (plus inferred `num_prop` and `prop_file`) so runs show the active vocabulary immediately.
+- `run_viz_pipeline.py`: Added an optional, backward-compatible sampling-metadata print path; when `overrides.prop_file` and `overrides.seq_length` are present in the analysis config JSON, the runner prints inferred `vocab_size` before analysis starts.
+- `run_viz_pipeline.py` / `analysis_run_config.json`: Added `overrides.print_vocab_size` toggle to enable/disable vocab-size printing without affecting analysis pipeline execution.
 
 - `analysis_modules/` package and `run_viz_pipeline.py`: Added reusable Python modules that mirror the major `viz.ipynb` analysis flow (data loading, canonicalization, validity flags, Tanimoto-to-reference, diversity score, scaffold overlap, and CSV/JSON outputs) while keeping the notebook unchanged.
 - `analysis_modules/config.py`: Added starter profile configs for both `zinc_logp` and `bace_pic50_10k` with explicit path knobs (`train_folder`, `train_data_path`, `generated_data_path`, `output_dir`) so runs can be re-pointed quickly.

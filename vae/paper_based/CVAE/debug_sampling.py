@@ -61,6 +61,11 @@ def main() -> None:
         int(model_config["seq_length"]),
     )
     vocab_size = len(charset)
+    # Print the resolved vocabulary size for quick sampling diagnostics.
+    print(
+        f"sampling metadata: vocab_size={vocab_size}, "
+        f"num_prop={int(inferred_num_prop)}, prop_file={model_config['prop_file']}"
+    )
     model_config["num_prop"] = int(inferred_num_prop)
 
     if bool(config.get("exclude_training", True)):

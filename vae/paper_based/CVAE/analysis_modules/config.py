@@ -139,4 +139,9 @@ def load_analysis_config_from_file(path: str) -> AnalysisConfig:
     if 'descriptor_names' in overrides and isinstance(overrides['descriptor_names'], list):
         overrides['descriptor_names'] = tuple(str(x) for x in overrides['descriptor_names'])
 
+    # Backward/forward compatibility: allow extra keys in config JSON (for runner
+    # toggles or future extensions) without breaking AnalysisConfig construction.
+    valid_keys = set(AnalysisConfig.__dataclass_fields__.keys())
+    overrides = {k: v for k, v in overrides.items() if k in valid_keys}
+
     return build_profile_config(profile=profile, **overrides)

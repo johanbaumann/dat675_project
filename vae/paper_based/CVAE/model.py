@@ -478,7 +478,8 @@ class CVAE(nn.Module):
         start_codon: numpy array of shape (batch_size, 1) containing the index of the start token (e.g. 'X') in the vocab
         seq_length: maximum length of the generated sequence (120 in the original paper)
 
-        
+        The sampling proces is based on a top-k sampling strategy with temperature scaling.
+        Temperature scaling with top-k is activated by do_sample=True, and the temperature and top_k values control the randomness of the sampling process.
 
         """
 

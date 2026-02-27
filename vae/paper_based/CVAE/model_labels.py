@@ -335,7 +335,7 @@ class CVAE(nn.Module):
            with separate memory from [z, c] for cross-attention.
         
         
-        
+
         
         """
         
@@ -355,7 +355,7 @@ class CVAE(nn.Module):
             decoder_input = self.positional_encoding(decoder_input)
 
             seq_len = x_emb.size(1)
-            memory = self.memory_proj(torch.cat([z, c], dim=-1)).unsqueeze(1)
+            memory = self.memory_proj(torch.cat([z, c], dim=-1)).unsqueeze(1) # cross-attention memory is just [z, c] repeated once (no seq_len dim)
             tgt_padding_mask = None
             if lengths is not None:
                 tgt_padding_mask = self._build_padding_mask(lengths, seq_len, x.device)
@@ -615,17 +615,17 @@ class CVAE(nn.Module):
     ) -> np.ndarray:
         
         """
-        Samples a batch of sequences from the model given:
-            - latent_vector: (batch, latent_size) numpy array of latent vectors 'z' to
-            condition on. Typically obtained from 'get_latent_vector()' or sampled from N(0,1).
-            - c: (batch, num_prop) numpy array of conditioning properties (e.g. LogP/MW/TPSA).
-            - start_codon: (batch,) numpy array of start token indices to initialize decoding.
-            - seq_length: maximum sequence length to decode (including start token).
-            - do_sample: if True, use multinomial sampling; if False, use argmax decoding.
-            - temperature: softmax temperature for sampling; ignored if do_sample=False.
-            - top_k: if set, restrict sampling to the top_k most probable tokens at each step
+ 
 
-
+        The Sampler samples batches and implements:
+        - Greedy decoding (do_sample=False) or multinomial sampling with temperature control (do_sample=True, temperature>0).
+        - Optional top-k filtering before sampling (top_k > 0).
+        Sampling loop continues until either:
+        - EOS token is generated for all sequences in the batch, or
+        - max sequence length is reached.
+        ITs fundamentaly auto-regressive, where it feeds the generated token back as input for the next step (not unlike large language models).
+        The transformer enables cross-attention to the latent vector and conditioning props at each decoding step, which can improve sample quality and diversity compared to the LSTM.
+        The transformer can also handle longer range dependencies during decoding compared to the LSTM, which can be beneficial for generating longer sequences.
 
         """
 
@@ -654,6 +654,8 @@ class CVAE(nn.Module):
             temperature: float,
             top_k: Optional[int],
         ) -> torch.Tensor:
+            # greedy decoding: simply take the token with highest probability (argmax).
+            # NOTE: if do_sample=False, temperature and top_k are ignored and have no effect on decoding.
             if not do_sample:
                 return torch.argmax(logits_last, dim=-1, keepdim=True)
 
@@ -665,6 +667,7 @@ class CVAE(nn.Module):
                 logits_f = logits_f / temp
 
             k = int(top_k) if top_k is not None else 0
+            # check so that top_k is valid (not negative, and less than vocab size)
             if k > 0 and k < logits_f.size(-1):
                 top_vals, _ = torch.topk(logits_f, k, dim=-1)
                 kth = top_vals[:, -1].unsqueeze(-1)
@@ -711,8 +714,11 @@ class CVAE(nn.Module):
                 # this speeds up the sampling loop!
                 finished |= next_x.squeeze(1).eq(e_index_t)
                 if self.model_mode == 'lstm':
+                    # lstm has states.
+                    # this is due to its gate mechanism which relies on the previous hidden state to compute the next token probabilities.
                     x = next_x
                 else:
+                    # if transformer, we need to feed the entire generated sequence so far (not just last token) due to lack of statefulness.
                     x = torch.cat([x, next_x], dim=1)
 
                 if finished.all():

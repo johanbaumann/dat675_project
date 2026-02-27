@@ -747,14 +747,14 @@ if __name__ == '__main__':
         'output': {
             #'result_filename': 'CVAE_lstm_300k_test.txt',
             #'result_filename': 'train_dist_temp_transformer_300k_test.txt',
-            'result_filename': '10k_bace_test.txt',
+            'result_filename': '10k_test.txt',
             # Optional: if set, save generated molecules to this `.pkl` file.
             'molecules_pickle_filename': None,
             # If None, defaults to result filename stem + '_quality_summary.csv'.
             'quality_summary_filename': None,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
             #'sweep_stats_filename': 'train_dist_temp_transformer_300k_test.csv',
-            'sweep_stats_filename': '10k_bace_test.csv',
+            'sweep_stats_filename': '10k_test.csv',
             
         },
     }
@@ -792,6 +792,12 @@ if __name__ == '__main__':
         int(model_config['seq_length']),
     )
     vocab_size = len(charset)
+    # Backward-compatible runtime visibility: report the resolved vocabulary size
+    # used for sampling (derived from the current property file + seq length).
+    print(
+        f"sampling metadata: vocab_size={vocab_size}, "
+        f"num_prop={int(inferred_num_prop)}, prop_file={model_config['prop_file']}"
+    )
     trained_num_prop = int(model_config.get('num_prop', inferred_num_prop))
     if trained_num_prop != inferred_num_prop:
         raise ValueError(

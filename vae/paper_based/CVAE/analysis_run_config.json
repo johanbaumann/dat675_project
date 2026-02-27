@@ -13,6 +13,7 @@
     "embedding_train_sample": 2000,
     "embedding_generated_sample": 2000,
     "debug": true,
+    "print_vocab_size": true,
 
     "run_train_loss_plot": true,
     "run_tanimoto_histogram": true,
