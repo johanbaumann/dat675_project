@@ -318,6 +318,8 @@ def main() -> None:
     train_folds_dir = os.path.abspath(str(cfg['train_folds_dir']))
     test_folds_dir = os.path.abspath(str(cfg['test_folds_dir']))
     output_root = os.path.abspath(str(cfg.get('output_root', os.path.join('save', 'fold_pipeline_runs'))))
+    training_root = os.path.abspath(str(cfg.get('training_output_root', output_root)))
+    artifacts_root = os.path.abspath(str(cfg.get('artifacts_output_root', output_root)))
     smiles_column = str(cfg.get('smiles_column', 'smiles'))
     label_columns = [str(x) for x in cfg.get('label_columns', [cfg.get('label_column', 'pIC50')])]
     fold_glob = str(cfg.get('fold_glob', 'fold_iteration_*.csv'))
@@ -334,6 +336,8 @@ def main() -> None:
     print(f'train_folds_dir={train_folds_dir}')
     print(f'test_folds_dir={test_folds_dir}')
     print(f'output_root={output_root}')
+    print(f'training_output_root={training_root}')
+    print(f'artifacts_output_root={artifacts_root}')
     print(f'python_executable={python_exe}')
     print(f'label_columns={label_columns}')
     if cfg.get('active_pipeline_preset') is not None:
@@ -354,12 +358,16 @@ def main() -> None:
         print(f'filtered to single fold: {args.only_fold}')
 
     os.makedirs(output_root, exist_ok=True)
+    os.makedirs(training_root, exist_ok=True)
+    os.makedirs(artifacts_root, exist_ok=True)
 
     global_manifest = {
         'config_path': os.path.abspath(args.config),
         'workspace_root': workspace_root,
         'train_folds_dir': train_folds_dir,
         'test_folds_dir': test_folds_dir,
+        'training_output_root': training_root,
+        'artifacts_output_root': artifacts_root,
         'num_folds': len(fold_pairs),
         'folds': [],
         'started_unix': time.time(),
@@ -372,13 +380,15 @@ def main() -> None:
     for pair in fold_pairs:
         fold_name = f'fold_{pair.fold_index}'
         fold_dir = os.path.join(output_root, fold_name)
-        data_dir = os.path.join(fold_dir, 'data')
-        train_dir = os.path.join(fold_dir, 'training')
-        sample_dir = os.path.join(fold_dir, 'sampling')
-        analysis_dir = os.path.join(fold_dir, 'analysis')
-        logs_dir = os.path.join(fold_dir, 'logs')
+        training_fold_dir = os.path.join(training_root, fold_name)
+        artifacts_fold_dir = os.path.join(artifacts_root, fold_name)
+        data_dir = os.path.join(artifacts_fold_dir, 'data')
+        train_dir = os.path.join(training_fold_dir, 'training')
+        sample_dir = os.path.join(artifacts_fold_dir, 'sampling')
+        analysis_dir = os.path.join(artifacts_fold_dir, 'analysis')
+        logs_dir = os.path.join(artifacts_fold_dir, 'logs')
 
-        for p in [fold_dir, data_dir, train_dir, sample_dir, analysis_dir, logs_dir]:
+        for p in [fold_dir, training_fold_dir, artifacts_fold_dir, data_dir, train_dir, sample_dir, analysis_dir, logs_dir]:
             os.makedirs(p, exist_ok=True)
 
         print('\n' + '=' * 90)
@@ -442,12 +452,17 @@ def main() -> None:
             fold_sampling_cfg = dict(sampling_cfg)
             # Fallback naming used when checkpoint metadata lacks label_target_names.
             fold_sampling_cfg['pred_property_names'] = list(label_columns)
-            target_row = _resolve_target_row(
-                fold_sampling_cfg,
-                train_prop_txt=converted.train_prop_txt,
-                test_prop_txt=converted.test_prop_txt,
-            )
-            print(f'[{fold_name}] sampling target row: {target_row}')
+            run_training_dist = bool(fold_sampling_cfg.get('run_training_dist', False))
+            if run_training_dist:
+                target_row = None
+                print(f'[{fold_name}] sampling mode: training_dist (per-molecule varying targets)')
+            else:
+                target_row = _resolve_target_row(
+                    fold_sampling_cfg,
+                    train_prop_txt=converted.train_prop_txt,
+                    test_prop_txt=converted.test_prop_txt,
+                )
+                print(f'[{fold_name}] sampling target row: {target_row}')
 
             sampling_result = run_sampling_for_fold(
                 run_dir=train_dir,
@@ -482,6 +497,11 @@ def main() -> None:
                     f'{fold_name}: analysis enabled but sampling was disabled. '
                     'Set analysis.enabled=false or enable sampling.'
                 )
+            if str(sampling_result.generated_csv_path).startswith('SKIPPED_'):
+                raise RuntimeError(
+                    f'{fold_name}: analysis enabled but generated CSV was not saved. '
+                    'Set sampling.save_generated_csv=true or disable analysis.'
+                )
             label_for_analysis = label_columns[0] if len(label_columns) > 0 else 'prop_0'
             has_pred_labels = _contains_predicted_column(sampling_result.generated_csv_path, label_for_analysis)
             fold_analysis_cfg = _build_analysis_config_for_fold(
@@ -512,6 +532,8 @@ def main() -> None:
             'test_csv': converted.test_csv,
             'train_prop_txt': converted.train_prop_txt,
             'test_prop_txt': converted.test_prop_txt,
+            'training_fold_dir': training_fold_dir,
+            'artifacts_fold_dir': artifacts_fold_dir,
             'train_config_path': train_cfg_path,
             'train_run_dir': train_dir,
             'sampling_result': asdict(sampling_result),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -20,6 +21,7 @@ from utils import (
     canonicalize_for_filtering,
     compose_train_config_from_dict,
     infer_training_config_path,
+    load_condition_property_names,
     load_checkpoint_model_config,
     load_json,
     load_sampling_metadata,
@@ -30,6 +32,7 @@ from utils_labels import (
     _accumulate_stats,
     _build_accept_predicate,
     _collect_new_unique_from_raw_with_payload,
+    _collect_new_unique_from_raw_with_payloads,
     _compute_rdkit_descriptors,
     _new_stats,
     _print_quality_stats,
@@ -37,6 +40,7 @@ from utils_labels import (
     _save_quality_summary_csv,
     create_and_restore_model,
     normalize_like_training,
+    sample_target_props_like_training,
 )
 
 
@@ -67,8 +71,7 @@ def _target_row_to_batch(target_row: list[float], batch_size: int) -> np.ndarray
 def _configure_rdkit_logging(*, suppress_parse_warnings: bool) -> None:
     if not bool(suppress_parse_warnings):
         return
-    RDLogger.DisableLog('rdApp.error')
-    RDLogger.DisableLog('rdApp.warning')
+    RDLogger.logger().setLevel(logging.CRITICAL)
 
 
 def _safe_murcko_scaffold_smiles(mol: Optional[Chem.Mol]) -> Optional[str]:
@@ -145,7 +148,7 @@ def run_sampling_for_fold(
     *,
     run_dir: str,
     output_dir: str,
-    target_row: list[float],
+    target_row: Optional[list[float]],
     sampling_cfg: dict,
     test_scaffold_csv: Optional[str] = None,
     test_scaffold_smiles_column: str = 'smiles',
@@ -164,10 +167,21 @@ def run_sampling_for_fold(
     )
     model_config['num_prop'] = int(inferred_num_prop)
 
-    if len(target_row) != int(model_config['num_prop']):
-        raise ValueError(
-            f'target_row has {len(target_row)} values, model expects {int(model_config["num_prop"])} properties.'
+    target_prop_names = model_config.get('condition_property_names')
+    if not isinstance(target_prop_names, list) or len(target_prop_names) != int(model_config['num_prop']):
+        target_prop_names = load_condition_property_names(
+            model_config['prop_file'],
+            int(model_config['num_prop']),
         )
+
+    run_training_dist = bool(sampling_cfg.get('run_training_dist', False))
+    if not run_training_dist:
+        if target_row is None:
+            raise ValueError('target_row is required when sampling.run_training_dist is false.')
+        if len(target_row) != int(model_config['num_prop']):
+            raise ValueError(
+                f'target_row has {len(target_row)} values, model expects {int(model_config["num_prop"])} properties.'
+            )
 
     if bool(sampling_cfg.get('exclude_training', True)):
         training_smiles = load_training_canonical_smiles(
@@ -182,13 +196,30 @@ def run_sampling_for_fold(
 
     model = create_and_restore_model({'save_file': ckpt_path}, model_config, len(charset))
 
-    target_row = [float(v) for v in target_row]
-    target_prop = _target_row_to_batch(target_row, int(model_config['batch_size']))
-    target_prop = normalize_like_training(
-        target_prop,
-        model_config.get('prop_norm_mean'),
-        model_config.get('prop_norm_std'),
-    )
+    target_row_single: Optional[list[float]] = None
+    if not run_training_dist:
+        assert target_row is not None
+        target_row_single = [float(v) for v in target_row]
+        target_prop = _target_row_to_batch(target_row_single, int(model_config['batch_size']))
+        target_prop = normalize_like_training(
+            target_prop,
+            model_config.get('prop_norm_mean'),
+            model_config.get('prop_norm_std'),
+        )
+    else:
+        target_prop = None
+
+    prop_norm_mean = model_config.get('prop_norm_mean')
+    prop_norm_std = model_config.get('prop_norm_std')
+    dist_seed = sampling_cfg.get('training_dist_seed', None)
+    dist_rng = np.random.default_rng(None if dist_seed is None else int(dist_seed))
+    dist_std_scale = float(sampling_cfg.get('training_dist_std_scale', 1.0))
+    dist_clip_raw = sampling_cfg.get('training_dist_clip_n_std', 2.5)
+    dist_clip_n_std = None if dist_clip_raw is None else float(dist_clip_raw)
+    if run_training_dist and (prop_norm_mean is None or prop_norm_std is None):
+        raise ValueError(
+            'sampling.run_training_dist=true requires model prop_norm_mean/std from training config/checkpoint.'
+        )
 
     start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
 
@@ -200,11 +231,15 @@ def run_sampling_for_fold(
     seen_smiles: set[str] = set()
     mol_by_smiles: dict[str, object] = {}
     pred_by_smiles: dict[str, np.ndarray] = {}
+    target_by_smiles: dict[str, tuple[float, ...]] = {}
     total_stats = _new_stats()
     blocked_test_scaffolds: set[str] = set()
     rejected_by_test_scaffold = 0
 
-    accept_predicate = _build_accept_predicate(config=sampling_cfg, target_row=target_row)
+    accept_predicate = None
+    if not run_training_dist:
+        assert target_row_single is not None
+        accept_predicate = _build_accept_predicate(config=sampling_cfg, target_row=target_row_single)
     if bool(sampling_cfg.get('exclude_test_scaffolds', False)):
         source_csv = sampling_cfg.get('test_scaffold_csv') or test_scaffold_csv
         if not source_csv:
@@ -225,11 +260,34 @@ def run_sampling_for_fold(
     else:
         print('[sampling] test-scaffold exclusion disabled')
 
+    if run_training_dist:
+        print(
+            '[sampling] mode=training_dist '
+            f'std_scale={dist_std_scale}, clip_n_std={dist_clip_n_std}, seed={dist_seed}'
+        )
+    else:
+        print(f'[sampling] mode=single_target target_row={target_row_single}')
+
     for batch_idx in range(max_batches):
+        batch_target_prop = target_prop
+        batch_target_raw = None
+        if run_training_dist:
+            assert prop_norm_mean is not None and prop_norm_std is not None
+            batch_target_raw = sample_target_props_like_training(
+                batch_size=int(model_config['batch_size']),
+                prop_norm_mean=list(prop_norm_mean),
+                prop_norm_std=list(prop_norm_std),
+                std_scale=dist_std_scale,
+                clip_n_std=dist_clip_n_std,
+                rng=dist_rng,
+            )
+            batch_target_prop = normalize_like_training(batch_target_raw, prop_norm_mean, prop_norm_std)
+
+        assert batch_target_prop is not None
         raw_strings, _latent, pred_labels = _sample_batch_strings(
             model=model,
             charset=charset,
-            target_prop=target_prop,
+            target_prop=batch_target_prop,
             start_codon=start_codon,
             seq_length=int(model_config['seq_length']),
             mean=float(model_config['mean']),
@@ -241,21 +299,42 @@ def run_sampling_for_fold(
             top_k=top_k,
         )
 
-        accepted, stats = _collect_new_unique_from_raw_with_payload(
-            raw_strings=raw_strings,
-            payload=pred_labels,
-            seen_smiles=seen_smiles,
-            training_smiles=training_smiles,
-            eos_token='E',
-            accept_predicate=accept_predicate,
-            require_neutral=bool(sampling_cfg.get('require_neutral', False)),
-            strip_salts=bool(sampling_cfg.get('strip_salts', True)),
-            decharge=bool(sampling_cfg.get('decharge', True)),
-            canonicalize_tautomer=bool(sampling_cfg.get('canonicalize_tautomer', False)),
-        )
+        if run_training_dist:
+            accepted, stats = _collect_new_unique_from_raw_with_payloads(
+                raw_strings=raw_strings,
+                payload_a=pred_labels,
+                payload_b=batch_target_raw,
+                seen_smiles=seen_smiles,
+                training_smiles=training_smiles,
+                eos_token='E',
+                accept_predicate=None,
+                require_neutral=bool(sampling_cfg.get('require_neutral', False)),
+                strip_salts=bool(sampling_cfg.get('strip_salts', True)),
+                decharge=bool(sampling_cfg.get('decharge', True)),
+                canonicalize_tautomer=bool(sampling_cfg.get('canonicalize_tautomer', False)),
+            )
+        else:
+            accepted, stats = _collect_new_unique_from_raw_with_payload(
+                raw_strings=raw_strings,
+                payload=pred_labels,
+                seen_smiles=seen_smiles,
+                training_smiles=training_smiles,
+                eos_token='E',
+                accept_predicate=accept_predicate,
+                require_neutral=bool(sampling_cfg.get('require_neutral', False)),
+                strip_salts=bool(sampling_cfg.get('strip_salts', True)),
+                decharge=bool(sampling_cfg.get('decharge', True)),
+                canonicalize_tautomer=bool(sampling_cfg.get('canonicalize_tautomer', False)),
+            )
         _accumulate_stats(total_stats, stats)
 
-        for can, mol, payload in accepted:
+        for accepted_row in accepted:
+            if run_training_dist:
+                can, mol, payload, payload_target_raw = accepted_row
+            else:
+                can, mol, payload = accepted_row
+                payload_target_raw = None
+
             if blocked_test_scaffolds:
                 scaffold = _safe_murcko_scaffold_smiles(mol)
                 if scaffold is not None and scaffold in blocked_test_scaffolds:
@@ -266,6 +345,10 @@ def run_sampling_for_fold(
                 mol_by_smiles[can] = mol
                 if payload is not None:
                     pred_by_smiles[can] = np.asarray(payload, dtype=np.float32)
+                if payload_target_raw is not None:
+                    target_by_smiles[can] = tuple(
+                        float(v) for v in np.asarray(payload_target_raw, dtype=np.float32).reshape(-1).tolist()
+                    )
             if len(mol_by_smiles) >= num_unique:
                 break
 
@@ -293,8 +376,16 @@ def run_sampling_for_fold(
         }
     )
 
-    for dim_idx, val in enumerate(target_row):
-        out_df[f'target_prop_{dim_idx}'] = float(val)
+    default_target_row = tuple(float('nan') for _ in range(int(model_config['num_prop'])))
+    if run_training_dist:
+        target_rows = [target_by_smiles.get(s, default_target_row) for s in smiles_out]
+    else:
+        assert target_row_single is not None
+        row = tuple(float(v) for v in target_row_single)
+        target_rows = [row for _ in smiles_out]
+
+    for dim_idx, pname in enumerate(target_prop_names):
+        out_df[f'target_{pname}'] = [r[dim_idx] for r in target_rows]
 
     if len(pred_by_smiles) > 0:
         pred_rows = [pred_by_smiles.get(s, None) for s in smiles_out]
@@ -315,20 +406,30 @@ def run_sampling_for_fold(
     generated_csv_path = os.path.abspath(
         os.path.join(output_dir, str(sampling_cfg.get('result_filename', 'generated.csv')))
     )
-    out_df.to_csv(generated_csv_path, index=False)
+    save_generated_csv = bool(sampling_cfg.get('save_generated_csv', True))
+    if save_generated_csv:
+        out_df.to_csv(generated_csv_path, index=False)
+    else:
+        generated_csv_path = 'SKIPPED_GENERATED_CSV'
+        print('[sampling] save_generated_csv=false, skipping generated CSV write')
 
     quality_summary_filename = str(sampling_cfg.get('quality_summary_filename', 'quality_summary.csv'))
     quality_cfg = dict(sampling_cfg)
     quality_cfg['result_filename'] = generated_csv_path
     quality_cfg['quality_summary_filename'] = os.path.abspath(os.path.join(output_dir, quality_summary_filename))
+    save_quality_summary = bool(sampling_cfg.get('save_quality_summary', True))
 
     _print_quality_stats(total_stats, scope_label='Generated set quality (single fold)')
-    quality_summary_csv_path = _save_quality_summary_csv(
-        stats=total_stats,
-        run_scope='single_target',
-        num_molecules_saved=int(len(out_df)),
-        config=quality_cfg,
-    )
+    if save_quality_summary:
+        quality_summary_csv_path = _save_quality_summary_csv(
+            stats=total_stats,
+            run_scope=('training_dist' if run_training_dist else 'single_target'),
+            num_molecules_saved=int(len(out_df)),
+            config=quality_cfg,
+        )
+    else:
+        quality_summary_csv_path = 'SKIPPED_QUALITY_SUMMARY'
+        print('[sampling] save_quality_summary=false, skipping quality summary CSV write')
     if blocked_test_scaffolds:
         print(f'[sampling] rejected due to test-scaffold overlap: {rejected_by_test_scaffold}')
 
@@ -336,7 +437,8 @@ def run_sampling_for_fold(
         'run_dir': os.path.abspath(run_dir),
         'checkpoint_path': ckpt_path,
         'sampling_cfg': sampling_cfg,
-        'target_row': [float(v) for v in target_row],
+        'run_training_dist': bool(run_training_dist),
+        'target_row': (None if target_row_single is None else [float(v) for v in target_row_single]),
         'exclude_test_scaffolds': bool(sampling_cfg.get('exclude_test_scaffolds', False)),
         'num_blocked_test_scaffolds': int(len(blocked_test_scaffolds)),
         'rejected_by_test_scaffold': int(rejected_by_test_scaffold),

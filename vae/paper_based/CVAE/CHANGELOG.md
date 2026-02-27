@@ -7,11 +7,8 @@ All notable changes to this project are documented in this file.
 ### Fixed
 
 - `fold_pipeline/fold_data.py`: Fold CSV->prop conversion now writes `<prop_txt>.meta.json` with `property_names`, allowing downstream training/sampling to recover real label names (e.g., `pIC50`) so generated prediction columns are named `pred_pIC50` instead of fallback generic names.
-
 - `fold_pipeline/sampling_pipeline.py` / `sample_labels.py`: RDKit parse-warning spam is now suppressible via config (`suppress_rdkit_parse_errors`, default `true`) so sampling logs stay readable while validity/cleanup counters are still tracked in quality stats.
-
 - `analysis_modules/config.py`: `load_analysis_config_from_file(...)` now ignores unknown config override keys before building `AnalysisConfig`, preventing crashes like `unexpected keyword argument 'print_vocab_size'` when runner-only toggles are present.
-
 - `sample.py` / `debug_sampling.py`: Sampling now prefers the `model_config` embedded in the checkpoint (`.pt`) payload. This prevents a subtle failure mode where `save/training_config.json` gets overwritten by later training runs (often Transformer experiments), causing sampling to use the wrong `prop_file` / `seq_length` / `num_prop` and especially the wrong `prop_norm_mean/std` (=> invalid SMILES and/or near-zero acceptance).
 - `model_labels.py`: Fixed a wiring bug where `include_condition_in_label_head=True` built a `(z, c)` label head but prediction still used `z` only.
 - `sample.py`: Default decoding is stochastic again (`do_sample=True`). During Transformer refactors the default was set to greedy decoding, which commonly collapses to a single repeated molecule ("not unique") and can also reduce validity.
@@ -22,31 +19,26 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- `fold_pipeline/sampling_pipeline.py` / `fold_pipeline/run_fold_pipeline.py`: Added fold-level training-distribution sampling mode (`sampling.run_training_dist`) with per-molecule target sampling (`training_dist_std_scale`, `training_dist_clip_n_std`, `training_dist_seed`) so generated targets are no longer fixed to a single conditioning value across all rows.
+- `fold_pipeline/run_fold_pipeline.py` / `fold_pipeline/fold_pipeline_config.example.json`: Added output-root split controls (`training_output_root`, `artifacts_output_root`) so checkpoints can remain under `save/` while generated outputs/quality summaries/logs are written outside that folder.
+- `fold_pipeline/sampling_pipeline.py`: Added save toggles (`sampling.save_generated_csv`, `sampling.save_quality_summary`) for generated CSV and quality-summary persistence control.
 - `fold_pipeline/sampling_pipeline.py` / `sample_labels.py` / `utils_labels.py`: Added configurable generated-output schema control via `generated_outputs` so generated CSV files can include only requested columns (for example `['smiles', 'pred_pIC50']`).
-
 - `fold_pipeline/run_fold_pipeline.py` / `fold_pipeline/fold_pipeline_config.example.json`: Added preset support (`pipeline_preset` + `presets`) so grouped fold-pipeline overrides can be switched with one key; includes a `quiet_pipeline` preset block for quieter sampling logs and scaffold-safe generation defaults.
-
 - `fold_pipeline/run_fold_pipeline.py` / `fold_pipeline/fold_pipeline_config.example.json`: Added explicit stage toggles (`train.enabled`, `sampling.enabled`, `analysis.enabled`) so fold runs can selectively skip training/sampling/analysis.
 - `fold_pipeline/sampling_pipeline.py` / `sample_labels.py`: Added optional test-scaffold exclusion (`exclude_test_scaffolds`) using Murcko scaffolds from a test CSV source, with rejections counted into existing filter statistics.
 - `utils_labels.py`: `compose_runtime_sample_config(...)` now carries scaffold-filter and RDKit-log-suppression runtime keys so grouped configs propagate cleanly into sampling scripts.
-
 - `fold_pipeline/` module: added a standalone cross-validation orchestrator (`run_fold_pipeline.py`) with modular helpers for fold discovery/conversion (`fold_data.py`) and sampling (`sampling_pipeline.py`). The runner executes train -> sample -> analysis per fold and stores all artifacts under `fold_<k>/`.
-
 - `train_labels.py`: added runtime config override support via `--config-json` (and `TRAIN_LABELS_CONFIG_JSON` env fallback) to enable non-interactive orchestration without removing existing in-file config workflow.
-
 - `train_labels.py`: added external split mode support through `data.test_prop_file`, including aligned tokenization for separate train/test files via shared vocabulary, preventing accidental fold mixing when scaffold-split files are provided.
-
 - `sample_labels.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup now prints resolved sampling metadata including `vocab_size` (plus inferred `num_prop` and `prop_file`) so runs show the active vocabulary immediately.
 - `run_viz_pipeline.py`: Added an optional, backward-compatible sampling-metadata print path; when `overrides.prop_file` and `overrides.seq_length` are present in the analysis config JSON, the runner prints inferred `vocab_size` before analysis starts.
 - `run_viz_pipeline.py` / `analysis_run_config.json`: Added `overrides.print_vocab_size` toggle to enable/disable vocab-size printing without affecting analysis pipeline execution.
 - `utils_labels.py` / `sample_labels.py`: Added output naming control `output.auto_quality_summary_filename`; when set to `False` and `quality_summary_filename=None`, sampling no longer auto-creates `<result>_quality_summary.csv`.
-
 - `analysis_modules/` package and `run_viz_pipeline.py`: Added reusable Python modules that mirror the major `viz.ipynb` analysis flow (data loading, canonicalization, validity flags, Tanimoto-to-reference, diversity score, scaffold overlap, and CSV/JSON outputs) while keeping the notebook unchanged.
 - `analysis_modules/config.py`: Added starter profile configs for both `zinc_logp` and `bace_pic50_10k` with explicit path knobs (`train_folder`, `train_data_path`, `generated_data_path`, `output_dir`) so runs can be re-pointed quickly.
 - `run_viz_pipeline.py`: Added CLI/runtime overrides for profile paths and row caps so the same module pipeline works for the generated BACE pIC50 dataset and 10k generated-molecule files.
 - `analysis_run_config.json`: Added a file-based starter run config so the whole analysis pipeline can be executed from config without passing per-run path arguments.
 - `analysis_modules/config.py` / `analysis_modules/pipeline.py` / `analysis_run_config.json`: Added config-driven analysis debug mode (`debug`) that prints stage progress, resolved target/prediction columns, validity/similarity progress, and every written analysis artifact path.
-
 - `train.py` / `utils.py`: Added run-folder controls directly in the training config (`training.run_name`, `training.use_run_subdir`). Training now resolves an effective run save path via `build_train_run_save_dir(...)`, so each run can write to its own subdirectory under `training.save_dir` without overwriting other runs.
 - `utils.py`: Added `resolve_checkpoint_path(...)` to resolve checkpoints either from an explicit file path or from a run directory (preferring `model_best.ckpt-*.pt`, then falling back to newest `.pt`).
 - `train_labels.py` / `model_labels.py`: Optional auxiliary label head that predicts selected properties from latent `z` (default: LogP-only for 2-prop `[MW, LogP]` setup).
@@ -58,11 +50,8 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - `fold_pipeline/run_fold_pipeline.py`: subprocess execution now streams logs live to console while simultaneously writing to per-fold log files (`logs/train.log`, `logs/analysis.log`) so epoch/loss diagnostics are visible during pipeline runs.
-
 - `fold_pipeline/fold_pipeline_config.example.json`: removed `data.train_ratio` from the example fold config to avoid confusion in external split mode; fold pipeline now explicitly prints that train/test come from pre-split fold files and that random split is bypassed.
-
 - `train_labels.py`: when `data.test_prop_file` is set, startup now logs that `train_ratio` is ignored and external split files are used directly.
-
 - `run_viz_pipeline.py`: Runner now primarily loads settings from a JSON config file (`--config`, default `analysis_run_config.json`) instead of many path/column CLI arguments.
 - `analysis_modules/pipeline.py`: Extended coverage to include notebook-equivalent train-loss plotting, Tanimoto histogram, chemical-space PCA+t-SNE, and descriptor-space PCA+t-SNE in addition to similarity/distribution/scaffold outputs.
 - `analysis_modules/pipeline.py` / `analysis_modules/config.py`: Added notebook-parity scaffold grid outputs for top train and generated scaffolds (plus novel generated scaffolds), toggle-controlled via config.
@@ -70,7 +59,6 @@ All notable changes to this project are documented in this file.
 - `analysis_modules/pipeline.py`: Added prediction-error scatter plot (`absolute error vs ground truth`) and summary metrics (MSE/MAE/median/std) when target/predicted property columns are available.
 - `analysis_modules/pipeline.py`: Corrected distribution plotting semantics so histogram y-axis is explicit `Count`, generated-property x-axis uses predicted property when available (e.g., `pred_pIC50`), and MW comparison now includes computed train MW fallback from SMILES when MW is not present in train file.
 - `analysis_modules/pipeline.py` / `analysis_modules/config.py`: Added MW distribution-difference artifact (`mw_distribution_diff_train_minus_generated.png`) showing per-bin count delta (`train - generated`).
-
 - `sample.py`: Runtime model config now supports `run_dir` + `checkpoint_glob` (in addition to `save_file`) and resolves checkpoint paths through shared utility logic.
 - `debug_sampling.py` / `sweep_sampling.py`: Updated defaults to support run-folder based checkpoint selection, matching training output layout.
 - `sample.py`: Added sweep-level quality reporting for the whole generated sweep (`WHOLE GENERATED SWEEP`) with V/U/N and detailed counters aggregated across all property pairs.
@@ -83,8 +71,6 @@ All notable changes to this project are documented in this file.
 - `train_labels.py`: Augmentation metadata is now persisted in `training_config.json` (`smiles_augmentation_duplicates`, train set size before/after augmentation) for run reproducibility.
 - `utils.py`: Added persistence helpers: uncompressed `save_pickle(...)` / `load_pickle(...)` for optional outputs, and gzip-pickle helpers (`save_pickle_gz(...)` / `load_pickle_gz(...)`) reserved for internal caches.
 - `utils.py`: Added `load_sampling_metadata(...)` for fast, cached extraction of charset/vocab/num_prop from large property files without constructing full training tensors.
-
-
 - `sample_labels.py`: Added an explicit re-canonicalization pass of generated outputs right before descriptor evaluation/export to keep evaluation rows canonicalized and aligned with optional payload columns.
 - `sample.py` / `sample_labels.py`: Optional molecule artifact outputs now use plain pickle (`.pkl`) instead of gzip pickles. Gzip pickles remain in use for internal caches only.
 

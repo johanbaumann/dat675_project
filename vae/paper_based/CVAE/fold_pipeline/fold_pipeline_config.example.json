@@ -8,10 +8,16 @@
       "sampling": {
         "enabled": true,
         "suppress_rdkit_parse_errors": true,
+        "run_training_dist": true,
+        "training_dist_std_scale": 1.0,
+        "training_dist_clip_n_std": 2.5,
+        "training_dist_seed": null,
         "exclude_training": true,
         "exclude_test_scaffolds": true,
         "test_scaffold_csv": null,
-        "test_scaffold_smiles_column": "smiles"
+        "test_scaffold_smiles_column": "smiles",
+        "save_generated_csv": true,
+        "save_quality_summary": true
       },
       "analysis": {
         "enabled": false
@@ -19,9 +25,11 @@
     }
   },
   "workspace_root": ".",
+  "training_output_root": "save/fold_pipeline_runs",
+  "artifacts_output_root": "fold_pipeline_outputs",
   "train_folds_dir": "combination_1000_molecules_and_0_%_synthetic",
   "test_folds_dir": "combination_500_molecules_and_0_%_synthetic",
-  "output_root": "save/fold_pipeline_runs",
+  "output_root": "fold_pipeline_outputs",
   "fold_glob": "fold_iteration_*.csv",
   "smiles_column": "smiles",
   "label_columns": [
@@ -71,7 +79,7 @@
         "save_dir": "save/",
         "run_name": null,
         "use_run_subdir": true,
-        "save_every": 10,
+        "save_every": 20,
         "early_stopping_patience": 10,
         "early_stopping_min_delta": 0.001,
         "early_stopping_restore_best": true
@@ -98,6 +106,10 @@
   "sampling": {
     "enabled": true,
     "checkpoint_glob": "model_best.ckpt-*.pt",
+    "run_training_dist": true,
+    "training_dist_std_scale": 1.0,
+    "training_dist_clip_n_std": 2.5,
+    "training_dist_seed": null,
     "target_prop_mode": "mean_test_labels",
     "target_prop": [
       8.0
@@ -105,7 +117,7 @@
     "num_unique": 10000,
     "max_batches": 5000,
     "do_sample": true,
-    "temperature": 0.7,
+    "temperature": 0.9,
     "top_k": 20,
     "exclude_training": true,
     "exclude_test_scaffolds": true,
@@ -123,8 +135,11 @@
     "max_canonical_smiles_len": null,
     "generated_outputs": [
       "smiles",
-      "pred_pIC50"
+      "pred_pIC50",
+      "target_pIC50"
     ],
+    "save_generated_csv": true,
+    "save_quality_summary": true,
     "result_filename": "generated.csv",
     "quality_summary_filename": "quality_summary.csv"
   },

@@ -48,6 +48,13 @@ A global manifest is saved at:
 
 - `.../global_manifest.json`
 
+You can split checkpoint storage from generated artifacts:
+
+- `training_output_root`: where fold training checkpoints/history are written.
+- `artifacts_output_root`: where converted data, generated CSVs, quality summaries, logs, and analysis outputs are written.
+
+This lets you keep only checkpoints under `save/` while writing generated outputs outside `save/`.
+
 ## Logging
 
 - Training and analysis subprocess logs are streamed live to console.
@@ -90,6 +97,17 @@ Sampling config supports two quality-of-life controls:
 
 When scaffold exclusion is enabled, the fold runner automatically uses that fold's test CSV as scaffold source (unless `sampling.test_scaffold_csv` is set explicitly).
 
+## Training-Distribution Sampling (Fold Pipeline)
+
+Fold sampling supports the same training-distribution mode as `sample_labels.py`:
+
+- `sampling.run_training_dist`: when true, each sampled molecule uses a per-sample target drawn from training property statistics.
+- `sampling.training_dist_std_scale`
+- `sampling.training_dist_clip_n_std`
+- `sampling.training_dist_seed`
+
+In this mode, generated target columns vary per molecule (for example `target_pIC50`) rather than being one fixed value for all rows.
+
 ## Generated CSV Column Control
 
 Sampling supports explicit output schema control via:
@@ -104,3 +122,10 @@ Notes:
 
 - Column names must exist at runtime; invalid names raise a clear error.
 - Predicted-column naming is now sourced from property metadata sidecars produced during fold conversion, so one-property BACE runs use `pred_pIC50` (not generic `pred_prop_0`).
+
+Additional save toggles:
+
+- `sampling.save_generated_csv`: write/skip generated CSV.
+- `sampling.save_quality_summary`: write/skip quality summary CSV.
+
+If analysis is enabled, `sampling.save_generated_csv` must be true.
