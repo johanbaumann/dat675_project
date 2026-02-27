@@ -74,7 +74,7 @@ This repository now contains an extended implementation that supports both:
 ## The ELBO optimization of $\beta$-CVAE:
 
 $$
-logp_\theta(x|z) \ge \mathcal{L}(\theta,\phi,x,z) = \underbrace{\mathbb{E}_{q_\phi(z|x)}[log\underbrace{p_\theta(x|z,c)}_{\text{Conditional likleyhood}}]}_{\text{Reconstruction error (decoder)}}-\beta\underbrace{ D_{KL}[\underbrace{q_\phi(z|x,c)}_{\text{Approximated posterior}}||\underbrace{p(z|c)}_{\text{conditioned-prior}}]}_{D_{KL},\text{ Kullback-lieber term (encoder)}} + \underbrace{\lambda_l \mathcal{L}}_{\text{Label head loss (MSE)}}
+logp_\theta(x|z) \ge \mathcal{L}(\theta,\phi,x,z) = \underbrace{\mathbb{E}_{q_\phi(z|x)}[log\underbrace{p_\theta(x|z,c)}_{\text{Conditional likleyhood}}]}_{\text{Reconstruction error (decoder)}}-\beta\underbrace{ D_{KL}[\underbrace{q_\phi(z|x,c)}_{\text{Approximated posterior}}||\underbrace{p(z)}_{\text{prior}}]}_{D_{KL},\text{ Kullback-lieber term (encoder)}} + \underbrace{\lambda_l \mathcal{L}}_{\text{Label head loss (MSE)}}
 $$
 
 ### In simpler terms:
@@ -322,64 +322,50 @@ config = {
 **Stable for Transformer:**
 
 ```python
-# Single source of truth for run configuration.
-# Grouped sections are easier to edit; utils will flatten this to legacy keys.
 config = {
-    'training_preset': 'custom',  # 'custom' or 'stable_transformer'
+    'training_preset': 'custom',
     'data': {
-        'prop_file': '250k_zinc_clean.txt',
+        'prop_file': 'bace_pic50.txt',
         'seq_length': 120,
-        'train_ratio': 0.75,
+        'train_ratio': 0.8,
+        # Number of randomized SMILES strings generated per original train sample.
+        # 0 disables augmentation.
+        'smiles_augmentation_duplicates': 10,
     },
     'model': {
-        'mode': 'transformer',  # 'lstm' or 'transformer'
-        'latent_size': 200,
-        'unit_size': 512,
-        'n_rnn_layer': 2, # 2 layers for transformers, 3 for lstm (memory constraints...)
+        'mode': 'transformer',
+        'latent_size': 128,
+        'unit_size': 256,
+        'n_rnn_layer': 2,
         'mean': 0.0,
         'stddev': 1.0,
-        'num_prop': None,  # inferred from property file
-
-        # Optional multi-task head:
-        # - predict_labels=False keeps the model identical to the base CVAE.
-        # - When enabled, the model predicts a label vector from latent `z`.
+        'num_prop': None,
         'predict_labels': True,
-        # Which conditioning columns to predict as labels.
-        # Example (for: MW, LogP setup): set to [1] to predict LogP only.
-        # If None and predict_labels=True, defaults to predicting all properties.
-        'label_target_indices': [1],  # predict LogP only by default for the MW/LogP setup
-        'label_dim': None,  # if None, inferred from property file
-        'label_loss_weight': 1.0, # relative weight of label prediction loss compared to reconstruction + KL loss (which are weighted by beta)
-
-        # Optional label-head variants:
-        # If True, the label head predicts from both (z, c) instead of z only.
-        # This can be useful if you want predicted labels to track the sampling
-        # target properties more directly.
-        'include_condition_in_label_head': True,
-
-        # If True, train the label head on *raw* (unnormalized) property values.
-        # If False (default), train it on the normalized conditioning vector.
+        'label_target_indices': None,
+        'label_dim': None,
+        'label_loss_weight': 1.0,
+        'include_condition_in_label_head': False,
         'label_targets_use_raw_scale': False,
     },
     'transformer': {
-        'heads': 8,
-        'ff_size': 1024,
-        'dropout': 0.15,
+        'heads': 4,
+        'ff_size': 512,
+        'dropout': 0.1,
     },
     'optimization': {
-        'optimizer': 'adamw', # 'adam' for lstm, 'adamw' for transformer (with weight decay)
-        'lr': 1e-5, # 10e-4, 1e-5 for transformer..
-        'weight_decay': 0.001, # 0.001 for transformer 
-        'use_amp': True, # true if using transformer with fp16, can cause instability with lstm
-        'amp_dtype': 'bfloat16', #bfloat16 for transformer (since i have 3070)
-        'grad_clip_norm': 4.0,
+        'optimizer': 'adamw',
+        'lr': 5e-5,
+        'weight_decay': 0.001,
+        'use_amp': False,
+        'amp_dtype': 'float16', # use bfloat16 for transformer + amp.
+        'grad_clip_norm': 2.0, # dont be too harh with clipping, can hinder learning. 
     },
     'training': {
-        'batch_size': 64, # 64 for transformer... 128 for lstm
-        'num_epochs': 200, # transformer need more
+        'batch_size': 64,
+        'num_epochs': 120,
         'save_dir': 'save/',
-        'run_name': None,  # If None, auto-generated timestamped run folder is used.
-        'use_run_subdir': True,  # If True, save into save_dir/<run_name_or_timestamp>/
+        'run_name': None,
+        'use_run_subdir': True,
         'save_every': 10,
         'early_stopping_patience': 10,
         'early_stopping_min_delta': 0.001,
@@ -387,15 +373,15 @@ config = {
     },
     'scheduler': {
         'enabled': True,
-        'factor': 0.5,
-        'patience': 2,
-        'threshold': 1e-3,
-        'min_lr': 1e-6,
+        'factor': 0.5, # reduce LR by this factor when test loss plateaus.
+        'patience': 2, # number of epochs with no improvement after which LR will be reduced.
+        'threshold': 1e-3, # minimum change in the monitored quantity to qualify as an improvement (for 'min' mode).
+        'min_lr': 1e-6, # lower bound on the learning rate after reductions.
     },
     'kl': {
         'enabled': True,
-        'start_beta': 1.0, # start with low KL weight to allow model to learn reconstruction before regularizing latent space, can help with stability (especially for transformer + amp).
-        'max_beta': 2.0,
+        'start_beta': 1.0,
+        'max_beta': 4.0,
         'hold_epochs': 0,
         'warmup_epochs': 8,
     },
@@ -403,6 +389,7 @@ config = {
         'every': 1,
     },
 }
+
 ```
 
 Grouped config is flattened internally, so legacy flat keys are still supported for compatibility.

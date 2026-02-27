@@ -444,10 +444,14 @@ class CVAE(nn.Module):
         else:
             probs, logits, _, mean, log_sigma = out
             y_hat = None
-
+        
+        # Recon loss, from token prediction (cross-entropy) comparing decoder output with input sequence.
         reconstr_loss = self._sequence_loss(logits, y, l)
+        # KL divergence latent loss, comparing the latent distribution (mean, log_sigma) with the prior N(0, I).
         latent_loss = self.cal_latent_loss(mean, log_sigma)
 
+        # beta is the KL anealing factor that balances the two losses
+        # beta = 1.0 = standard VAE ELBO
         loss = reconstr_loss + (float(beta) * latent_loss)
 
         label_loss = torch.tensor(0.0, device=loss.device)
@@ -457,6 +461,7 @@ class CVAE(nn.Module):
         # and compare with true predictor value (e.g LogP) using MSE. 
         if self.predict_labels and (y_true is not None):
             label_loss = self._label_loss(y_hat, y_true)
+            # loss is origonal ELBO + lambda_label * label_loss, where lambda_label is the weight for the label loss term.
             loss = loss + (self.label_loss_weight * label_loss)
             # Also compute MAE in the *training target scale* (raw or normalized).
             # Raw-units MAE is derived in train_labels.py based on saved prop_std.
@@ -494,10 +499,14 @@ class CVAE(nn.Module):
     ):
         self.train(True)
         x_t, y_t, l_t, c_t, y_label_t = self._to_tensor_batch(x, y, l, c, y_label=y_label)
+        # zero grad before autocast to avoid unnecessary scaling of zero gradients.
         self.optimizer.zero_grad()
+        # autocast is to use mixed precision (AMP)
+        # amp for speed
         with self._autocast_context():
             loss, _, _, _, _, stats = self._compute_losses(x_t, y_t, l_t, c_t, y_true=y_label_t, beta=beta)
         grad_norm = 0.0
+        # gradient scaler for stabile training with AMP and float16
         if self.use_grad_scaler:
             self.grad_scaler.scale(loss).backward()
             self.grad_scaler.unscale_(self.optimizer)
