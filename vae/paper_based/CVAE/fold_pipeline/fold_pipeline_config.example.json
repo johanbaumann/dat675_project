@@ -1,0 +1,119 @@
+{
+  "workspace_root": ".",
+  "train_folds_dir": "combination_1000_molecules_and_0_%_synthetic",
+  "test_folds_dir": "combination_500_molecules_and_0_%_synthetic",
+  "output_root": "save/fold_pipeline_runs",
+  "fold_glob": "fold_iteration_*.csv",
+  "smiles_column": "smiles",
+  "label_columns": [
+    "pIC50"
+  ],
+  "python_executable": null,
+  "train": {
+    "script": "train_labels.py",
+    "base_config": {
+      "training_preset": "custom",
+      "data": {
+        "seq_length": 120,
+        "train_ratio": 0.8,
+        "smiles_augmentation_duplicates": 10
+      },
+      "model": {
+        "mode": "transformer",
+        "latent_size": 128,
+        "unit_size": 256,
+        "n_rnn_layer": 2,
+        "mean": 0.0,
+        "stddev": 1.0,
+        "num_prop": null,
+        "predict_labels": true,
+        "label_target_indices": null,
+        "label_dim": null,
+        "label_loss_weight": 1.0,
+        "include_condition_in_label_head": false,
+        "label_targets_use_raw_scale": false
+      },
+      "transformer": {
+        "heads": 4,
+        "ff_size": 512,
+        "dropout": 0.1
+      },
+      "optimization": {
+        "optimizer": "adamw",
+        "lr": 5e-05,
+        "weight_decay": 0.001,
+        "use_amp": false,
+        "amp_dtype": "float16",
+        "grad_clip_norm": 2.0
+      },
+      "training": {
+        "batch_size": 64,
+        "num_epochs": 120,
+        "save_dir": "save/",
+        "run_name": null,
+        "use_run_subdir": true,
+        "save_every": 10,
+        "early_stopping_patience": 10,
+        "early_stopping_min_delta": 0.001,
+        "early_stopping_restore_best": true
+      },
+      "scheduler": {
+        "enabled": true,
+        "factor": 0.5,
+        "patience": 2,
+        "threshold": 0.001,
+        "min_lr": 1e-06
+      },
+      "kl": {
+        "enabled": true,
+        "start_beta": 1.0,
+        "max_beta": 4.0,
+        "hold_epochs": 0,
+        "warmup_epochs": 8
+      },
+      "diagnostics": {
+        "every": 1
+      }
+    }
+  },
+  "sampling": {
+    "checkpoint_glob": "model_best.ckpt-*.pt",
+    "target_prop_mode": "mean_test_labels",
+    "target_prop": [
+      8.0
+    ],
+    "num_unique": 1000,
+    "max_batches": 5000,
+    "do_sample": true,
+    "temperature": 0.7,
+    "top_k": 20,
+    "exclude_training": true,
+    "strip_salts": true,
+    "decharge": true,
+    "canonicalize_tautomer": false,
+    "require_neutral": false,
+    "mw_tolerance": null,
+    "logp_tolerance": null,
+    "min_tpsa": null,
+    "max_heavy_atoms": 60,
+    "max_canonical_smiles_len": null,
+    "result_filename": "generated.csv",
+    "quality_summary_filename": "quality_summary.csv"
+  },
+  "analysis": {
+    "enabled": true,
+    "script": "run_viz_pipeline.py",
+    "profile": "bace_pic50_10k",
+    "overrides": {
+      "save_distribution_plot": true,
+      "save_scaffold_plot": true,
+      "save_scaffold_grids": true,
+      "run_prediction_error_plot": true,
+      "run_train_loss_plot": true,
+      "run_tanimoto_histogram": true,
+      "run_chemical_space": true,
+      "run_descriptor_space": true,
+      "debug": true
+    }
+  }
+}

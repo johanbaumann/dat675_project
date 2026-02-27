@@ -28,12 +28,60 @@ from utils_labels import (
     save_current_checkpoint,
     save_history_csv,
 )
+import argparse
+import json
+import os
+from typing import Optional
 import numpy as np
 import time
 import pandas as pd
 import torch
 from rdkit import Chem
 from copy import deepcopy
+
+
+def _deep_update_dict(base: dict, override: dict) -> dict:
+    """Recursively update nested dict values while keeping unspecified defaults."""
+    out = deepcopy(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_update_dict(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _parse_config_override_path_from_argv() -> Optional[str]:
+    """Read optional config override path from CLI or env var.
+
+    Priority:
+      1) --config-json <path>
+      2) TRAIN_LABELS_CONFIG_JSON env var
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--config-json', type=str, default=None)
+    args, _ = parser.parse_known_args()
+    if args.config_json:
+        return str(args.config_json)
+    env_path = os.environ.get('TRAIN_LABELS_CONFIG_JSON')
+    if env_path:
+        return str(env_path)
+    return None
+
+
+def _load_runtime_config_override() -> dict:
+    """Load optional JSON config override for non-interactive orchestration."""
+    cfg_path = _parse_config_override_path_from_argv()
+    if not cfg_path:
+        return {}
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(f'--config-json path does not exist: {cfg_path}')
+    with open(cfg_path, 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError('Config override JSON must be an object (dict).')
+    print(f'loaded runtime config override from: {cfg_path}')
+    return payload
 
 ## Single source of truth for run configuration.
 ## Grouped sections are easier to edit; utils will flatten this to legacy keys.
@@ -188,6 +236,11 @@ config = {
     },
 }
 
+runtime_config_override = _load_runtime_config_override()
+if runtime_config_override:
+    config = _deep_update_dict(config, runtime_config_override)
+    print('applied runtime config overrides on top of in-file default config')
+
 
 def _augment_train_split_with_random_smiles(
     *,
@@ -276,6 +329,76 @@ def _augment_train_split_with_random_smiles(
         'skipped_unknown_token': int(skipped_unknown_token),
     }
 
+
+def _load_data_with_existing_vocab(prop_file: str, seq_length: int, vocab: dict) -> tuple:
+    """Load a dataset split using an already-fixed vocabulary.
+
+    This keeps train/test tokenization aligned when train and test are provided as
+    separate files (e.g. scaffold split folds).
+    """
+    with open(prop_file, 'r', encoding='utf-8', errors='ignore') as f:
+        raw_lines = f.read().split('\n')
+
+    x_rows = []
+    y_rows = []
+    labels = []
+    lengths = []
+    skipped_too_long = 0
+    skipped_empty = 0
+    skipped_unknown_token = 0
+
+    for raw in raw_lines:
+        line = str(raw).strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            skipped_empty += 1
+            continue
+
+        smi = str(parts[0]).strip()
+        if len(smi) >= int(seq_length) - 2:
+            skipped_too_long += 1
+            continue
+        if any(ch not in vocab for ch in smi):
+            skipped_unknown_token += 1
+            continue
+
+        try:
+            prop_vals = [float(v) for v in parts[1:]]
+        except Exception:
+            skipped_empty += 1
+            continue
+
+        x_str = ('X' + smi).ljust(int(seq_length), 'E')
+        y_str = smi.ljust(int(seq_length), 'E')
+
+        x_rows.append(np.asarray([vocab[ch] for ch in x_str], dtype=np.int64))
+        y_rows.append(np.asarray([vocab[ch] for ch in y_str], dtype=np.int64))
+        labels.append(np.asarray(prop_vals, dtype=np.float32))
+        lengths.append(int(len(smi) + 1))
+
+    if len(x_rows) == 0:
+        raise ValueError(
+            f'No usable rows found in external split file {prop_file}. '
+            f'skipped_empty={skipped_empty}, skipped_too_long={skipped_too_long}, '
+            f'skipped_unknown_token={skipped_unknown_token}'
+        )
+
+    label_arr = np.stack(labels, axis=0).astype(np.float32)
+    print(
+        f'external split load: {prop_file}, rows={len(x_rows)}, '
+        f'skipped_empty={skipped_empty}, skipped_too_long={skipped_too_long}, '
+        f'skipped_unknown_token={skipped_unknown_token}'
+    )
+
+    return (
+        np.stack(x_rows, axis=0),
+        np.stack(y_rows, axis=0),
+        label_arr,
+        np.asarray(lengths, dtype=np.int64),
+    )
+
 # NOTE: compose_train_config_from_dict() may flatten/override nested config values.
 # Capture optional label-prediction settings here so they remain stable.
 predict_labels_cfg = bool(config.get('model', {}).get('predict_labels', False))
@@ -289,6 +412,7 @@ label_loss_weight_cfg = float(
 )
 include_condition_in_label_head_cfg = bool(config.get('model', {}).get('include_condition_in_label_head', False))
 label_targets_use_raw_scale_cfg = bool(config.get('model', {}).get('label_targets_use_raw_scale', False))
+external_test_prop_file_cfg = config.get('data', {}).get('test_prop_file', None)
 
 config = compose_train_config_from_dict(config)
 config = apply_training_preset(config)
@@ -367,13 +491,34 @@ if predict_labels:
         raise ValueError('label_dim must be > 0 when predict_labels=True')
     print(f'label prediction enabled: targets={label_target_names} (indices={label_target_indices})')
 
-#divide data into training and test set
+# divide data into training and test set
 # can leak...
 # could look into scaffold splitting for this!
-train_molecules_input, test_molecules_input = split_train_test(molecules_input, config['train_ratio'])
-train_molecules_output, test_molecules_output = split_train_test(molecules_output, config['train_ratio'])
-train_labels, test_labels = split_train_test(labels, config['train_ratio'])
-train_length, test_length = split_train_test(length, config['train_ratio'])
+if external_test_prop_file_cfg:
+    print('using external test split file to prevent train/test leakage')
+    print(f'  train file: {config["prop_file"]}')
+    print(f'  test file : {external_test_prop_file_cfg}')
+    train_molecules_input = molecules_input
+    train_molecules_output = molecules_output
+    train_labels = labels
+    train_length = length
+
+    test_molecules_input, test_molecules_output, test_labels, test_length = _load_data_with_existing_vocab(
+        str(external_test_prop_file_cfg),
+        int(config['seq_length']),
+        vocab,
+    )
+    if int(test_labels.shape[1]) != int(config['num_prop']):
+        raise ValueError(
+            f'external test split has {int(test_labels.shape[1])} properties, '
+            f'but train split has {int(config["num_prop"])}.'
+        )
+else:
+    train_molecules_input, test_molecules_input = split_train_test(molecules_input, config['train_ratio'])
+    train_molecules_output, test_molecules_output = split_train_test(molecules_output, config['train_ratio'])
+    train_labels, test_labels = split_train_test(labels, config['train_ratio'])
+    train_length, test_length = split_train_test(length, config['train_ratio'])
+    print(f'random split active via train_ratio={config["train_ratio"]}.')
 
 num_train_before_aug = int(len(train_molecules_input))
 smiles_aug_duplicates = int(config.get('smiles_augmentation_duplicates', 0))
@@ -423,6 +568,8 @@ model_config['num_train_after_augmentation'] = int(len(train_molecules_input))
 model_config['prop_norm_mean'] = prop_mean.astype(np.float32).tolist()
 model_config['prop_norm_std'] = prop_std.astype(np.float32).tolist()
 model_config['condition_property_names'] = list(default_prop_names)
+model_config['external_test_prop_file'] = str(external_test_prop_file_cfg) if external_test_prop_file_cfg else None
+model_config['split_strategy'] = 'external_test_file' if external_test_prop_file_cfg else 'random_train_ratio'
 
 # Wire optional label predictor settings into the model config.
 model_config['predict_labels'] = bool(predict_labels)
