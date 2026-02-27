@@ -35,25 +35,24 @@ python fold_pipeline/run_fold_pipeline.py --config fold_pipeline/fold_pipeline_c
 
 ## Output Layout
 
-For each fold, artifacts are grouped in one folder:
+The fold runner supports a split layout so big training checkpoints stay under `save/` (gitignored) while everything else stays outside:
 
-- `.../fold_<k>/data/` (converted prop txt + data manifest)
-- `.../fold_<k>/training/` (checkpoints + history + training_config)
-- `.../fold_<k>/sampling/` (generated CSV + quality summary + sampling debug)
-- `.../fold_<k>/analysis/` (analysis outputs + per-fold analysis config)
-- `.../fold_<k>/logs/` (train/analysis subprocess logs)
-- `.../fold_<k>/fold_manifest.json`
+**Artifacts (typically outside `save/`)** — under `artifacts_output_root/fold_<k>/`:
 
-A global manifest is saved at:
+- `data/` (converted prop txt + data manifest)
+- `sampling/` (generated CSV + quality summary)
+- `analysis/` (analysis outputs + per-fold analysis config)
+- `logs/` (train/analysis subprocess logs)
+- `fold_manifest.json`
 
-- `.../global_manifest.json`
+**Training (typically under `save/`)** — under `training_output_root/fold_<k>/`:
 
-You can split checkpoint storage from generated artifacts:
+- `train_config.json` (the exact config used to train that fold)
+- `training/` (checkpoints + history + training_config)
 
-- `training_output_root`: where fold training checkpoints/history are written.
-- `artifacts_output_root`: where converted data, generated CSVs, quality summaries, logs, and analysis outputs are written.
+A global manifest is saved under `artifacts_output_root/`:
 
-This lets you keep only checkpoints under `save/` while writing generated outputs outside `save/`.
+- `global_manifest.json`
 
 ## Logging
 

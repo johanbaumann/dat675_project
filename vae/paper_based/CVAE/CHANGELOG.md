@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- `fold_pipeline/run_fold_pipeline.py`: Fixed a path mismatch where fold training wrote checkpoints under the artifacts folder while sampling searched under `training_output_root`, causing `No checkpoint files found` errors. Training checkpoints/config now consistently live under `training_output_root` (typically `save/`), while sampling/analysis/logs remain under `artifacts_output_root`.
 - `fold_pipeline/fold_data.py`: Fold CSV->prop conversion now writes `<prop_txt>.meta.json` with `property_names`, allowing downstream training/sampling to recover real label names (e.g., `pIC50`) so generated prediction columns are named `pred_pIC50` instead of fallback generic names.
 - `fold_pipeline/sampling_pipeline.py` / `sample_labels.py`: RDKit parse-warning spam is now suppressible via config (`suppress_rdkit_parse_errors`, default `true`) so sampling logs stay readable while validity/cleanup counters are still tracked in quality stats.
 - `analysis_modules/config.py`: `load_analysis_config_from_file(...)` now ignores unknown config override keys before building `AnalysisConfig`, preventing crashes like `unexpected keyword argument 'print_vocab_size'` when runner-only toggles are present.

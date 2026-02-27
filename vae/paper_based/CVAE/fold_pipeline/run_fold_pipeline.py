@@ -162,7 +162,13 @@ def _run_subprocess(command: list[str], *, cwd: str, log_file: str, step_name: s
         raise RuntimeError(f'{step_name} failed. See log: {log_file}')
 
 
-def _build_train_config_for_fold(base_train_config: dict, *, fold_dir: str, train_prop_txt: str, test_prop_txt: str) -> dict:
+def _build_train_config_for_fold(
+    base_train_config: dict,
+    *,
+    train_dir: str,
+    train_prop_txt: str,
+    test_prop_txt: str,
+) -> dict:
     override = {
         'data': {
             'prop_file': train_prop_txt,
@@ -172,12 +178,56 @@ def _build_train_config_for_fold(base_train_config: dict, *, fold_dir: str, trai
             'train_ratio': 1.0,
         },
         'training': {
-            'save_dir': os.path.join(fold_dir, 'training'),
+            # IMPORTANT: keep model checkpoints + training setup under the training output root
+            # (typically under save/, which is gitignored), not under the artifacts output root.
+            'save_dir': str(train_dir),
             'use_run_subdir': False,
             'run_name': None,
         },
     }
     return _deep_update_dict(base_train_config, override)
+
+
+def _glob_has_any(path_pattern: str) -> bool:
+    try:
+        import glob
+
+        return any(os.path.isfile(p) for p in glob.glob(str(path_pattern)))
+    except Exception:
+        return False
+
+
+def _resolve_training_run_dir_for_sampling(
+    *,
+    expected_train_dir: str,
+    artifacts_fold_dir: str,
+    checkpoint_glob: str,
+) -> str:
+    """Return the run dir that actually contains checkpoints.
+
+    New layout (preferred):
+      training_output_root/fold_k/training/
+
+    Back-compat: older configs wrote checkpoints under:
+      artifacts_output_root/fold_k/training/
+    """
+    expected_train_dir = str(expected_train_dir)
+    if _glob_has_any(os.path.join(expected_train_dir, checkpoint_glob)) or _glob_has_any(
+        os.path.join(expected_train_dir, '*.pt')
+    ):
+        return expected_train_dir
+
+    legacy_dir = os.path.join(str(artifacts_fold_dir), 'training')
+    if os.path.isdir(legacy_dir) and (
+        _glob_has_any(os.path.join(legacy_dir, checkpoint_glob)) or _glob_has_any(os.path.join(legacy_dir, '*.pt'))
+    ):
+        print(
+            f'[sampling] NOTE: no checkpoints found in expected training dir: {expected_train_dir}. '\
+            f'Falling back to legacy artifacts training dir: {legacy_dir}'
+        )
+        return legacy_dir
+
+    return expected_train_dir
 
 
 def _build_analysis_config_for_fold(
@@ -317,9 +367,30 @@ def main() -> None:
 
     train_folds_dir = os.path.abspath(str(cfg['train_folds_dir']))
     test_folds_dir = os.path.abspath(str(cfg['test_folds_dir']))
-    output_root = os.path.abspath(str(cfg.get('output_root', os.path.join('save', 'fold_pipeline_runs'))))
-    training_root = os.path.abspath(str(cfg.get('training_output_root', output_root)))
-    artifacts_root = os.path.abspath(str(cfg.get('artifacts_output_root', output_root)))
+
+    # Output roots:
+    # - training_output_root: checkpoints/history/training config (ideally under save/)
+    # - artifacts_output_root: fold data, sampling outputs, analysis outputs, logs (outside save/)
+    # Backward compatibility:
+    # - output_root is treated as artifacts_output_root when artifacts_output_root is not provided.
+    output_root_cfg = cfg.get('output_root', None)
+    artifacts_root_cfg = cfg.get('artifacts_output_root', None)
+    training_root_cfg = cfg.get('training_output_root', None)
+
+    if artifacts_root_cfg is None:
+        artifacts_root_cfg = output_root_cfg
+    if training_root_cfg is None:
+        training_root_cfg = output_root_cfg
+
+    if artifacts_root_cfg is None:
+        artifacts_root_cfg = os.path.join('fold_pipeline_outputs')
+    if training_root_cfg is None:
+        training_root_cfg = os.path.join('save', 'fold_pipeline_runs')
+
+    # Keep the printed/output_root key aligned with where fold manifests live.
+    output_root = os.path.abspath(str(artifacts_root_cfg))
+    training_root = os.path.abspath(str(training_root_cfg))
+    artifacts_root = os.path.abspath(str(artifacts_root_cfg))
     smiles_column = str(cfg.get('smiles_column', 'smiles'))
     label_columns = [str(x) for x in cfg.get('label_columns', [cfg.get('label_column', 'pIC50')])]
     fold_glob = str(cfg.get('fold_glob', 'fold_iteration_*.csv'))
@@ -379,9 +450,10 @@ def main() -> None:
 
     for pair in fold_pairs:
         fold_name = f'fold_{pair.fold_index}'
-        fold_dir = os.path.join(output_root, fold_name)
+        # Fold-level manifests/config live with artifacts (not in save/).
+        fold_dir = os.path.join(artifacts_root, fold_name)
         training_fold_dir = os.path.join(training_root, fold_name)
-        artifacts_fold_dir = os.path.join(artifacts_root, fold_name)
+        artifacts_fold_dir = fold_dir
         data_dir = os.path.join(artifacts_fold_dir, 'data')
         train_dir = os.path.join(training_fold_dir, 'training')
         sample_dir = os.path.join(artifacts_fold_dir, 'sampling')
@@ -410,11 +482,12 @@ def main() -> None:
 
         fold_train_cfg = _build_train_config_for_fold(
             base_train_config,
-            fold_dir=fold_dir,
+            train_dir=train_dir,
             train_prop_txt=converted.train_prop_txt,
             test_prop_txt=converted.test_prop_txt,
         )
-        train_cfg_path = _write_json(os.path.join(fold_dir, 'train_config.json'), fold_train_cfg)
+        # Training config is part of the model setup; keep it under the training root (save/).
+        train_cfg_path = _write_json(os.path.join(training_fold_dir, 'train_config.json'), fold_train_cfg)
         print(f'[{fold_name}] wrote train config: {train_cfg_path}')
         print(
             f'[{fold_name}] split policy: external files only (no random split). '
@@ -447,11 +520,23 @@ def main() -> None:
         else:
             print(f'[{fold_name}] training stage disabled by config (train.enabled=False)')
 
+        # Resolve the training run directory used for restore/sampling/analysis.
+        # Preferred: save/.../fold_k/training. Back-compat: artifacts/.../fold_k/training.
+        train_run_dir_for_sampling = train_dir
+
         sampling_result = None
         if sampling_enabled:
             fold_sampling_cfg = dict(sampling_cfg)
             # Fallback naming used when checkpoint metadata lacks label_target_names.
             fold_sampling_cfg['pred_property_names'] = list(label_columns)
+
+            checkpoint_glob = str(fold_sampling_cfg.get('checkpoint_glob', 'model_best.ckpt-*.pt'))
+            train_run_dir_for_sampling = _resolve_training_run_dir_for_sampling(
+                expected_train_dir=train_dir,
+                artifacts_fold_dir=artifacts_fold_dir,
+                checkpoint_glob=checkpoint_glob,
+            )
+
             run_training_dist = bool(fold_sampling_cfg.get('run_training_dist', False))
             if run_training_dist:
                 target_row = None
@@ -465,7 +550,7 @@ def main() -> None:
                 print(f'[{fold_name}] sampling target row: {target_row}')
 
             sampling_result = run_sampling_for_fold(
-                run_dir=train_dir,
+                run_dir=train_run_dir_for_sampling,
                 output_dir=sample_dir,
                 target_row=target_row,
                 sampling_cfg=fold_sampling_cfg,
@@ -482,7 +567,7 @@ def main() -> None:
                 os.path.join(sample_dir, str(sampling_cfg.get('quality_summary_filename', 'quality_summary.csv')))
             )
             sampling_result = SamplingResult(
-                run_dir=os.path.abspath(train_dir),
+                run_dir=os.path.abspath(train_run_dir_for_sampling),
                 checkpoint_path='SKIPPED_SAMPLING',
                 generated_csv_path=expected_generated_csv,
                 quality_summary_csv_path=expected_quality_csv,
@@ -492,7 +577,7 @@ def main() -> None:
 
         analysis_config_path = None
         if run_analysis:
-            if sampling_result is None:
+            if str(sampling_result.checkpoint_path).startswith('SKIPPED_'):
                 raise RuntimeError(
                     f'{fold_name}: analysis enabled but sampling was disabled. '
                     'Set analysis.enabled=false or enable sampling.'
@@ -502,12 +587,13 @@ def main() -> None:
                     f'{fold_name}: analysis enabled but generated CSV was not saved. '
                     'Set sampling.save_generated_csv=true or disable analysis.'
                 )
+
             label_for_analysis = label_columns[0] if len(label_columns) > 0 else 'prop_0'
             has_pred_labels = _contains_predicted_column(sampling_result.generated_csv_path, label_for_analysis)
             fold_analysis_cfg = _build_analysis_config_for_fold(
                 analysis_cfg=analysis_cfg,
                 fold_dir=fold_dir,
-                train_run_dir=train_dir,
+                train_run_dir=train_run_dir_for_sampling,
                 test_csv_path=converted.test_csv,
                 generated_csv_path=sampling_result.generated_csv_path,
                 has_pred_labels=has_pred_labels,
@@ -535,7 +621,7 @@ def main() -> None:
             'training_fold_dir': training_fold_dir,
             'artifacts_fold_dir': artifacts_fold_dir,
             'train_config_path': train_cfg_path,
-            'train_run_dir': train_dir,
+            'train_run_dir': train_run_dir_for_sampling if sampling_enabled else train_dir,
             'sampling_result': asdict(sampling_result),
             'analysis_enabled': run_analysis,
             'analysis_config_path': analysis_config_path,
@@ -544,12 +630,12 @@ def main() -> None:
         fold_manifest_path = _write_json(os.path.join(fold_dir, 'fold_manifest.json'), fold_manifest)
         global_manifest['folds'].append(fold_manifest)
 
-        _write_json(os.path.join(output_root, 'global_manifest.partial.json'), global_manifest)
+        _write_json(os.path.join(artifacts_root, 'global_manifest.partial.json'), global_manifest)
         _print_fold_end_summary(
             fold_name=fold_name,
             converted=converted,
             train_cfg_path=train_cfg_path,
-            train_dir=train_dir,
+            train_dir=train_run_dir_for_sampling if sampling_enabled else train_dir,
             sample_dir=sample_dir,
             analysis_dir=analysis_dir,
             logs_dir=logs_dir,
@@ -562,7 +648,7 @@ def main() -> None:
 
     global_manifest['finished_unix'] = time.time()
     global_manifest['duration_sec'] = float(global_manifest['finished_unix'] - global_manifest['started_unix'])
-    final_manifest_path = _write_json(os.path.join(output_root, 'global_manifest.json'), global_manifest)
+    final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
 
     print('\n' + '=' * 90)
     print('All requested folds completed successfully.')
