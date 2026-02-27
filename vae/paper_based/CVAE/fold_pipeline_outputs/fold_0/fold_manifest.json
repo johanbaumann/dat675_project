@@ -1,0 +1,33 @@
+{
+  "fold_index": 0,
+  "fold_name": "fold_0",
+  "train_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\combination_1000_molecules_and_0_%_synthetic\\fold_iteration_0.csv",
+  "test_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\combination_500_molecules_and_0_%_synthetic\\fold_iteration_0.csv",
+  "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\fold_0\\data\\fold_0_train_prop.txt",
+  "test_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\fold_0\\data\\fold_0_test_prop.txt",
+  "training_fold_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\fold_0",
+  "artifacts_fold_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\fold_0",
+  "train_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\fold_0\\train_config.json",
+  "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\fold_0\\training",
+  "sampling_result": {
+    "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\fold_0\\training",
+    "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\fold_0\\training\\model_best.ckpt-119.pt",
+    "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\fold_0\\sampling\\generated.csv",
+    "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\fold_0\\sampling\\quality_summary.csv",
+    "num_saved": 10000,
+    "stats": {
+      "total_generated": 92800,
+      "accepted": 11271,
+      "invalid_or_empty": 81164,
+      "discarded_cleanup": 0,
+      "in_training": 53,
+      "duplicate": 312,
+      "rejected_by_filter": 1266,
+      "salt_stripped": 0,
+      "tautomer_canonicalized": 1387
+    }
+  },
+  "analysis_enabled": false,
+  "analysis_config_path": null,
+  "completed_unix": 1772220088.2085161
+}
