@@ -17,7 +17,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from fold_pipeline.fold_data import convert_fold_pair_to_prop_files, discover_fold_pairs
-from fold_pipeline.sampling_pipeline import run_sampling_for_fold
+from fold_pipeline.sampling_pipeline import SamplingResult, run_sampling_for_fold
 
 
 DEFAULT_CONFIG_PATH = os.path.join('fold_pipeline', 'fold_pipeline_config.example.json')
@@ -39,6 +39,39 @@ def _read_json(path: str) -> dict:
     if not isinstance(payload, dict):
         raise ValueError(f'Config must be a JSON object: {path}')
     return payload
+
+
+def _resolve_pipeline_preset(cfg: dict) -> dict:
+    """Apply optional top-level pipeline preset overrides.
+
+    Config shape:
+      - pipeline_preset: str | null
+      - presets: { <name>: { ...override... } }
+    """
+    preset_name = cfg.get('pipeline_preset', None)
+    if preset_name is None:
+        return cfg
+
+    name = str(preset_name).strip()
+    if name == '':
+        return cfg
+
+    presets = cfg.get('presets', {})
+    if not isinstance(presets, dict):
+        raise ValueError('Config key "presets" must be a JSON object when pipeline_preset is used.')
+    if name not in presets:
+        raise ValueError(
+            f'pipeline_preset="{name}" not found in config.presets. '
+            f'Available presets: {sorted(list(presets.keys()))}'
+        )
+
+    override = presets.get(name)
+    if not isinstance(override, dict):
+        raise ValueError(f'config.presets["{name}"] must be a JSON object (dict).')
+
+    merged = _deep_update_dict(cfg, override)
+    merged['active_pipeline_preset'] = name
+    return merged
 
 
 def _write_json(path: str, payload: dict) -> str:
@@ -199,6 +232,8 @@ def _print_fold_start_summary(
     analysis_dir: str,
     logs_dir: str,
     sampling_cfg: dict,
+    train_enabled: bool,
+    sampling_enabled: bool,
     analysis_enabled: bool,
 ) -> None:
     expected_generated_csv = os.path.abspath(
@@ -227,6 +262,8 @@ def _print_fold_start_summary(
     print(f'[{fold_name}] expected.quality_summary   : {expected_quality_csv}')
     print(f'[{fold_name}] expected.train_log         : {os.path.join(logs_dir, "train.log")}')
     print(f'[{fold_name}] expected.analysis_log      : {os.path.join(logs_dir, "analysis.log")}')
+    print(f'[{fold_name}] train.enabled              : {bool(train_enabled)}')
+    print(f'[{fold_name}] sampling.enabled           : {bool(sampling_enabled)}')
     print(f'[{fold_name}] analysis.enabled           : {bool(analysis_enabled)}')
     print('-' * 90)
     print('')
@@ -273,6 +310,7 @@ def _print_fold_end_summary(
 def main() -> None:
     args = _parse_args()
     cfg = _read_json(args.config)
+    cfg = _resolve_pipeline_preset(cfg)
 
     workspace_root = os.path.abspath(str(cfg.get('workspace_root', _ROOT_DIR)))
     os.chdir(workspace_root)
@@ -287,6 +325,9 @@ def main() -> None:
     python_exe = str(cfg.get('python_executable') or sys.executable)
     train_script = str(cfg.get('train', {}).get('script', 'train_labels.py'))
     analysis_script = str(cfg.get('analysis', {}).get('script', 'run_viz_pipeline.py'))
+    train_enabled = bool(cfg.get('train', {}).get('enabled', True))
+    sampling_enabled = bool(cfg.get('sampling', {}).get('enabled', True))
+    analysis_enabled_global = bool(cfg.get('analysis', {}).get('enabled', True))
 
     print('===== fold pipeline bootstrap =====')
     print(f'workspace_root={workspace_root}')
@@ -295,6 +336,9 @@ def main() -> None:
     print(f'output_root={output_root}')
     print(f'python_executable={python_exe}')
     print(f'label_columns={label_columns}')
+    if cfg.get('active_pipeline_preset') is not None:
+        print(f"active_pipeline_preset={cfg.get('active_pipeline_preset')}")
+    print(f'stage toggles: train={train_enabled}, sampling={sampling_enabled}, analysis={analysis_enabled_global}')
 
     fold_pairs = discover_fold_pairs(
         train_folds_dir=train_folds_dir,
@@ -367,7 +411,7 @@ def main() -> None:
             f'train_ratio in config is ignored in this mode.'
         )
 
-        run_analysis = bool(analysis_cfg.get('enabled', True))
+        run_analysis = bool(analysis_enabled_global)
         _print_fold_start_summary(
             fold_name=fold_name,
             converted=converted,
@@ -378,33 +422,63 @@ def main() -> None:
             analysis_dir=analysis_dir,
             logs_dir=logs_dir,
             sampling_cfg=sampling_cfg,
+            train_enabled=train_enabled,
+            sampling_enabled=sampling_enabled,
             analysis_enabled=run_analysis,
         )
 
-        _run_subprocess(
-            [python_exe, train_script, '--config-json', train_cfg_path],
-            cwd=workspace_root,
-            log_file=os.path.join(logs_dir, 'train.log'),
-            step_name=f'{fold_name}:train',
-        )
+        if train_enabled:
+            _run_subprocess(
+                [python_exe, train_script, '--config-json', train_cfg_path],
+                cwd=workspace_root,
+                log_file=os.path.join(logs_dir, 'train.log'),
+                step_name=f'{fold_name}:train',
+            )
+        else:
+            print(f'[{fold_name}] training stage disabled by config (train.enabled=False)')
 
-        target_row = _resolve_target_row(
-            sampling_cfg,
-            train_prop_txt=converted.train_prop_txt,
-            test_prop_txt=converted.test_prop_txt,
-        )
-        print(f'[{fold_name}] sampling target row: {target_row}')
+        sampling_result = None
+        if sampling_enabled:
+            target_row = _resolve_target_row(
+                sampling_cfg,
+                train_prop_txt=converted.train_prop_txt,
+                test_prop_txt=converted.test_prop_txt,
+            )
+            print(f'[{fold_name}] sampling target row: {target_row}')
 
-        sampling_result = run_sampling_for_fold(
-            run_dir=train_dir,
-            output_dir=sample_dir,
-            target_row=target_row,
-            sampling_cfg=sampling_cfg,
-        )
-        print(f'[{fold_name}] sampling complete: saved={sampling_result.num_saved}')
+            sampling_result = run_sampling_for_fold(
+                run_dir=train_dir,
+                output_dir=sample_dir,
+                target_row=target_row,
+                sampling_cfg=sampling_cfg,
+                test_scaffold_csv=converted.test_csv,
+                test_scaffold_smiles_column=smiles_column,
+            )
+            print(f'[{fold_name}] sampling complete: saved={sampling_result.num_saved}')
+        else:
+            print(f'[{fold_name}] sampling stage disabled by config (sampling.enabled=False)')
+            expected_generated_csv = os.path.abspath(
+                os.path.join(sample_dir, str(sampling_cfg.get('result_filename', 'generated.csv')))
+            )
+            expected_quality_csv = os.path.abspath(
+                os.path.join(sample_dir, str(sampling_cfg.get('quality_summary_filename', 'quality_summary.csv')))
+            )
+            sampling_result = SamplingResult(
+                run_dir=os.path.abspath(train_dir),
+                checkpoint_path='SKIPPED_SAMPLING',
+                generated_csv_path=expected_generated_csv,
+                quality_summary_csv_path=expected_quality_csv,
+                num_saved=0,
+                stats={},
+            )
 
         analysis_config_path = None
         if run_analysis:
+            if sampling_result is None:
+                raise RuntimeError(
+                    f'{fold_name}: analysis enabled but sampling was disabled. '
+                    'Set analysis.enabled=false or enable sampling.'
+                )
             label_for_analysis = label_columns[0] if len(label_columns) > 0 else 'prop_0'
             has_pred_labels = _contains_predicted_column(sampling_result.generated_csv_path, label_for_analysis)
             fold_analysis_cfg = _build_analysis_config_for_fold(

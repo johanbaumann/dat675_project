@@ -1,4 +1,23 @@
 {
+  "pipeline_preset": "quiet_pipeline",
+  "presets": {
+    "quiet_pipeline": {
+      "train": {
+        "enabled": true
+      },
+      "sampling": {
+        "enabled": true,
+        "suppress_rdkit_parse_errors": true,
+        "exclude_training": true,
+        "exclude_test_scaffolds": true,
+        "test_scaffold_csv": null,
+        "test_scaffold_smiles_column": "smiles"
+      },
+      "analysis": {
+        "enabled": false
+      }
+    }
+  },
   "workspace_root": ".",
   "train_folds_dir": "combination_1000_molecules_and_0_%_synthetic",
   "test_folds_dir": "combination_500_molecules_and_0_%_synthetic",
@@ -10,6 +29,7 @@
   ],
   "python_executable": null,
   "train": {
+    "enabled": true,
     "script": "train_labels.py",
     "base_config": {
       "training_preset": "custom",
@@ -76,6 +96,7 @@
     }
   },
   "sampling": {
+    "enabled": true,
     "checkpoint_glob": "model_best.ckpt-*.pt",
     "target_prop_mode": "mean_test_labels",
     "target_prop": [
@@ -87,9 +108,13 @@
     "temperature": 0.7,
     "top_k": 20,
     "exclude_training": true,
+    "exclude_test_scaffolds": false,
+    "test_scaffold_csv": null,
+    "test_scaffold_smiles_column": "smiles",
     "strip_salts": true,
     "decharge": true,
     "canonicalize_tautomer": false,
+    "suppress_rdkit_parse_errors": true,
     "require_neutral": false,
     "mw_tolerance": null,
     "logp_tolerance": null,

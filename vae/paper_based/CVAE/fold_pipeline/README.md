@@ -54,3 +54,38 @@ A global manifest is saved at:
 - The same output is also written to per-fold log files:
 	- `.../fold_<k>/logs/train.log`
 	- `.../fold_<k>/logs/analysis.log`
+
+## Stage Toggles
+
+The pipeline can toggle major stages directly from config:
+
+- `train.enabled`: run or skip training per fold.
+- `sampling.enabled`: run or skip sampling per fold.
+- `analysis.enabled`: run or skip analysis per fold.
+
+Notes:
+
+- If `analysis.enabled=true`, sampling must also be enabled (analysis consumes generated CSV output).
+- Skipping training is supported when checkpoints already exist in each fold's `training/` directory.
+
+## Presets
+
+The runner supports config presets for one-switch behavior:
+
+- `pipeline_preset`: name of the preset to apply.
+- `presets`: mapping of preset name -> config overrides.
+
+Example included in `fold_pipeline_config.example.json`:
+
+- `quiet_pipeline`: keeps training and sampling enabled, suppresses RDKit parse spam, enables test-scaffold exclusion, and disables analysis.
+
+Set `pipeline_preset` to `null` (or remove it) to run raw top-level settings without preset overrides.
+
+## Sampling Noise + Scaffold Controls
+
+Sampling config supports two quality-of-life controls:
+
+- `sampling.suppress_rdkit_parse_errors` (default `true`): hides noisy RDKit parse error spam while preserving all validity/quality counters.
+- `sampling.exclude_test_scaffolds` (default `false`): rejects generated molecules whose Murcko scaffold appears in the test fold.
+
+When scaffold exclusion is enabled, the fold runner automatically uses that fold's test CSV as scaffold source (unless `sampling.test_scaffold_csv` is set explicitly).

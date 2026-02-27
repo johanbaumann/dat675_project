@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- `fold_pipeline/sampling_pipeline.py` / `sample_labels.py`: RDKit parse-warning spam is now suppressible via config (`suppress_rdkit_parse_errors`, default `true`) so sampling logs stay readable while validity/cleanup counters are still tracked in quality stats.
+
 - `analysis_modules/config.py`: `load_analysis_config_from_file(...)` now ignores unknown config override keys before building `AnalysisConfig`, preventing crashes like `unexpected keyword argument 'print_vocab_size'` when runner-only toggles are present.
 
 - `sample.py` / `debug_sampling.py`: Sampling now prefers the `model_config` embedded in the checkpoint (`.pt`) payload. This prevents a subtle failure mode where `save/training_config.json` gets overwritten by later training runs (often Transformer experiments), causing sampling to use the wrong `prop_file` / `seq_length` / `num_prop` and especially the wrong `prop_norm_mean/std` (=> invalid SMILES and/or near-zero acceptance).
@@ -17,6 +19,12 @@ All notable changes to this project are documented in this file.
 - `sample.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup no longer calls full `load_data(...)` just to get charset/vocab/num_prop. Scripts now use a lightweight metadata loader with cache, avoiding long startup stalls on very large property files.
 
 ### Added
+
+- `fold_pipeline/run_fold_pipeline.py` / `fold_pipeline/fold_pipeline_config.example.json`: Added preset support (`pipeline_preset` + `presets`) so grouped fold-pipeline overrides can be switched with one key; includes a `quiet_pipeline` preset block for quieter sampling logs and scaffold-safe generation defaults.
+
+- `fold_pipeline/run_fold_pipeline.py` / `fold_pipeline/fold_pipeline_config.example.json`: Added explicit stage toggles (`train.enabled`, `sampling.enabled`, `analysis.enabled`) so fold runs can selectively skip training/sampling/analysis.
+- `fold_pipeline/sampling_pipeline.py` / `sample_labels.py`: Added optional test-scaffold exclusion (`exclude_test_scaffolds`) using Murcko scaffolds from a test CSV source, with rejections counted into existing filter statistics.
+- `utils_labels.py`: `compose_runtime_sample_config(...)` now carries scaffold-filter and RDKit-log-suppression runtime keys so grouped configs propagate cleanly into sampling scripts.
 
 - `fold_pipeline/` module: added a standalone cross-validation orchestrator (`run_fold_pipeline.py`) with modular helpers for fold discovery/conversion (`fold_data.py`) and sampling (`sampling_pipeline.py`). The runner executes train -> sample -> analysis per fold and stores all artifacts under `fold_<k>/`.
 

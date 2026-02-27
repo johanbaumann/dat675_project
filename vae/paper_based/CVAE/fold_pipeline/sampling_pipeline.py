@@ -8,6 +8,8 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from rdkit import Chem, RDLogger
+from rdkit.Chem.Scaffolds import MurckoScaffold
 
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 _ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
@@ -15,6 +17,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from utils import (
+    canonicalize_for_filtering,
     compose_train_config_from_dict,
     infer_training_config_path,
     load_checkpoint_model_config,
@@ -61,14 +64,69 @@ def _target_row_to_batch(target_row: list[float], batch_size: int) -> np.ndarray
     return np.asarray([target_row for _ in range(int(batch_size))], dtype=np.float32)
 
 
+def _configure_rdkit_logging(*, suppress_parse_warnings: bool) -> None:
+    if not bool(suppress_parse_warnings):
+        return
+    RDLogger.DisableLog('rdApp.error')
+    RDLogger.DisableLog('rdApp.warning')
+
+
+def _safe_murcko_scaffold_smiles(mol: Optional[Chem.Mol]) -> Optional[str]:
+    if mol is None:
+        return None
+    try:
+        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+        if scaffold is None:
+            return None
+        return Chem.MolToSmiles(scaffold, isomericSmiles=False, canonical=True)
+    except Exception:
+        return None
+
+
+def _load_blocked_scaffolds_from_csv(
+    *,
+    csv_path: str,
+    smiles_column: str,
+    strip_salts: bool,
+    decharge: bool,
+    canonicalize_tautomer: bool,
+) -> set[str]:
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f'test scaffold CSV does not exist: {csv_path}')
+
+    df = pd.read_csv(csv_path)
+    if smiles_column not in df.columns:
+        raise ValueError(f"Missing smiles column '{smiles_column}' in test scaffold CSV: {csv_path}")
+
+    blocked: set[str] = set()
+    for raw in df[smiles_column].astype(str).tolist():
+        can, mol, _ = canonicalize_for_filtering(
+            raw,
+            strip_salts=bool(strip_salts),
+            decharge=bool(decharge),
+            canonicalize_tautomer=bool(canonicalize_tautomer),
+        )
+        if can is None or mol is None:
+            continue
+        scaffold = _safe_murcko_scaffold_smiles(mol)
+        if scaffold is not None and scaffold != '':
+            blocked.add(scaffold)
+    return blocked
+
+
 def run_sampling_for_fold(
     *,
     run_dir: str,
     output_dir: str,
     target_row: list[float],
     sampling_cfg: dict,
+    test_scaffold_csv: Optional[str] = None,
+    test_scaffold_smiles_column: str = 'smiles',
 ) -> SamplingResult:
     os.makedirs(output_dir, exist_ok=True)
+    _configure_rdkit_logging(
+        suppress_parse_warnings=bool(sampling_cfg.get('suppress_rdkit_parse_errors', True))
+    )
 
     checkpoint_glob = str(sampling_cfg.get('checkpoint_glob', 'model_best.ckpt-*.pt'))
     ckpt_path, model_config = _load_model_config_from_run(run_dir, checkpoint_glob=checkpoint_glob)
@@ -116,8 +174,29 @@ def run_sampling_for_fold(
     mol_by_smiles: dict[str, object] = {}
     pred_by_smiles: dict[str, np.ndarray] = {}
     total_stats = _new_stats()
+    blocked_test_scaffolds: set[str] = set()
+    rejected_by_test_scaffold = 0
 
     accept_predicate = _build_accept_predicate(config=sampling_cfg, target_row=target_row)
+    if bool(sampling_cfg.get('exclude_test_scaffolds', False)):
+        source_csv = sampling_cfg.get('test_scaffold_csv') or test_scaffold_csv
+        if not source_csv:
+            raise ValueError(
+                'exclude_test_scaffolds=True requires sampling.test_scaffold_csv or pipeline-provided test fold CSV.'
+            )
+        blocked_test_scaffolds = _load_blocked_scaffolds_from_csv(
+            csv_path=str(source_csv),
+            smiles_column=str(sampling_cfg.get('test_scaffold_smiles_column', test_scaffold_smiles_column)),
+            strip_salts=bool(sampling_cfg.get('strip_salts', True)),
+            decharge=bool(sampling_cfg.get('decharge', True)),
+            canonicalize_tautomer=bool(sampling_cfg.get('canonicalize_tautomer', False)),
+        )
+        print(
+            f'[sampling] test-scaffold exclusion enabled: '
+            f'blocked_scaffolds={len(blocked_test_scaffolds)}, source={source_csv}'
+        )
+    else:
+        print('[sampling] test-scaffold exclusion disabled')
 
     for batch_idx in range(max_batches):
         raw_strings, _latent, pred_labels = _sample_batch_strings(
@@ -150,6 +229,12 @@ def run_sampling_for_fold(
         _accumulate_stats(total_stats, stats)
 
         for can, mol, payload in accepted:
+            if blocked_test_scaffolds:
+                scaffold = _safe_murcko_scaffold_smiles(mol)
+                if scaffold is not None and scaffold in blocked_test_scaffolds:
+                    total_stats['rejected_by_filter'] = int(total_stats.get('rejected_by_filter', 0)) + 1
+                    rejected_by_test_scaffold += 1
+                    continue
             if can not in mol_by_smiles:
                 mol_by_smiles[can] = mol
                 if payload is not None:
@@ -161,7 +246,8 @@ def run_sampling_for_fold(
             print(
                 f'[sampling] batches={batch_idx + 1}, unique_saved={len(mol_by_smiles)}/{num_unique}, '
                 f"accepted={total_stats['accepted']}, invalid={total_stats['invalid_or_empty']}, "
-                f"in_training={total_stats['in_training']}, duplicate={total_stats['duplicate']}"
+                f"in_training={total_stats['in_training']}, duplicate={total_stats['duplicate']}, "
+                f"rejected_test_scaffold={rejected_by_test_scaffold}"
             )
 
         if len(mol_by_smiles) >= num_unique:
@@ -211,12 +297,17 @@ def run_sampling_for_fold(
         num_molecules_saved=int(len(out_df)),
         config=quality_cfg,
     )
+    if blocked_test_scaffolds:
+        print(f'[sampling] rejected due to test-scaffold overlap: {rejected_by_test_scaffold}')
 
     debug_payload = {
         'run_dir': os.path.abspath(run_dir),
         'checkpoint_path': ckpt_path,
         'sampling_cfg': sampling_cfg,
         'target_row': [float(v) for v in target_row],
+        'exclude_test_scaffolds': bool(sampling_cfg.get('exclude_test_scaffolds', False)),
+        'num_blocked_test_scaffolds': int(len(blocked_test_scaffolds)),
+        'rejected_by_test_scaffold': int(rejected_by_test_scaffold),
         'num_saved': int(len(out_df)),
         'stats': total_stats,
         'generated_csv_path': generated_csv_path,

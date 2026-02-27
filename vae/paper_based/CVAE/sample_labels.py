@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 from rdkit import RDLogger
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from utils import (
     canonicalize_for_filtering,
     compose_train_config_from_dict,
@@ -112,6 +113,92 @@ def _recanonicalize_outputs_for_evaluation(
         'num_output': int(len(out_smiles)),
         'num_changed': int(changed),
         'num_dropped': int(dropped),
+    }
+
+
+def _safe_murcko_scaffold_smiles(mol: Optional[Chem.Mol]) -> Optional[str]:
+    if mol is None:
+        return None
+    try:
+        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+        if scaffold is None:
+            return None
+        return Chem.MolToSmiles(scaffold, isomericSmiles=False, canonical=True)
+    except Exception:
+        return None
+
+
+def _load_blocked_scaffolds_from_csv(
+    *,
+    csv_path: str,
+    smiles_column: str,
+    strip_salts: bool,
+    decharge: bool,
+    canonicalize_tautomer: bool,
+) -> set[str]:
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f'test scaffold CSV does not exist: {csv_path}')
+
+    df = pd.read_csv(csv_path)
+    if smiles_column not in df.columns:
+        raise ValueError(f"Missing smiles column '{smiles_column}' in test scaffold CSV: {csv_path}")
+
+    blocked: set[str] = set()
+    for raw in df[smiles_column].astype(str).tolist():
+        can, mol, _ = canonicalize_for_filtering(
+            raw,
+            strip_salts=bool(strip_salts),
+            decharge=bool(decharge),
+            canonicalize_tautomer=bool(canonicalize_tautomer),
+        )
+        if can is None or mol is None:
+            continue
+        scaffold = _safe_murcko_scaffold_smiles(mol)
+        if scaffold is not None and scaffold != '':
+            blocked.add(scaffold)
+    return blocked
+
+
+def _exclude_blocked_scaffolds(
+    *,
+    mols: list[Chem.Mol],
+    smiles: list[str],
+    pred_labels: Optional[list[np.ndarray]],
+    target_props_per_molecule: Optional[list[tuple[float, ...]]],
+    blocked_scaffolds: set[str],
+) -> tuple[list[Chem.Mol], list[str], Optional[list[np.ndarray]], Optional[list[tuple[float, ...]]], dict]:
+    if len(smiles) == 0 or len(blocked_scaffolds) == 0:
+        return mols, smiles, pred_labels, target_props_per_molecule, {
+            'num_input': int(len(smiles)),
+            'num_output': int(len(smiles)),
+            'num_rejected': 0,
+        }
+
+    out_mols: list[Chem.Mol] = []
+    out_smiles: list[str] = []
+    out_pred: list[np.ndarray] = []
+    out_targets: list[tuple[float, ...]] = []
+
+    use_pred = pred_labels is not None and len(pred_labels) == len(smiles)
+    use_targets = target_props_per_molecule is not None and len(target_props_per_molecule) == len(smiles)
+    rejected = 0
+
+    for idx, mol in enumerate(mols):
+        scaffold = _safe_murcko_scaffold_smiles(mol)
+        if scaffold is not None and scaffold in blocked_scaffolds:
+            rejected += 1
+            continue
+        out_mols.append(mol)
+        out_smiles.append(smiles[idx])
+        if use_pred and pred_labels is not None:
+            out_pred.append(pred_labels[idx])
+        if use_targets and target_props_per_molecule is not None:
+            out_targets.append(target_props_per_molecule[idx])
+
+    return out_mols, out_smiles, (out_pred if use_pred else None), (out_targets if use_targets else None), {
+        'num_input': int(len(smiles)),
+        'num_output': int(len(out_smiles)),
+        'num_rejected': int(rejected),
     }
 
 
@@ -652,10 +739,6 @@ def generate_unique_over_param_sweeps(
 
 if __name__ == '__main__':
 
-    # Silence RDKit parse error spam (we still count invalid SMILES).
-    RDLogger.DisableLog('rdApp.error')
-    RDLogger.DisableLog('rdApp.warning')
-
     start = t.time()
 
     # Runtime sampling options.
@@ -699,6 +782,8 @@ if __name__ == '__main__':
             # Sweep for this checkpoint suggests ~temperature=0.6, top_k=20 gives much higher unique+novel acceptance.
             'temperature': 0.9, # higher temperature -> more random, lower temperature -> more valid, less diverse
             'top_k': 20, # limits sampling to the top_k most probable tokens at each step. Can help improve validity at low temperatures.
+            # If True, hides noisy RDKit parser warnings while preserving quality counters.
+            'suppress_rdkit_parse_errors': True,
         },
         'filters': {
             # Optional constraints to keep outputs close to target properties.
@@ -716,6 +801,10 @@ if __name__ == '__main__':
             'max_canonical_smiles_len': None,
             # If True, molecules already present in training/property file are rejected.
             'exclude_training': True,
+            # Optional scaffold filter: reject outputs whose Murcko scaffold appears in the provided test CSV.
+            'exclude_test_scaffolds': False,
+            'test_scaffold_csv': None,
+            'test_scaffold_smiles_column': 'smiles',
         },
         'cleanup': {
             # Canonicalization controls used for duplicate/novelty checks.
@@ -763,6 +852,10 @@ if __name__ == '__main__':
     }
 
     config = compose_runtime_sample_config(runtime_config)
+    if bool(config.get('suppress_rdkit_parse_errors', True)):
+        # Silence RDKit parse error spam (we still count invalid SMILES in stats).
+        RDLogger.DisableLog('rdApp.error')
+        RDLogger.DisableLog('rdApp.warning')
     config['save_file'] = resolve_checkpoint_path(
         save_file=config.get('save_file'),
         run_dir=config.get('run_dir'),
@@ -1044,6 +1137,42 @@ if __name__ == '__main__':
             accept_predicate=accept_predicate,
             require_neutral=bool(config.get('require_neutral', False)),
         )
+
+    blocked_test_scaffolds: set[str] = set()
+    if bool(config.get('exclude_test_scaffolds', False)):
+        scaffold_csv = config.get('test_scaffold_csv')
+        if not scaffold_csv:
+            raise ValueError(
+                'exclude_test_scaffolds=True requires filters.test_scaffold_csv to be set.'
+            )
+        blocked_test_scaffolds = _load_blocked_scaffolds_from_csv(
+            csv_path=str(scaffold_csv),
+            smiles_column=str(config.get('test_scaffold_smiles_column', 'smiles')),
+            strip_salts=bool(config.get('strip_salts', True)),
+            decharge=bool(config.get('decharge', True)),
+            canonicalize_tautomer=bool(config.get('canonicalize_tautomer', False)),
+        )
+        print(
+            'test-scaffold exclusion: '
+            f'enabled, blocked_scaffolds={len(blocked_test_scaffolds)}, source={scaffold_csv}'
+        )
+        ms, smiles, pred_labels, target_props_per_molecule, scaffold_stats = _exclude_blocked_scaffolds(
+            mols=ms,
+            smiles=smiles,
+            pred_labels=pred_labels,
+            target_props_per_molecule=target_props_per_molecule,
+            blocked_scaffolds=blocked_test_scaffolds,
+        )
+        run_stats['rejected_by_filter'] = int(run_stats.get('rejected_by_filter', 0)) + int(
+            scaffold_stats['num_rejected']
+        )
+        print(
+            'test-scaffold exclusion result: '
+            f"input={scaffold_stats['num_input']}, output={scaffold_stats['num_output']}, "
+            f"rejected={scaffold_stats['num_rejected']}"
+        )
+    else:
+        print('test-scaffold exclusion: disabled')
 
     ms, smiles, pred_labels, target_props_per_molecule, recanon_stats = _recanonicalize_outputs_for_evaluation(
         mols=ms,
