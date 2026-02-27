@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -71,7 +70,39 @@ def _target_row_to_batch(target_row: list[float], batch_size: int) -> np.ndarray
 def _configure_rdkit_logging(*, suppress_parse_warnings: bool) -> None:
     if not bool(suppress_parse_warnings):
         return
-    RDLogger.logger().setLevel(logging.CRITICAL)
+
+    # RDKit logging API differs across versions/builds.
+    # IMPORTANT: RDLogger.logger().setLevel() does NOT accept stdlib logging
+    # levels (e.g. logging.CRITICAL == 50) in some RDKit versions; doing so can
+    # trigger IndexError inside RDKit. Keep this best-effort and never fail
+    # sampling because of logging configuration.
+
+    disable_log = getattr(RDLogger, 'DisableLog', None)
+    if callable(disable_log):
+        # Most reliable way to silence RDKit across versions.
+        try:
+            disable_log('rdApp.*')
+            return
+        except Exception:
+            pass
+        # Fallback: disable common channels individually.
+        try:
+            for channel in ('rdApp.error', 'rdApp.warning', 'rdApp.info', 'rdApp.debug'):
+                disable_log(channel)
+            return
+        except Exception:
+            pass
+
+    # Last-resort fallback for builds without DisableLog().
+    # Use RDKit's own constants (if present), not stdlib logging constants.
+    try:
+        rdkit_level = getattr(RDLogger, 'CRITICAL', None)
+        if rdkit_level is None:
+            rdkit_level = getattr(RDLogger, 'ERROR', None)
+        if rdkit_level is not None:
+            RDLogger.logger().setLevel(rdkit_level)
+    except Exception:
+        pass
 
 
 def _safe_murcko_scaffold_smiles(mol: Optional[Chem.Mol]) -> Optional[str]:

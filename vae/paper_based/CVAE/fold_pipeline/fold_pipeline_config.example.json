@@ -79,7 +79,7 @@
         "save_dir": "save/",
         "run_name": null,
         "use_run_subdir": true,
-        "save_every": 20,
+        "save_every": 30,
         "early_stopping_patience": 10,
         "early_stopping_min_delta": 0.001,
         "early_stopping_restore_best": true
