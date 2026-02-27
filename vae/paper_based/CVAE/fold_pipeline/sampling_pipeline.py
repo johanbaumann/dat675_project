@@ -422,14 +422,57 @@ def run_sampling_for_fold(
         pred_rows = [pred_by_smiles.get(s, None) for s in smiles_out]
         if all(p is not None for p in pred_rows):
             pred_rows_valid = [np.asarray(p, dtype=np.float32) for p in pred_rows if p is not None]
-            pred_mat = np.stack(pred_rows_valid, axis=0)
-            pred_names = model_config.get('label_target_names')
-            if not isinstance(pred_names, list) or len(pred_names) != int(pred_mat.shape[1]):
-                pred_names = sampling_cfg.get('pred_property_names', None)
-            if not isinstance(pred_names, list) or len(pred_names) != int(pred_mat.shape[1]):
-                pred_names = [f'pred_prop_{i}' for i in range(int(pred_mat.shape[1]))]
-            for idx, name in enumerate(pred_names):
-                out_df[f'pred_{name}'] = pred_mat[:, idx]
+            pred_mat = np.stack(pred_rows_valid, axis=0).astype(np.float32)
+            if pred_mat.ndim == 1:
+                pred_mat = pred_mat.reshape(-1, 1)
+
+            # Always expose the raw model-output scale.
+            # If label_target_scale=='normalized', these are z->label predictions in normalized units.
+            for j in range(int(pred_mat.shape[1])):
+                out_df[f'pred_label_{j}'] = pred_mat[:, j]
+
+            # If the checkpoint contains label target metadata, try to expose human-friendly
+            # pred_<name> columns in *raw/original property units*.
+            # This mirrors the behavior in sample_labels.py.
+            label_target_scale = str(model_config.get('label_target_scale', 'normalized')).lower()
+            label_target_indices = model_config.get('label_target_indices')
+            label_target_names = model_config.get('label_target_names')
+            prop_norm_mean = model_config.get('prop_norm_mean')
+            prop_norm_std = model_config.get('prop_norm_std')
+
+            idxs: Optional[list[int]] = None
+            if isinstance(label_target_indices, list) and len(label_target_indices) == int(pred_mat.shape[1]):
+                idxs = [int(i) for i in label_target_indices]
+            elif int(pred_mat.shape[1]) == int(model_config.get('num_prop', pred_mat.shape[1])):
+                # Fallback: if we predict all properties, assume natural ordering.
+                idxs = list(range(int(pred_mat.shape[1])))
+
+            pred_out = pred_mat
+            if label_target_scale == 'normalized':
+                if idxs is None or prop_norm_mean is None or prop_norm_std is None:
+                    print('[sampling] WARNING: label_target_scale=normalized but missing indices/mean/std; skipping denorm.')
+                else:
+                    mean_arr = np.asarray(prop_norm_mean, dtype=np.float32)[idxs]
+                    std_arr = np.asarray(prop_norm_std, dtype=np.float32)[idxs]
+                    std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+                    pred_out = (pred_mat * std_arr.reshape(1, -1)) + mean_arr.reshape(1, -1)
+
+            # Choose names in priority order:
+            #  1) checkpoint label_target_names (most trustworthy)
+            #  2) pipeline-provided pred_property_names (fallback)
+            #  3) prop_<idx> (if idxs known)
+            #  4) pred_prop_<j>
+            fallback_names = sampling_cfg.get('pred_property_names', None)
+            for j in range(int(pred_out.shape[1])):
+                if isinstance(label_target_names, list) and len(label_target_names) == int(pred_out.shape[1]):
+                    col_name = str(label_target_names[j])
+                elif isinstance(fallback_names, list) and len(fallback_names) == int(pred_out.shape[1]):
+                    col_name = str(fallback_names[j])
+                elif idxs is not None and len(idxs) == int(pred_out.shape[1]):
+                    col_name = f'prop_{idxs[j]}'
+                else:
+                    col_name = f'pred_prop_{j}'
+                out_df[f'pred_{col_name}'] = pred_out[:, j]
 
     # Optional user-controlled generated CSV schema.
     out_df = _select_generated_output_columns(out_df, sampling_cfg)
