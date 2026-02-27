@@ -750,8 +750,11 @@ if __name__ == '__main__':
             'result_filename': '10k_test.txt',
             # Optional: if set, save generated molecules to this `.pkl` file.
             'molecules_pickle_filename': None,
-            # If None, defaults to result filename stem + '_quality_summary.csv'.
-            'quality_summary_filename': None,
+            # Use explicit output filenames to avoid implicit name derivation.
+            'quality_summary_filename': '10k_test_quality_summary.csv',
+            # If False and quality_summary_filename is None, the summary CSV is skipped
+            # instead of auto-creating '<result>_quality_summary.csv'.
+            'auto_quality_summary_filename': False,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
             #'sweep_stats_filename': 'train_dist_temp_transformer_300k_test.csv',
             'sweep_stats_filename': '10k_test.csv',
@@ -1082,7 +1085,10 @@ if __name__ == '__main__':
         num_molecules_saved=len(ms),
         config=config,
     )
-    print(f'saved quality summary: {quality_summary_filename}')
+    if quality_summary_filename:
+        print(f'saved quality summary: {quality_summary_filename}')
+    else:
+        print('quality summary save skipped (auto_quality_summary_filename=False and no explicit filename).')
 
     # Compute properties and write results.
     # NOTE: RDKit properties are still convenient for MW/LogP/TPSA, but the

@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file.
 - `sample_labels.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup now prints resolved sampling metadata including `vocab_size` (plus inferred `num_prop` and `prop_file`) so runs show the active vocabulary immediately.
 - `run_viz_pipeline.py`: Added an optional, backward-compatible sampling-metadata print path; when `overrides.prop_file` and `overrides.seq_length` are present in the analysis config JSON, the runner prints inferred `vocab_size` before analysis starts.
 - `run_viz_pipeline.py` / `analysis_run_config.json`: Added `overrides.print_vocab_size` toggle to enable/disable vocab-size printing without affecting analysis pipeline execution.
+- `utils_labels.py` / `sample_labels.py`: Added output naming control `output.auto_quality_summary_filename`; when set to `False` and `quality_summary_filename=None`, sampling no longer auto-creates `<result>_quality_summary.csv`.
 
 - `analysis_modules/` package and `run_viz_pipeline.py`: Added reusable Python modules that mirror the major `viz.ipynb` analysis flow (data loading, canonicalization, validity flags, Tanimoto-to-reference, diversity score, scaffold overlap, and CSV/JSON outputs) while keeping the notebook unchanged.
 - `analysis_modules/config.py`: Added starter profile configs for both `zinc_logp` and `bace_pic50_10k` with explicit path knobs (`train_folder`, `train_data_path`, `generated_data_path`, `output_dir`) so runs can be re-pointed quickly.

@@ -577,6 +577,10 @@ def _build_quality_summary_row(*, stats: dict, run_scope: str, num_molecules_sav
 def _save_quality_summary_csv(*, stats: dict, run_scope: str, num_molecules_saved: int, config: dict) -> str:
     quality_summary_filename = config.get('quality_summary_filename')
     if quality_summary_filename is None:
+        # Backward compatible default: derive a summary filename from result file.
+        # Can be disabled with output.auto_quality_summary_filename=False.
+        if not bool(config.get('auto_quality_summary_filename', True)):
+            return ''
         quality_summary_filename = _default_quality_summary_output_path(config['result_filename'])
 
     summary_row = _build_quality_summary_row(
@@ -913,6 +917,9 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
         'result_filename': output.get('result_filename', 'CVAE_result.txt'),
         'molecules_pickle_filename': output.get('molecules_pickle_filename', None),
         'quality_summary_filename': output.get('quality_summary_filename', None),
+        # If False and quality_summary_filename is None, no auto-derived
+        # <result>_quality_summary.csv file will be created.
+        'auto_quality_summary_filename': output.get('auto_quality_summary_filename', True),
         'sweep_stats_filename': output.get('sweep_stats_filename', 'CVAE_sweep_stats.csv'),
         'run_property_sweep': sweep.get('enabled', False),
         'prop_profile': sweep.get(
