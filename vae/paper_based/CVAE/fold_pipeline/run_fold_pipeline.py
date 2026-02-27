@@ -439,8 +439,11 @@ def main() -> None:
 
         sampling_result = None
         if sampling_enabled:
+            fold_sampling_cfg = dict(sampling_cfg)
+            # Fallback naming used when checkpoint metadata lacks label_target_names.
+            fold_sampling_cfg['pred_property_names'] = list(label_columns)
             target_row = _resolve_target_row(
-                sampling_cfg,
+                fold_sampling_cfg,
                 train_prop_txt=converted.train_prop_txt,
                 test_prop_txt=converted.test_prop_txt,
             )
@@ -450,7 +453,7 @@ def main() -> None:
                 run_dir=train_dir,
                 output_dir=sample_dir,
                 target_row=target_row,
-                sampling_cfg=sampling_cfg,
+                sampling_cfg=fold_sampling_cfg,
                 test_scaffold_csv=converted.test_csv,
                 test_scaffold_smiles_column=smiles_column,
             )

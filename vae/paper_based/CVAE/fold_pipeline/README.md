@@ -89,3 +89,18 @@ Sampling config supports two quality-of-life controls:
 - `sampling.exclude_test_scaffolds` (default `false`): rejects generated molecules whose Murcko scaffold appears in the test fold.
 
 When scaffold exclusion is enabled, the fold runner automatically uses that fold's test CSV as scaffold source (unless `sampling.test_scaffold_csv` is set explicitly).
+
+## Generated CSV Column Control
+
+Sampling supports explicit output schema control via:
+
+- `sampling.generated_outputs`: list of output columns to keep in `generated.csv`.
+
+Example:
+
+- `"generated_outputs": ["smiles", "pred_pIC50"]`
+
+Notes:
+
+- Column names must exist at runtime; invalid names raise a clear error.
+- Predicted-column naming is now sourced from property metadata sidecars produced during fold conversion, so one-property BACE runs use `pred_pIC50` (not generic `pred_prop_0`).

@@ -102,25 +102,29 @@
     "target_prop": [
       8.0
     ],
-    "num_unique": 1000,
+    "num_unique": 10000,
     "max_batches": 5000,
     "do_sample": true,
     "temperature": 0.7,
     "top_k": 20,
     "exclude_training": true,
-    "exclude_test_scaffolds": false,
+    "exclude_test_scaffolds": true,
     "test_scaffold_csv": null,
     "test_scaffold_smiles_column": "smiles",
     "strip_salts": true,
     "decharge": true,
-    "canonicalize_tautomer": false,
+    "canonicalize_tautomer": true,
     "suppress_rdkit_parse_errors": true,
-    "require_neutral": false,
+    "require_neutral": true,
     "mw_tolerance": null,
     "logp_tolerance": null,
     "min_tpsa": null,
     "max_heavy_atoms": 60,
     "max_canonical_smiles_len": null,
+    "generated_outputs": [
+      "smiles",
+      "pred_pIC50"
+    ],
     "result_filename": "generated.csv",
     "quality_summary_filename": "quality_summary.csv"
   },

@@ -121,6 +121,18 @@ def _write_prop_txt_from_csv(
             right = ' '.join(f'{v:.10g}' for v in vals)
             f.write(f'{smi} {right}\n')
 
+    # Persist sidecar metadata so downstream training/sampling can recover
+    # human-readable property names (e.g., pIC50) instead of falling back to
+    # generic names like prop_0.
+    meta_payload = {
+        'source_csv': os.path.abspath(csv_path),
+        'smiles_column': str(smiles_column),
+        'property_names': [str(c) for c in label_columns],
+        'num_rows': int(len(rows)),
+    }
+    with open(f'{out_txt_path}.meta.json', 'w', encoding='utf-8') as f:
+        json.dump(meta_payload, f, indent=2)
+
     if len(rows) == 0:
         raise ValueError(f'No valid rows written to property txt: {out_txt_path}')
 

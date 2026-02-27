@@ -921,6 +921,7 @@ def compose_runtime_sample_config(runtime_config: dict) -> dict:
         'result_filename': output.get('result_filename', 'CVAE_result.txt'),
         'molecules_pickle_filename': output.get('molecules_pickle_filename', None),
         'quality_summary_filename': output.get('quality_summary_filename', None),
+        'generated_outputs': output.get('generated_outputs', None),
         # If False and quality_summary_filename is None, no auto-derived
         # <result>_quality_summary.csv file will be created.
         'auto_quality_summary_filename': output.get('auto_quality_summary_filename', True),

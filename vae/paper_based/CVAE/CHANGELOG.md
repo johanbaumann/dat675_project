@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- `fold_pipeline/fold_data.py`: Fold CSV->prop conversion now writes `<prop_txt>.meta.json` with `property_names`, allowing downstream training/sampling to recover real label names (e.g., `pIC50`) so generated prediction columns are named `pred_pIC50` instead of fallback generic names.
+
 - `fold_pipeline/sampling_pipeline.py` / `sample_labels.py`: RDKit parse-warning spam is now suppressible via config (`suppress_rdkit_parse_errors`, default `true`) so sampling logs stay readable while validity/cleanup counters are still tracked in quality stats.
 
 - `analysis_modules/config.py`: `load_analysis_config_from_file(...)` now ignores unknown config override keys before building `AnalysisConfig`, preventing crashes like `unexpected keyword argument 'print_vocab_size'` when runner-only toggles are present.
@@ -19,6 +21,8 @@ All notable changes to this project are documented in this file.
 - `sample.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup no longer calls full `load_data(...)` just to get charset/vocab/num_prop. Scripts now use a lightweight metadata loader with cache, avoiding long startup stalls on very large property files.
 
 ### Added
+
+- `fold_pipeline/sampling_pipeline.py` / `sample_labels.py` / `utils_labels.py`: Added configurable generated-output schema control via `generated_outputs` so generated CSV files can include only requested columns (for example `['smiles', 'pred_pIC50']`).
 
 - `fold_pipeline/run_fold_pipeline.py` / `fold_pipeline/fold_pipeline_config.example.json`: Added preset support (`pipeline_preset` + `presets`) so grouped fold-pipeline overrides can be switched with one key; includes a `quiet_pipeline` preset block for quieter sampling logs and scaffold-safe generation defaults.
 

@@ -114,6 +114,33 @@ def _load_blocked_scaffolds_from_csv(
     return blocked
 
 
+def _select_generated_output_columns(df: pd.DataFrame, sampling_cfg: dict) -> pd.DataFrame:
+    """Apply optional output-column selection for generated CSV export.
+
+    Example:
+      generated_outputs: ["smiles", "pred_pIC50"]
+    """
+    requested = sampling_cfg.get('generated_outputs', None)
+    if requested is None:
+        return df
+    if not isinstance(requested, (list, tuple)):
+        raise ValueError('sampling.generated_outputs must be a list of column names or null.')
+
+    requested_cols = [str(c) for c in requested]
+    selected_cols = [c for c in requested_cols if c in df.columns]
+    missing_cols = [c for c in requested_cols if c not in df.columns]
+
+    if len(missing_cols) > 0:
+        raise ValueError(
+            f'sampling.generated_outputs contains missing columns: {missing_cols}. '
+            f'Available columns: {list(df.columns)}'
+        )
+    if len(selected_cols) == 0:
+        raise ValueError('sampling.generated_outputs resolved to zero columns.')
+
+    return df.loc[:, selected_cols].copy()
+
+
 def run_sampling_for_fold(
     *,
     run_dir: str,
@@ -276,9 +303,14 @@ def run_sampling_for_fold(
             pred_mat = np.stack(pred_rows_valid, axis=0)
             pred_names = model_config.get('label_target_names')
             if not isinstance(pred_names, list) or len(pred_names) != int(pred_mat.shape[1]):
+                pred_names = sampling_cfg.get('pred_property_names', None)
+            if not isinstance(pred_names, list) or len(pred_names) != int(pred_mat.shape[1]):
                 pred_names = [f'pred_prop_{i}' for i in range(int(pred_mat.shape[1]))]
             for idx, name in enumerate(pred_names):
                 out_df[f'pred_{name}'] = pred_mat[:, idx]
+
+    # Optional user-controlled generated CSV schema.
+    out_df = _select_generated_output_columns(out_df, sampling_cfg)
 
     generated_csv_path = os.path.abspath(
         os.path.join(output_dir, str(sampling_cfg.get('result_filename', 'generated.csv')))

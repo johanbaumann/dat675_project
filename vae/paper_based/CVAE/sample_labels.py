@@ -202,6 +202,29 @@ def _exclude_blocked_scaffolds(
     }
 
 
+def _select_generated_output_columns(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Apply optional output-column selection for generated CSV export."""
+    requested = config.get('generated_outputs', None)
+    if requested is None:
+        return df
+    if not isinstance(requested, (list, tuple)):
+        raise ValueError('output.generated_outputs must be a list of column names or null.')
+
+    requested_cols = [str(c) for c in requested]
+    selected_cols = [c for c in requested_cols if c in df.columns]
+    missing_cols = [c for c in requested_cols if c not in df.columns]
+
+    if len(missing_cols) > 0:
+        raise ValueError(
+            f'output.generated_outputs contains missing columns: {missing_cols}. '
+            f'Available columns: {list(df.columns)}'
+        )
+    if len(selected_cols) == 0:
+        raise ValueError('output.generated_outputs resolved to zero columns.')
+
+    return df.loc[:, selected_cols].copy()
+
+
 def generate_unique_molecules(
     *,
     model: CVAE,
@@ -844,6 +867,9 @@ if __name__ == '__main__':
             # If False and quality_summary_filename is None, the summary CSV is skipped
             # instead of auto-creating '<result>_quality_summary.csv'.
             'auto_quality_summary_filename': False,
+            # Optional: control exactly which columns are saved in generated CSV.
+            # Example: ['smiles', 'pred_pIC50']
+            'generated_outputs': None,
             #'sweep_stats_filename': 'CVAE_lstm_300k_test.csv',
             #'sweep_stats_filename': 'train_dist_temp_transformer_300k_test.csv',
             'sweep_stats_filename': '10k_test.csv',
@@ -1301,6 +1327,7 @@ if __name__ == '__main__':
             if 'pred_MW' in df.columns and 'target_MW' in df.columns:
                 df['pred_MW_minus_target_MW'] = df['pred_MW'] - df['target_MW']
 
+    df = _select_generated_output_columns(df, config)
     print(df.describe())
     df.to_csv(config['result_filename'], index=False)
 
