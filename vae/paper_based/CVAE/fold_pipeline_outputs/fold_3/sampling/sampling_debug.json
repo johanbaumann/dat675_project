@@ -1,0 +1,66 @@
+{
+  "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\fold_3\\training",
+  "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\fold_3\\training\\model_best.ckpt-115.pt",
+  "sampling_cfg": {
+    "enabled": true,
+    "checkpoint_glob": "model_best.ckpt-*.pt",
+    "run_training_dist": true,
+    "training_dist_std_scale": 1.0,
+    "training_dist_clip_n_std": 2.5,
+    "training_dist_seed": null,
+    "target_prop_mode": "mean_test_labels",
+    "target_prop": [
+      8.0
+    ],
+    "num_unique": 10000,
+    "max_batches": 5000,
+    "do_sample": true,
+    "temperature": 0.9,
+    "top_k": 20,
+    "exclude_training": true,
+    "exclude_test_scaffolds": true,
+    "test_scaffold_csv": null,
+    "test_scaffold_smiles_column": "smiles",
+    "strip_salts": true,
+    "decharge": true,
+    "canonicalize_tautomer": true,
+    "suppress_rdkit_parse_errors": true,
+    "require_neutral": true,
+    "mw_tolerance": null,
+    "logp_tolerance": null,
+    "min_tpsa": null,
+    "max_heavy_atoms": 60,
+    "max_canonical_smiles_len": null,
+    "generated_outputs": [
+      "smiles",
+      "pred_pIC50",
+      "target_pIC50"
+    ],
+    "save_generated_csv": true,
+    "save_quality_summary": true,
+    "result_filename": "generated.csv",
+    "quality_summary_filename": "quality_summary.csv",
+    "pred_property_names": [
+      "pIC50"
+    ]
+  },
+  "run_training_dist": true,
+  "target_row": null,
+  "exclude_test_scaffolds": true,
+  "num_blocked_test_scaffolds": 280,
+  "rejected_by_test_scaffold": 1181,
+  "num_saved": 10000,
+  "stats": {
+    "total_generated": 76160,
+    "accepted": 11189,
+    "invalid_or_empty": 64578,
+    "discarded_cleanup": 0,
+    "in_training": 69,
+    "duplicate": 324,
+    "rejected_by_filter": 1181,
+    "salt_stripped": 0,
+    "tautomer_canonicalized": 1406
+  },
+  "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\fold_3\\sampling\\generated.csv",
+  "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\fold_3\\sampling\\quality_summary.csv"
+}

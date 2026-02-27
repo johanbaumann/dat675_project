@@ -173,5 +173,7 @@
       "completed_unix": 1772225527.6084962
     }
   ],
-  "started_unix": 1772218584.117984
+  "started_unix": 1772218584.117984,
+  "finished_unix": 1772225527.6114588,
+  "duration_sec": 6943.493474721909
 }
