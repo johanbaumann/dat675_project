@@ -176,11 +176,12 @@ def _print_iteration_assignment(
     training_fold_names: list[str],
     training_fold_indices: list[int],
 ) -> None:
+    validation_fold_position = int(validation_fold_index) + 1
     print('')
     print('-' * 90)
     print(
         f'starting CV fold iteration {int(iteration_index)} '
-        f'(validation fold parsed from filename: index {int(validation_fold_index)} of {int(total_folds)})'
+        f'(validation fold parsed from filename: index {validation_fold_position} of {int(total_folds)})'
     )
     print(f'  validation fold name : {validation_fold_name}')
     print(f'  validation fold file : {validation_fold_file}')
@@ -291,6 +292,7 @@ def _print_iteration_start_summary(
     total_folds: int,
     validation_fold_index: int,
 ) -> None:
+    validation_fold_position = int(validation_fold_index) + 1
     expected_generated_csv = os.path.abspath(
         os.path.join(sample_dir, str(sampling_cfg.get('result_filename', 'generated.csv')))
     )
@@ -302,7 +304,7 @@ def _print_iteration_start_summary(
     print('-' * 90)
     print(f'[{fold_name}] iteration-start summary')
     print('-' * 90)
-    print(f'[{fold_name}] cv.validation_fold_index  : {int(validation_fold_index)} / {int(total_folds)}')
+    print(f'[{fold_name}] cv.validation_fold_index  : {validation_fold_position} / {int(total_folds)}')
     print(f'[{fold_name}] input.validation_fold_name : {converted.validation_fold_name}')
     print(f'[{fold_name}] input.training_fold_names  : {converted.training_fold_names}')
     print(f'[{fold_name}] input.training_csvs        : {converted.training_csvs}')
@@ -539,7 +541,7 @@ def main() -> None:
         print(
             f'[{fold_name}] split.quick: '
             f'validation={pair.validation_fold.fold_name} '
-            f'({int(pair.validation_fold.fold_index)}/{int(total_folds)}) | '
+            f'({int(pair.validation_fold.fold_index) + 1}/{int(total_folds)}) | '
             f'train=[{compact_train_indices}]'
         )
 

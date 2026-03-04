@@ -21,8 +21,8 @@
       "model": {
         "mode": "transformer",
         "latent_size": 200,
-        "unit_size": 512, 
-        "n_rnn_layer": 2,
+        "unit_size": 256, 
+        "n_rnn_layer": 3,
         "mean": 0.0,
         "stddev": 1.0,
         "num_prop": null,
@@ -40,7 +40,7 @@
       },
       "optimization": {
         "optimizer": "adamw",
-        "lr": 1e-4,
+        "lr": 1e-3,
         "weight_decay": 0.001,
         "use_amp": false,
         "amp_dtype": "float16",

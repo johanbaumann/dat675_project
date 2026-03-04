@@ -1,0 +1,73 @@
+{
+  "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_2\\training",
+  "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_2\\training\\model_best.ckpt-49.pt",
+  "sampling_cfg": {
+    "enabled": true,
+    "checkpoint_glob": "model_best.ckpt-*.pt",
+    "run_training_dist": true,
+    "training_dist_std_scale": 1.0,
+    "training_dist_clip_n_std": 2.5,
+    "training_dist_seed": null,
+    "target_prop_mode": "mean_test_labels",
+    "target_prop": [
+      8.0
+    ],
+    "num_unique": 10000,
+    "max_batches": 5000,
+    "do_sample": true,
+    "temperature": 0.9,
+    "top_k": 20,
+    "exclude_training": true,
+    "exclude_validation_scaffolds": true,
+    "exclude_heldout_scaffolds": true,
+    "heldout_smiles_csv": "../../../Preprocessing/heldout_datasets/heldout_testset.csv",
+    "validation_smiles_column": "smiles",
+    "heldout_smiles_column": "smiles",
+    "scaffold_make_generic": true,
+    "strip_salts": true,
+    "decharge": true,
+    "canonicalize_tautomer": true,
+    "suppress_rdkit_parse_errors": true,
+    "require_neutral": true,
+    "mw_tolerance": null,
+    "logp_tolerance": null,
+    "min_tpsa": null,
+    "max_heavy_atoms": 60,
+    "max_canonical_smiles_len": null,
+    "generated_outputs": [
+      "smiles",
+      "pred_pIC50",
+      "target_pIC50"
+    ],
+    "save_generated_csv": true,
+    "save_quality_summary": true,
+    "result_filename": "generated.csv",
+    "quality_summary_filename": "quality_summary.csv",
+    "pred_property_names": [
+      "pIC50"
+    ]
+  },
+  "run_training_dist": true,
+  "target_row": null,
+  "exclude_validation_scaffolds": true,
+  "exclude_heldout_scaffolds": true,
+  "scaffold_make_generic": true,
+  "num_blocked_validation_scaffolds": 128,
+  "num_blocked_heldout_scaffolds": 70,
+  "rejected_by_validation_scaffold": 4426,
+  "rejected_by_heldout_scaffold": 264,
+  "num_saved": 10000,
+  "stats": {
+    "total_generated": 46976,
+    "accepted": 14699,
+    "invalid_or_empty": 28112,
+    "discarded_cleanup": 0,
+    "in_training": 854,
+    "duplicate": 3310,
+    "rejected_by_filter": 4691,
+    "salt_stripped": 0,
+    "tautomer_canonicalized": 1773
+  },
+  "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\generated\\generated.csv",
+  "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\generated\\quality_summary.csv"
+}
