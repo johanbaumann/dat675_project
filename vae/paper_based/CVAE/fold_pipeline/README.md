@@ -1,25 +1,38 @@
-# Fold Pipeline Runner
+# CV Fold-Iteration Pipeline
 
-This folder contains a standalone modular runner for 5x5 fold workflows:
+This pipeline now runs **normal CV iterations from one fold directory**.
 
-1. Convert train/test fold CSV files into training property txt files.
-2. Train CVAE on train fold and validate on test fold (no internal random split).
-3. Sample molecules from the trained checkpoint.
-4. Run analysis/statistics pipeline on generated molecules.
+For each CV iteration:
 
-No fold mixing:
-- Train fold is always loaded from `combination_1000.../fold_iteration_k.csv`.
-- Test fold is always loaded from `combination_500.../fold_iteration_k.csv`.
-- `train_labels.py` runs in external-split mode (`data.test_prop_file`) so internal random splitting is bypassed.
+1. One fold file is used as validation.
+2. All remaining fold files are merged as training data.
+3. One model is trained.
+4. 10k molecules (or configured `num_unique`) are sampled.
+5. Optional analysis runs.
+
+## Iteration behavior
+
+If you have `fold_0.csv ... fold_4.csv`, the pipeline creates 5 iterations:
+
+- Iteration 0: validation=`fold_0`, training=`fold_1, fold_2, fold_3, fold_4`
+- Iteration 1: validation=`fold_1`, training=`fold_0, fold_2, fold_3, fold_4`
+- ... and so on.
+
+At startup of each iteration, the runner prints this assignment in an easy-to-read list.
 
 ## Files
 
-- `run_fold_pipeline.py`: top-level orchestrator.
-- `fold_data.py`: fold discovery + CSV-to-prop conversion utilities.
-- `sampling_pipeline.py`: checkpoint restore + molecule sampling + quality summary.
-- `fold_pipeline_config.example.json`: example configuration.
+- `run_fold_pipeline.py`: CV iteration orchestrator.
+- `fold_data.py`: discovers fold CSVs and builds train/validation prop files per iteration.
+- `sampling_pipeline.py`: sampling + quality stats + scaffold exclusion.
+- `fold_pipeline_config.example.json`: simplified reference config.
 
-## Usage
+Internal helper naming is iteration-first:
+
+- `*_for_iteration` (not `*_for_fold`)
+- manifests and output folders use `cv_iteration_<k>`
+
+## Run
 
 From workspace root:
 
@@ -27,104 +40,63 @@ From workspace root:
 python fold_pipeline/run_fold_pipeline.py --config fold_pipeline/fold_pipeline_config.example.json
 ```
 
-Run a single fold:
+Run one iteration only:
 
 ```powershell
 python fold_pipeline/run_fold_pipeline.py --config fold_pipeline/fold_pipeline_config.example.json --only-fold 0
 ```
 
-## Output Layout
+## Config (simplified)
 
-The fold runner supports a split layout so big training checkpoints stay under `save/` (gitignored) while everything else stays outside:
+Top-level fold input now uses one path only:
 
-**Artifacts (typically outside `save/`)** — under `artifacts_output_root/fold_<k>/`:
+- `train_validation_folds_dir`: folder containing all fold CSV files.
+- `fold_glob`: filename pattern (for example `fold_*.csv`).
 
-- `data/` (converted prop txt + data manifest)
-- `sampling/` (generated CSV + quality summary)
-- `analysis/` (analysis outputs + per-fold analysis config)
-- `logs/` (train/analysis subprocess logs)
-- `fold_manifest.json`
+Other key paths:
 
-**Training (typically under `save/`)** — under `training_output_root/fold_<k>/`:
+- `training_output_root`: checkpoints/history output.
+- `artifacts_output_root`: per-iteration data/sampling/logs/manifests.
 
-- `train_config.json` (the exact config used to train that fold)
-- `training/` (checkpoints + history + training_config)
+## Heldout usage and scaffold exclusion
 
-A global manifest is saved under `artifacts_output_root/`:
+Heldout set is used **only for scaffold exclusion**.
 
-- `global_manifest.json`
+Key options:
 
-## Logging
+- `sampling.exclude_training`: rejects molecules seen in training data.
+- `sampling.exclude_validation_scaffolds`: rejects scaffold overlap with current validation fold.
+- `sampling.exclude_heldout_scaffolds`: rejects scaffold overlap with heldout test set.
+- `sampling.heldout_smiles_csv`: heldout CSV path.
+- `sampling.validation_smiles_column`, `sampling.heldout_smiles_column`: SMILES column names.
+- `sampling.scaffold_make_generic`:
+  - `true` => generic Murcko scaffold
+  - `false` => specific Murcko scaffold
 
-- Training and analysis subprocess logs are streamed live to console.
-- The same output is also written to per-fold log files:
-	- `.../fold_<k>/logs/train.log`
-	- `.../fold_<k>/logs/analysis.log`
+## Important debug output
 
-## Stage Toggles
+Per iteration, logs print:
 
-The pipeline can toggle major stages directly from config:
+- iteration index,
+- validation fold name,
+- all training fold names,
+- training and validation row counts,
+- scaffold exclusion sources and blocked scaffold counts,
+- periodic rejection counters during sampling,
+- per-iteration manifest location.
 
-- `train.enabled`: run or skip training per fold.
-- `sampling.enabled`: run or skip sampling per fold.
-- `analysis.enabled`: run or skip analysis per fold.
+## Output layout
 
-Notes:
+Per iteration under `artifacts_output_root/cv_iteration_<k>/`:
 
-- If `analysis.enabled=true`, sampling must also be enabled (analysis consumes generated CSV output).
-- Skipping training is supported when checkpoints already exist in each fold's `training/` directory.
+- `data/`
+- `sampling/`
+- `analysis/` (if enabled)
+- `logs/`
+- `iteration_manifest.json`
 
-## Presets
+Training artifacts under `training_output_root/cv_iteration_<k>/training/`.
 
-The runner supports config presets for one-switch behavior:
+Global run manifest:
 
-- `pipeline_preset`: name of the preset to apply.
-- `presets`: mapping of preset name -> config overrides.
-
-Example included in `fold_pipeline_config.example.json`:
-
-- `quiet_pipeline`: keeps training and sampling enabled, suppresses RDKit parse spam, enables test-scaffold exclusion, and disables analysis.
-
-Set `pipeline_preset` to `null` (or remove it) to run raw top-level settings without preset overrides.
-
-## Sampling Noise + Scaffold Controls
-
-Sampling config supports two quality-of-life controls:
-
-- `sampling.suppress_rdkit_parse_errors` (default `true`): hides noisy RDKit parse error spam while preserving all validity/quality counters.
-- `sampling.exclude_test_scaffolds` (default `false`): rejects generated molecules whose Murcko scaffold appears in the test fold.
-
-When scaffold exclusion is enabled, the fold runner automatically uses that fold's test CSV as scaffold source (unless `sampling.test_scaffold_csv` is set explicitly).
-
-## Training-Distribution Sampling (Fold Pipeline)
-
-Fold sampling supports the same training-distribution mode as `sample_labels.py`:
-
-- `sampling.run_training_dist`: when true, each sampled molecule uses a per-sample target drawn from training property statistics.
-- `sampling.training_dist_std_scale`
-- `sampling.training_dist_clip_n_std`
-- `sampling.training_dist_seed`
-
-In this mode, generated target columns vary per molecule (for example `target_pIC50`) rather than being one fixed value for all rows.
-
-## Generated CSV Column Control
-
-Sampling supports explicit output schema control via:
-
-- `sampling.generated_outputs`: list of output columns to keep in `generated.csv`.
-
-Example:
-
-- `"generated_outputs": ["smiles", "pred_pIC50"]`
-
-Notes:
-
-- Column names must exist at runtime; invalid names raise a clear error.
-- Predicted-column naming is now sourced from property metadata sidecars produced during fold conversion, so one-property BACE runs use `pred_pIC50` (not generic `pred_prop_0`).
-
-Additional save toggles:
-
-- `sampling.save_generated_csv`: write/skip generated CSV.
-- `sampling.save_quality_summary`: write/skip quality summary CSV.
-
-If analysis is enabled, `sampling.save_generated_csv` must be true.
+- `artifacts_output_root/global_manifest.json`

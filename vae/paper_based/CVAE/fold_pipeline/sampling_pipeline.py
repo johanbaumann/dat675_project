@@ -105,16 +105,53 @@ def _configure_rdkit_logging(*, suppress_parse_warnings: bool) -> None:
         pass
 
 
-def _safe_murcko_scaffold_smiles(mol: Optional[Chem.Mol]) -> Optional[str]:
+def _safe_mol_from_smiles(smiles: str) -> Optional[Chem.Mol]:
+    raw = str(smiles).strip()
+    if raw == '':
+        return None
+    try:
+        return Chem.MolFromSmiles(raw)
+    except Exception:
+        return None
+
+
+def _scaffold_smiles_from_mol(mol: Optional[Chem.Mol], *, make_generic: bool = True) -> Optional[str]:
     if mol is None:
         return None
     try:
-        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
-        if scaffold is None:
-            return None
-        return Chem.MolToSmiles(scaffold, isomericSmiles=False, canonical=True)
+        scaf_mol = MurckoScaffold.GetScaffoldForMol(mol)
     except Exception:
         return None
+
+    if scaf_mol is None or scaf_mol.GetNumAtoms() == 0:
+        return None
+
+    if make_generic:
+        try:
+            scaf_mol = MurckoScaffold.MakeScaffoldGeneric(scaf_mol)
+        except Chem.AtomValenceException:
+            return None
+        except Exception:
+            return None
+
+    if scaf_mol is None or scaf_mol.GetNumAtoms() == 0:
+        return None
+
+    try:
+        return Chem.MolToSmiles(scaf_mol, canonical=True)
+    except Exception:
+        return None
+
+
+def _scaffold_smiles_from_smiles(smiles: str, make_generic: bool = True) -> Optional[str]:
+    """Compute Murcko scaffold SMILES from a molecule SMILES.
+
+    Returns None if parsing or scaffold extraction fails.
+    """
+    mol = _safe_mol_from_smiles(smiles)
+    if mol is None:
+        return None
+    return _scaffold_smiles_from_mol(mol, make_generic=make_generic)
 
 
 def _load_blocked_scaffolds_from_csv(
@@ -124,6 +161,7 @@ def _load_blocked_scaffolds_from_csv(
     strip_salts: bool,
     decharge: bool,
     canonicalize_tautomer: bool,
+    make_generic: bool,
 ) -> set[str]:
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f'test scaffold CSV does not exist: {csv_path}')
@@ -134,15 +172,15 @@ def _load_blocked_scaffolds_from_csv(
 
     blocked: set[str] = set()
     for raw in df[smiles_column].astype(str).tolist():
-        can, mol, _ = canonicalize_for_filtering(
+        can, _mol, _ = canonicalize_for_filtering(
             raw,
             strip_salts=bool(strip_salts),
             decharge=bool(decharge),
             canonicalize_tautomer=bool(canonicalize_tautomer),
         )
-        if can is None or mol is None:
+        if can is None or can == '':
             continue
-        scaffold = _safe_murcko_scaffold_smiles(mol)
+        scaffold = _scaffold_smiles_from_smiles(can, make_generic=make_generic)
         if scaffold is not None and scaffold != '':
             blocked.add(scaffold)
     return blocked
@@ -175,14 +213,15 @@ def _select_generated_output_columns(df: pd.DataFrame, sampling_cfg: dict) -> pd
     return df.loc[:, selected_cols].copy()
 
 
-def run_sampling_for_fold(
+def run_sampling_for_iteration(
     *,
     run_dir: str,
     output_dir: str,
     target_row: Optional[list[float]],
     sampling_cfg: dict,
-    test_scaffold_csv: Optional[str] = None,
-    test_scaffold_smiles_column: str = 'smiles',
+    test_smiles_csv: Optional[str] = None,
+    heldout_smiles_csv: Optional[str] = None,
+    smiles_column: str = 'smiles',
 ) -> SamplingResult:
     os.makedirs(output_dir, exist_ok=True)
     _configure_rdkit_logging(
@@ -265,31 +304,56 @@ def run_sampling_for_fold(
     target_by_smiles: dict[str, tuple[float, ...]] = {}
     total_stats = _new_stats()
     blocked_test_scaffolds: set[str] = set()
+    blocked_heldout_scaffolds: set[str] = set()
     rejected_by_test_scaffold = 0
+    rejected_by_heldout_scaffold = 0
+
+    make_generic_scaffold = bool(sampling_cfg.get('scaffold_make_generic', True))
+    effective_smiles_column = str(sampling_cfg.get('validation_smiles_column', smiles_column))
+    effective_validation_csv = sampling_cfg.get('validation_scaffold_csv') or test_smiles_csv
 
     accept_predicate = None
     if not run_training_dist:
         assert target_row_single is not None
         accept_predicate = _build_accept_predicate(config=sampling_cfg, target_row=target_row_single)
-    if bool(sampling_cfg.get('exclude_test_scaffolds', False)):
-        source_csv = sampling_cfg.get('test_scaffold_csv') or test_scaffold_csv
-        if not source_csv:
+
+    if bool(sampling_cfg.get('exclude_validation_scaffolds', True)):
+        if not effective_validation_csv:
             raise ValueError(
-                'exclude_test_scaffolds=True requires sampling.test_scaffold_csv or pipeline-provided test fold CSV.'
+                'exclude_validation_scaffolds=True requires a validation fold CSV path.'
             )
         blocked_test_scaffolds = _load_blocked_scaffolds_from_csv(
-            csv_path=str(source_csv),
-            smiles_column=str(sampling_cfg.get('test_scaffold_smiles_column', test_scaffold_smiles_column)),
+            csv_path=str(effective_validation_csv),
+            smiles_column=effective_smiles_column,
             strip_salts=bool(sampling_cfg.get('strip_salts', True)),
             decharge=bool(sampling_cfg.get('decharge', True)),
             canonicalize_tautomer=bool(sampling_cfg.get('canonicalize_tautomer', False)),
+            make_generic=make_generic_scaffold,
         )
         print(
-            f'[sampling] test-scaffold exclusion enabled: '
-            f'blocked_scaffolds={len(blocked_test_scaffolds)}, source={source_csv}'
+            f'[sampling] validation-scaffold exclusion enabled: '
+            f'blocked_scaffolds={len(blocked_test_scaffolds)}, source={effective_validation_csv}, '
+            f'make_generic={make_generic_scaffold}'
         )
     else:
-        print('[sampling] test-scaffold exclusion disabled')
+        print('[sampling] validation-scaffold exclusion disabled')
+
+    if bool(sampling_cfg.get('exclude_heldout_scaffolds', False)):
+        if not heldout_smiles_csv:
+            raise ValueError('exclude_heldout_scaffolds=True requires sampling.heldout_smiles_csv.')
+        blocked_heldout_scaffolds = _load_blocked_scaffolds_from_csv(
+            csv_path=str(heldout_smiles_csv),
+            smiles_column=str(sampling_cfg.get('heldout_smiles_column', effective_smiles_column)),
+            strip_salts=bool(sampling_cfg.get('strip_salts', True)),
+            decharge=bool(sampling_cfg.get('decharge', True)),
+            canonicalize_tautomer=bool(sampling_cfg.get('canonicalize_tautomer', False)),
+            make_generic=make_generic_scaffold,
+        )
+        print(
+            f'[sampling] heldout-scaffold exclusion enabled: '
+            f'blocked_scaffolds={len(blocked_heldout_scaffolds)}, source={heldout_smiles_csv}, '
+            f'make_generic={make_generic_scaffold}'
+        )
 
     if run_training_dist:
         print(
@@ -366,11 +430,15 @@ def run_sampling_for_fold(
                 can, mol, payload = accepted_row
                 payload_target_raw = None
 
-            if blocked_test_scaffolds:
-                scaffold = _safe_murcko_scaffold_smiles(mol)
+            if blocked_test_scaffolds or blocked_heldout_scaffolds:
+                scaffold = _scaffold_smiles_from_mol(mol, make_generic=make_generic_scaffold)
                 if scaffold is not None and scaffold in blocked_test_scaffolds:
                     total_stats['rejected_by_filter'] = int(total_stats.get('rejected_by_filter', 0)) + 1
                     rejected_by_test_scaffold += 1
+                    continue
+                if scaffold is not None and scaffold in blocked_heldout_scaffolds:
+                    total_stats['rejected_by_filter'] = int(total_stats.get('rejected_by_filter', 0)) + 1
+                    rejected_by_heldout_scaffold += 1
                     continue
             if can not in mol_by_smiles:
                 mol_by_smiles[can] = mol
@@ -388,7 +456,8 @@ def run_sampling_for_fold(
                 f'[sampling] batches={batch_idx + 1}, unique_saved={len(mol_by_smiles)}/{num_unique}, '
                 f"accepted={total_stats['accepted']}, invalid={total_stats['invalid_or_empty']}, "
                 f"in_training={total_stats['in_training']}, duplicate={total_stats['duplicate']}, "
-                f"rejected_test_scaffold={rejected_by_test_scaffold}"
+                f'rejected_validation_scaffold={rejected_by_test_scaffold}, '
+                f'rejected_heldout_scaffold={rejected_by_heldout_scaffold}'
             )
 
         if len(mol_by_smiles) >= num_unique:
@@ -493,7 +562,7 @@ def run_sampling_for_fold(
     quality_cfg['quality_summary_filename'] = os.path.abspath(os.path.join(output_dir, quality_summary_filename))
     save_quality_summary = bool(sampling_cfg.get('save_quality_summary', True))
 
-    _print_quality_stats(total_stats, scope_label='Generated set quality (single fold)')
+    _print_quality_stats(total_stats, scope_label='Generated set quality (single CV iteration)')
     if save_quality_summary:
         quality_summary_csv_path = _save_quality_summary_csv(
             stats=total_stats,
@@ -505,7 +574,9 @@ def run_sampling_for_fold(
         quality_summary_csv_path = 'SKIPPED_QUALITY_SUMMARY'
         print('[sampling] save_quality_summary=false, skipping quality summary CSV write')
     if blocked_test_scaffolds:
-        print(f'[sampling] rejected due to test-scaffold overlap: {rejected_by_test_scaffold}')
+        print(f'[sampling] rejected due to validation-scaffold overlap: {rejected_by_test_scaffold}')
+    if blocked_heldout_scaffolds:
+        print(f'[sampling] rejected due to heldout-scaffold overlap: {rejected_by_heldout_scaffold}')
 
     debug_payload = {
         'run_dir': os.path.abspath(run_dir),
@@ -513,9 +584,13 @@ def run_sampling_for_fold(
         'sampling_cfg': sampling_cfg,
         'run_training_dist': bool(run_training_dist),
         'target_row': (None if target_row_single is None else [float(v) for v in target_row_single]),
-        'exclude_test_scaffolds': bool(sampling_cfg.get('exclude_test_scaffolds', False)),
-        'num_blocked_test_scaffolds': int(len(blocked_test_scaffolds)),
-        'rejected_by_test_scaffold': int(rejected_by_test_scaffold),
+        'exclude_validation_scaffolds': bool(sampling_cfg.get('exclude_validation_scaffolds', True)),
+        'exclude_heldout_scaffolds': bool(sampling_cfg.get('exclude_heldout_scaffolds', False)),
+        'scaffold_make_generic': bool(make_generic_scaffold),
+        'num_blocked_validation_scaffolds': int(len(blocked_test_scaffolds)),
+        'num_blocked_heldout_scaffolds': int(len(blocked_heldout_scaffolds)),
+        'rejected_by_validation_scaffold': int(rejected_by_test_scaffold),
+        'rejected_by_heldout_scaffold': int(rejected_by_heldout_scaffold),
         'num_saved': int(len(out_df)),
         'stats': total_stats,
         'generated_csv_path': generated_csv_path,

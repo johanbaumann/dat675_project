@@ -11,109 +11,131 @@ import numpy as np
 import pandas as pd
 
 
-_FOLD_RE = re.compile(r'^fold_iteration_(\d+)\.csv$', re.IGNORECASE)
+_FOLD_TRAILING_INT_RE = re.compile(r'^(.*?)(\d+)$')
 
 
 @dataclass(frozen=True)
-class FoldPair:
+class FoldFile:
     fold_index: int
-    train_csv: str
-    test_csv: str
+    fold_name: str
+    csv_path: str
 
 
 @dataclass(frozen=True)
-class ConvertedFoldData:
-    fold_index: int
-    train_csv: str
-    test_csv: str
+class CVFoldIteration:
+    iteration_index: int
+    validation_fold: FoldFile
+    training_folds: list[FoldFile]
+
+
+@dataclass(frozen=True)
+class ConvertedCVIterationData:
+    iteration_index: int
+    iteration_name: str
+    validation_fold_name: str
+    training_fold_names: list[str]
+    validation_csv: str
+    training_csvs: list[str]
     train_prop_txt: str
-    test_prop_txt: str
+    validation_prop_txt: str
     train_rows: int
-    test_rows: int
+    validation_rows: int
     train_prop_mean: list[float]
-    test_prop_mean: list[float]
+    validation_prop_mean: list[float]
 
 
-def _extract_fold_index(path: str) -> int:
-    name = os.path.basename(path)
-    m = _FOLD_RE.match(name)
+def _extract_fold_index(path: str) -> tuple[int, str]:
+    stem = os.path.splitext(os.path.basename(path))[0]
+    m = _FOLD_TRAILING_INT_RE.match(stem)
     if not m:
-        raise ValueError(f'Expected fold file name like fold_iteration_<idx>.csv, got: {name}')
-    return int(m.group(1))
-
-
-def discover_fold_pairs(
-    *,
-    train_folds_dir: str,
-    test_folds_dir: str,
-    fold_glob: str = 'fold_iteration_*.csv',
-) -> list[FoldPair]:
-    train_paths = sorted(glob(os.path.join(train_folds_dir, fold_glob)))
-    test_paths = sorted(glob(os.path.join(test_folds_dir, fold_glob)))
-
-    if len(train_paths) == 0:
-        raise FileNotFoundError(f'No train fold files found in: {train_folds_dir} ({fold_glob})')
-    if len(test_paths) == 0:
-        raise FileNotFoundError(f'No test fold files found in: {test_folds_dir} ({fold_glob})')
-
-    train_map = {_extract_fold_index(p): p for p in train_paths}
-    test_map = {_extract_fold_index(p): p for p in test_paths}
-
-    train_idx = set(train_map.keys())
-    test_idx = set(test_map.keys())
-    if train_idx != test_idx:
-        only_train = sorted(train_idx - test_idx)
-        only_test = sorted(test_idx - train_idx)
         raise ValueError(
-            'Train/test fold index mismatch. '
-            f'only_in_train={only_train}, only_in_test={only_test}'
+            f'Could not extract trailing fold index from filename: {os.path.basename(path)}. '
+            'Expected names ending with an integer (e.g., fold_0.csv, fold_iteration_3.csv).'
         )
-
-    pairs = [
-        FoldPair(
-            fold_index=i,
-            train_csv=os.path.abspath(train_map[i]),
-            test_csv=os.path.abspath(test_map[i]),
-        )
-        for i in sorted(train_idx)
-    ]
-    return pairs
+    idx = int(m.group(2))
+    return idx, stem
 
 
-def _write_prop_txt_from_csv(
+def discover_cv_fold_iterations(
     *,
-    csv_path: str,
+    train_validation_folds_dir: str,
+    fold_glob: str = 'fold_*.csv',
+) -> list[CVFoldIteration]:
+    fold_paths = sorted(glob(os.path.join(train_validation_folds_dir, fold_glob)))
+    if len(fold_paths) == 0:
+        raise FileNotFoundError(
+            f'No fold files found in: {train_validation_folds_dir} ({fold_glob})'
+        )
+    if len(fold_paths) < 2:
+        raise ValueError('At least 2 fold CSV files are required for CV iterations.')
+
+    fold_files: list[FoldFile] = []
+    seen_idx: set[int] = set()
+    for path in fold_paths:
+        idx, fold_name = _extract_fold_index(path)
+        if idx in seen_idx:
+            raise ValueError(f'Duplicate fold index detected for index={idx}. File={path}')
+        seen_idx.add(idx)
+        fold_files.append(
+            FoldFile(
+                fold_index=idx,
+                fold_name=fold_name,
+                csv_path=os.path.abspath(path),
+            )
+        )
+
+    fold_files = sorted(fold_files, key=lambda x: int(x.fold_index))
+    iterations: list[CVFoldIteration] = []
+    for i, validation_fold in enumerate(fold_files):
+        train_folds = [f for j, f in enumerate(fold_files) if j != i]
+        iterations.append(
+            CVFoldIteration(
+                iteration_index=i,
+                validation_fold=validation_fold,
+                training_folds=train_folds,
+            )
+        )
+    return iterations
+
+
+def _write_prop_txt_from_csvs(
+    *,
+    csv_paths: list[str],
     out_txt_path: str,
     smiles_column: str,
     label_columns: list[str],
 ) -> tuple[int, list[float]]:
-    df = pd.read_csv(csv_path)
-    if smiles_column not in df.columns:
-        raise ValueError(f"Missing smiles column '{smiles_column}' in: {csv_path}")
-
-    missing = [c for c in label_columns if c not in df.columns]
-    if missing:
-        raise ValueError(f'Missing label columns {missing} in: {csv_path}')
-
-    keep = df[[smiles_column] + label_columns].copy()
-    keep = keep.dropna(subset=[smiles_column])
+    if len(csv_paths) == 0:
+        raise ValueError('csv_paths cannot be empty')
 
     rows = []
-    for _, row in keep.iterrows():
-        smi = str(row[smiles_column]).strip()
-        if not smi:
-            continue
-        vals = []
-        bad = False
-        for col in label_columns:
-            try:
-                vals.append(float(row[col]))
-            except Exception:
-                bad = True
-                break
-        if bad:
-            continue
-        rows.append((smi, vals))
+    for csv_path in csv_paths:
+        df = pd.read_csv(csv_path)
+        if smiles_column not in df.columns:
+            raise ValueError(f"Missing smiles column '{smiles_column}' in: {csv_path}")
+
+        missing = [c for c in label_columns if c not in df.columns]
+        if missing:
+            raise ValueError(f'Missing label columns {missing} in: {csv_path}')
+
+        keep = df[[smiles_column] + label_columns].copy()
+        keep = keep.dropna(subset=[smiles_column])
+
+        for _, row in keep.iterrows():
+            smi = str(row[smiles_column]).strip()
+            if not smi:
+                continue
+            vals = []
+            bad = False
+            for col in label_columns:
+                try:
+                    vals.append(float(row[col]))
+                except Exception:
+                    bad = True
+                    break
+            if bad:
+                continue
+            rows.append((smi, vals))
 
     os.makedirs(os.path.dirname(out_txt_path), exist_ok=True)
     with open(out_txt_path, 'w', encoding='utf-8') as f:
@@ -125,7 +147,7 @@ def _write_prop_txt_from_csv(
     # human-readable property names (e.g., pIC50) instead of falling back to
     # generic names like prop_0.
     meta_payload = {
-        'source_csv': os.path.abspath(csv_path),
+        'source_csvs': [os.path.abspath(p) for p in csv_paths],
         'smiles_column': str(smiles_column),
         'property_names': [str(c) for c in label_columns],
         'num_rows': int(len(rows)),
@@ -141,47 +163,59 @@ def _write_prop_txt_from_csv(
     return int(len(rows)), [float(v) for v in prop_mean]
 
 
-def convert_fold_pair_to_prop_files(
+def convert_cv_iteration_to_prop_files(
     *,
-    pair: FoldPair,
+    iteration: CVFoldIteration,
     out_dir: str,
     smiles_column: str,
     label_columns: list[str],
-) -> ConvertedFoldData:
+) -> ConvertedCVIterationData:
     os.makedirs(out_dir, exist_ok=True)
-    train_txt = os.path.abspath(os.path.join(out_dir, f'fold_{pair.fold_index}_train_prop.txt'))
-    test_txt = os.path.abspath(os.path.join(out_dir, f'fold_{pair.fold_index}_test_prop.txt'))
+    train_txt = os.path.abspath(os.path.join(out_dir, f'cv_iteration_{iteration.iteration_index}_train_prop.txt'))
+    val_txt = os.path.abspath(
+        os.path.join(out_dir, f'cv_iteration_{iteration.iteration_index}_validation_prop.txt')
+    )
 
-    train_rows, train_mean = _write_prop_txt_from_csv(
-        csv_path=pair.train_csv,
+    train_csvs = [str(f.csv_path) for f in iteration.training_folds]
+    validation_csv = str(iteration.validation_fold.csv_path)
+
+    train_rows, train_mean = _write_prop_txt_from_csvs(
+        csv_paths=train_csvs,
         out_txt_path=train_txt,
         smiles_column=smiles_column,
         label_columns=label_columns,
     )
-    test_rows, test_mean = _write_prop_txt_from_csv(
-        csv_path=pair.test_csv,
-        out_txt_path=test_txt,
+    validation_rows, validation_mean = _write_prop_txt_from_csvs(
+        csv_paths=[validation_csv],
+        out_txt_path=val_txt,
         smiles_column=smiles_column,
         label_columns=label_columns,
     )
 
-    converted = ConvertedFoldData(
-        fold_index=int(pair.fold_index),
-        train_csv=pair.train_csv,
-        test_csv=pair.test_csv,
+    converted = ConvertedCVIterationData(
+        iteration_index=int(iteration.iteration_index),
+        iteration_name=f'cv_iteration_{int(iteration.iteration_index)}',
+        validation_fold_name=str(iteration.validation_fold.fold_name),
+        training_fold_names=[str(f.fold_name) for f in iteration.training_folds],
+        validation_csv=validation_csv,
+        training_csvs=train_csvs,
         train_prop_txt=train_txt,
-        test_prop_txt=test_txt,
+        validation_prop_txt=val_txt,
         train_rows=train_rows,
-        test_rows=test_rows,
+        validation_rows=validation_rows,
         train_prop_mean=train_mean,
-        test_prop_mean=test_mean,
+        validation_prop_mean=validation_mean,
     )
 
-    with open(os.path.join(out_dir, f'fold_{pair.fold_index}_data_manifest.json'), 'w', encoding='utf-8') as f:
+    with open(
+        os.path.join(out_dir, f'cv_iteration_{iteration.iteration_index}_data_manifest.json'),
+        'w',
+        encoding='utf-8',
+    ) as f:
         json.dump(asdict(converted), f, indent=2)
 
     return converted
 
 
-def iter_fold_indexes(pairs: Iterable[FoldPair]) -> list[int]:
-    return [int(p.fold_index) for p in pairs]
+def iter_fold_indexes(iterations: Iterable[CVFoldIteration]) -> list[int]:
+    return [int(p.validation_fold.fold_index) for p in iterations]

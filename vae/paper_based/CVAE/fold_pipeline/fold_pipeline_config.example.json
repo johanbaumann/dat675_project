@@ -1,35 +1,9 @@
 {
-  "pipeline_preset": "quiet_pipeline",
-  "presets": {
-    "quiet_pipeline": {
-      "train": {
-        "enabled": true
-      },
-      "sampling": {
-        "enabled": true,
-        "suppress_rdkit_parse_errors": true,
-        "run_training_dist": true,
-        "training_dist_std_scale": 1.0,
-        "training_dist_clip_n_std": 2.5,
-        "training_dist_seed": null,
-        "exclude_training": true,
-        "exclude_test_scaffolds": true,
-        "test_scaffold_csv": null,
-        "test_scaffold_smiles_column": "smiles",
-        "save_generated_csv": true,
-        "save_quality_summary": true
-      },
-      "analysis": {
-        "enabled": false
-      }
-    }
-  },
   "workspace_root": ".",
   "training_output_root": "save/fold_pipeline_runs",
   "artifacts_output_root": "fold_pipeline_outputs",
-  "train_folds_dir": r"Preprocessing\..\..\..\combination_900_molecules_and_0_%_synthetic",
-  "test_folds_dir": r"Preprocessing\..\..\..\combination_500_molecules_and_0_%_synthetic",
-  "fold_glob": "fold_iteration_*.csv",
+  "train_validation_folds_dir": "../../../Preprocessing/combination_1300_molecules_and_0_%_synthetic",
+  "fold_glob": "fold_*.csv",
   "smiles_column": "smiles",
   "label_columns": [
     "pIC50"
@@ -46,8 +20,8 @@
       },
       "model": {
         "mode": "transformer",
-        "latent_size": 128,
-        "unit_size": 256,
+        "latent_size": 200,
+        "unit_size": 512, 
         "n_rnn_layer": 2,
         "mean": 0.0,
         "stddev": 1.0,
@@ -60,17 +34,17 @@
         "label_targets_use_raw_scale": false
       },
       "transformer": {
-        "heads": 4,
+        "heads": 8,
         "ff_size": 512,
-        "dropout": 0.1
+        "dropout": 0.2
       },
       "optimization": {
         "optimizer": "adamw",
-        "lr": 5e-05,
+        "lr": 1e-4,
         "weight_decay": 0.001,
         "use_amp": false,
         "amp_dtype": "float16",
-        "grad_clip_norm": 2.0
+        "grad_clip_norm": 4.0
       },
       "training": {
         "batch_size": 64,
@@ -119,9 +93,12 @@
     "temperature": 0.9,
     "top_k": 20,
     "exclude_training": true,
-    "exclude_test_scaffolds": true,
-    "test_scaffold_csv": null,
-    "test_scaffold_smiles_column": "smiles",
+    "exclude_validation_scaffolds": true,
+    "exclude_heldout_scaffolds": true,
+    "heldout_smiles_csv": "../../../Preprocessing/heldout_datasets/heldout_testset.csv",
+    "validation_smiles_column": "smiles",
+    "heldout_smiles_column": "smiles",
+    "scaffold_make_generic": true,
     "strip_salts": true,
     "decharge": true,
     "canonicalize_tautomer": true,
@@ -143,7 +120,7 @@
     "quality_summary_filename": "quality_summary.csv"
   },
   "analysis": {
-    "enabled": true,
+    "enabled": false,
     "script": "run_viz_pipeline.py",
     "profile": "bace_pic50_10k",
     "overrides": {

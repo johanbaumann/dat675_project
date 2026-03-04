@@ -19,6 +19,17 @@ All notable changes to this project are documented in this file.
 - `sample.py` / `sample_labels.py` / `utils_labels.py`: Cleanup-step failures are now counted explicitly as `discarded_cleanup` (instead of being lumped into `invalid_or_empty`), and quality summaries include the corresponding count and rate.
 - `sample.py` / `debug_sampling.py` / `sweep_sampling.py`: Sampling startup no longer calls full `load_data(...)` just to get charset/vocab/num_prop. Scripts now use a lightweight metadata loader with cache, avoiding long startup stalls on very large property files.
 
+### Changed
+
+- `fold_pipeline/run_fold_pipeline.py`: Each CV iteration now prints a compact pre-train split line for quick scanning, e.g. `validation=fold_0 (0/5) | train=[1,2,3,4]`.
+- `fold_pipeline/run_fold_pipeline.py`: Iteration generated outputs now write under `fold_pipeline_outputs/cv_iteration_<k>/generated/` (default molecules CSV at `generated/generated.csv`) for a clearer artifact layout.
+- `fold_pipeline/run_fold_pipeline.py`: iteration debug output now explicitly reports the validation fold index as `index x of n` using the parsed fold filename metadata (not just loop order), and prints parsed training fold indices for every iteration.
+- `fold_pipeline/`: Renamed remaining fold-oriented pipeline entrypoints/helpers to iteration-oriented names (`*_for_iteration`) for consistency with the CV iteration workflow.
+- `fold_pipeline/sampling_pipeline.py`: public entrypoint renamed from `run_sampling_for_fold(...)` to `run_sampling_for_iteration(...)`.
+- `fold_pipeline/run_fold_pipeline.py`: helper naming and internal variable naming aligned to iteration terminology (`artifacts_iteration_dir`, `iteration_manifest_path`, and iteration summary helpers).
+- `fold_pipeline/__init__.py`: exports updated to iteration-oriented symbol names.
+- `fold_pipeline/README.md`: documentation updated to explicitly state the iteration-first naming convention.
+
 ### Added
 
 - `fold_pipeline/sampling_pipeline.py` / `fold_pipeline/run_fold_pipeline.py`: Added fold-level training-distribution sampling mode (`sampling.run_training_dist`) with per-molecule target sampling (`training_dist_std_scale`, `training_dist_clip_n_std`, `training_dist_seed`) so generated targets are no longer fixed to a single conditioning value across all rows.

@@ -16,8 +16,8 @@ _ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
-from fold_pipeline.fold_data import convert_fold_pair_to_prop_files, discover_fold_pairs
-from fold_pipeline.sampling_pipeline import SamplingResult, run_sampling_for_fold
+from fold_pipeline.fold_data import convert_cv_iteration_to_prop_files, discover_cv_fold_iterations
+from fold_pipeline.sampling_pipeline import SamplingResult, run_sampling_for_iteration
 
 
 DEFAULT_CONFIG_PATH = os.path.join('fold_pipeline', 'fold_pipeline_config.example.json')
@@ -41,37 +41,15 @@ def _read_json(path: str) -> dict:
     return payload
 
 
-def _resolve_pipeline_preset(cfg: dict) -> dict:
-    """Apply optional top-level pipeline preset overrides.
-
-    Config shape:
-      - pipeline_preset: str | null
-      - presets: { <name>: { ...override... } }
-    """
-    preset_name = cfg.get('pipeline_preset', None)
-    if preset_name is None:
-        return cfg
-
-    name = str(preset_name).strip()
-    if name == '':
-        return cfg
-
-    presets = cfg.get('presets', {})
-    if not isinstance(presets, dict):
-        raise ValueError('Config key "presets" must be a JSON object when pipeline_preset is used.')
-    if name not in presets:
-        raise ValueError(
-            f'pipeline_preset="{name}" not found in config.presets. '
-            f'Available presets: {sorted(list(presets.keys()))}'
-        )
-
-    override = presets.get(name)
-    if not isinstance(override, dict):
-        raise ValueError(f'config.presets["{name}"] must be a JSON object (dict).')
-
-    merged = _deep_update_dict(cfg, override)
-    merged['active_pipeline_preset'] = name
-    return merged
+def _resolve_optional_path(path_value: Optional[str], *, base_dir: str) -> Optional[str]:
+    if path_value is None:
+        return None
+    raw = str(path_value).strip()
+    if raw == '':
+        return None
+    if os.path.isabs(raw):
+        return os.path.abspath(raw)
+    return os.path.abspath(os.path.join(base_dir, raw))
 
 
 def _write_json(path: str, payload: dict) -> str:
@@ -82,9 +60,9 @@ def _write_json(path: str, payload: dict) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Run full fold pipeline: train -> sample -> analysis.')
+    parser = argparse.ArgumentParser(description='Run CV fold iterations: train -> sample -> analysis.')
     parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH)
-    parser.add_argument('--only-fold', type=int, default=None, help='Run a single fold index only.')
+    parser.add_argument('--only-fold', type=int, default=None, help='Run a single CV iteration index only.')
     return parser.parse_args()
 
 
@@ -105,7 +83,7 @@ def _read_prop_txt_means(path: str) -> list[float]:
     return np.mean(mat, axis=0).astype(np.float32).tolist()
 
 
-def _resolve_target_row(cfg: dict, *, train_prop_txt: str, test_prop_txt: str) -> list[float]:
+def _resolve_target_row(cfg: dict, *, train_prop_txt: str, validation_prop_txt: str) -> list[float]:
     mode = str(cfg.get('target_prop_mode', 'mean_test_labels')).strip().lower()
     if mode == 'explicit':
         vals = cfg.get('target_prop')
@@ -114,8 +92,8 @@ def _resolve_target_row(cfg: dict, *, train_prop_txt: str, test_prop_txt: str) -
         return [float(v) for v in vals]
     if mode == 'mean_train_labels':
         return _read_prop_txt_means(train_prop_txt)
-    if mode == 'mean_test_labels':
-        return _read_prop_txt_means(test_prop_txt)
+    if mode == 'mean_test_labels' or mode == 'mean_validation_labels':
+        return _read_prop_txt_means(validation_prop_txt)
     raise ValueError("sampling.target_prop_mode must be one of: explicit, mean_train_labels, mean_test_labels")
 
 
@@ -162,7 +140,7 @@ def _run_subprocess(command: list[str], *, cwd: str, log_file: str, step_name: s
         raise RuntimeError(f'{step_name} failed. See log: {log_file}')
 
 
-def _build_train_config_for_fold(
+def _build_train_config_for_iteration(
     base_train_config: dict,
     *,
     train_dir: str,
@@ -188,6 +166,31 @@ def _build_train_config_for_fold(
     return _deep_update_dict(base_train_config, override)
 
 
+def _print_iteration_assignment(
+    *,
+    iteration_index: int,
+    total_folds: int,
+    validation_fold_name: str,
+    validation_fold_index: int,
+    validation_fold_file: str,
+    training_fold_names: list[str],
+    training_fold_indices: list[int],
+) -> None:
+    print('')
+    print('-' * 90)
+    print(
+        f'starting CV fold iteration {int(iteration_index)} '
+        f'(validation fold parsed from filename: index {int(validation_fold_index)} of {int(total_folds)})'
+    )
+    print(f'  validation fold name : {validation_fold_name}')
+    print(f'  validation fold file : {validation_fold_file}')
+    print('  train folds (parsed from filenames):')
+    for i, (name, idx) in enumerate(zip(training_fold_names, training_fold_indices)):
+        print(f'  {i + 1:>2}. {name} (index={int(idx)})')
+    print('-' * 90)
+    print('')
+
+
 def _glob_has_any(path_pattern: str) -> bool:
     try:
         import glob
@@ -197,10 +200,10 @@ def _glob_has_any(path_pattern: str) -> bool:
         return False
 
 
-def _resolve_training_run_dir_for_sampling(
+def _resolve_training_run_dir_for_iteration_sampling(
     *,
     expected_train_dir: str,
-    artifacts_fold_dir: str,
+    artifacts_iteration_dir: str,
     checkpoint_glob: str,
 ) -> str:
     """Return the run dir that actually contains checkpoints.
@@ -217,7 +220,7 @@ def _resolve_training_run_dir_for_sampling(
     ):
         return expected_train_dir
 
-    legacy_dir = os.path.join(str(artifacts_fold_dir), 'training')
+    legacy_dir = os.path.join(str(artifacts_iteration_dir), 'training')
     if os.path.isdir(legacy_dir) and (
         _glob_has_any(os.path.join(legacy_dir, checkpoint_glob)) or _glob_has_any(os.path.join(legacy_dir, '*.pt'))
     ):
@@ -230,7 +233,7 @@ def _resolve_training_run_dir_for_sampling(
     return expected_train_dir
 
 
-def _build_analysis_config_for_fold(
+def _build_analysis_config_for_iteration(
     *,
     analysis_cfg: dict,
     fold_dir: str,
@@ -271,7 +274,7 @@ def _contains_predicted_column(generated_csv_path: str, label_column: str) -> bo
     return f'pred_{label_column}' in cols
 
 
-def _print_fold_start_summary(
+def _print_iteration_start_summary(
     *,
     fold_name: str,
     converted,
@@ -285,6 +288,8 @@ def _print_fold_start_summary(
     train_enabled: bool,
     sampling_enabled: bool,
     analysis_enabled: bool,
+    total_folds: int,
+    validation_fold_index: int,
 ) -> None:
     expected_generated_csv = os.path.abspath(
         os.path.join(sample_dir, str(sampling_cfg.get('result_filename', 'generated.csv')))
@@ -295,14 +300,17 @@ def _print_fold_start_summary(
 
     print('')
     print('-' * 90)
-    print(f'[{fold_name}] fold-start summary')
+    print(f'[{fold_name}] iteration-start summary')
     print('-' * 90)
-    print(f'[{fold_name}] input.train_csv            : {converted.train_csv}')
-    print(f'[{fold_name}] input.test_csv             : {converted.test_csv}')
+    print(f'[{fold_name}] cv.validation_fold_index  : {int(validation_fold_index)} / {int(total_folds)}')
+    print(f'[{fold_name}] input.validation_fold_name : {converted.validation_fold_name}')
+    print(f'[{fold_name}] input.training_fold_names  : {converted.training_fold_names}')
+    print(f'[{fold_name}] input.training_csvs        : {converted.training_csvs}')
+    print(f'[{fold_name}] input.validation_csv       : {converted.validation_csv}')
     print(f'[{fold_name}] input.train_prop_txt       : {converted.train_prop_txt}')
-    print(f'[{fold_name}] input.test_prop_txt        : {converted.test_prop_txt}')
+    print(f'[{fold_name}] input.validation_prop_txt  : {converted.validation_prop_txt}')
     print(f'[{fold_name}] input.train_rows           : {converted.train_rows}')
-    print(f'[{fold_name}] input.test_rows            : {converted.test_rows}')
+    print(f'[{fold_name}] input.validation_rows      : {converted.validation_rows}')
     print(f'[{fold_name}] write.train_config_json    : {train_cfg_path}')
     print(f'[{fold_name}] write.train_run_dir        : {train_dir}')
     print(f'[{fold_name}] write.sampling_dir         : {sample_dir}')
@@ -319,7 +327,7 @@ def _print_fold_start_summary(
     print('')
 
 
-def _print_fold_end_summary(
+def _print_iteration_end_summary(
     *,
     fold_name: str,
     converted,
@@ -331,14 +339,14 @@ def _print_fold_end_summary(
     sampling_result,
     analysis_enabled: bool,
     analysis_config_path: Optional[str],
-    fold_manifest_path: str,
+    iteration_manifest_path: str,
 ) -> None:
     print('')
     print('=' * 90)
-    print(f'[{fold_name}] fold-end summary')
+    print(f'[{fold_name}] iteration-end summary')
     print('=' * 90)
     print(f'[{fold_name}] split.train_rows            : {converted.train_rows}')
-    print(f'[{fold_name}] split.test_rows             : {converted.test_rows}')
+    print(f'[{fold_name}] split.validation_rows       : {converted.validation_rows}')
     print(f'[{fold_name}] used.train_config_json      : {train_cfg_path}')
     print(f'[{fold_name}] output.train_run_dir        : {train_dir}')
     print(f'[{fold_name}] output.sampling_dir         : {sample_dir}')
@@ -352,7 +360,7 @@ def _print_fold_end_summary(
     print(f'[{fold_name}] output.analysis_log         : {os.path.join(logs_dir, "analysis.log")}')
     print(f'[{fold_name}] output.analysis_enabled     : {bool(analysis_enabled)}')
     print(f'[{fold_name}] output.analysis_config_json : {analysis_config_path}')
-    print(f'[{fold_name}] output.fold_manifest_json   : {fold_manifest_path}')
+    print(f'[{fold_name}] output.iteration_manifest   : {iteration_manifest_path}')
     print('=' * 90)
     print('')
 
@@ -360,13 +368,14 @@ def _print_fold_end_summary(
 def main() -> None:
     args = _parse_args()
     cfg = _read_json(args.config)
-    cfg = _resolve_pipeline_preset(cfg)
 
     workspace_root = os.path.abspath(str(cfg.get('workspace_root', _ROOT_DIR)))
     os.chdir(workspace_root)
 
-    train_folds_dir = os.path.abspath(str(cfg['train_folds_dir']))
-    test_folds_dir = os.path.abspath(str(cfg['test_folds_dir']))
+    folds_dir_raw = cfg.get('train_validation_folds_dir', cfg.get('train_validation_folds'))
+    if folds_dir_raw is None:
+        raise KeyError('Config is missing required key: train_validation_folds_dir')
+    train_validation_folds_dir = os.path.abspath(str(folds_dir_raw))
 
     # Output roots:
     # - training_output_root: checkpoints/history/training config (ideally under save/)
@@ -393,7 +402,7 @@ def main() -> None:
     artifacts_root = os.path.abspath(str(artifacts_root_cfg))
     smiles_column = str(cfg.get('smiles_column', 'smiles'))
     label_columns = [str(x) for x in cfg.get('label_columns', [cfg.get('label_column', 'pIC50')])]
-    fold_glob = str(cfg.get('fold_glob', 'fold_iteration_*.csv'))
+    fold_glob = str(cfg.get('fold_glob', 'fold_*.csv'))
 
     python_exe = str(cfg.get('python_executable') or sys.executable)
     train_script = str(cfg.get('train', {}).get('script', 'train_labels.py'))
@@ -402,31 +411,28 @@ def main() -> None:
     sampling_enabled = bool(cfg.get('sampling', {}).get('enabled', True))
     analysis_enabled_global = bool(cfg.get('analysis', {}).get('enabled', True))
 
-    print('===== fold pipeline bootstrap =====')
+    print('===== CV fold iteration pipeline bootstrap =====')
     print(f'workspace_root={workspace_root}')
-    print(f'train_folds_dir={train_folds_dir}')
-    print(f'test_folds_dir={test_folds_dir}')
+    print(f'train_validation_folds_dir={train_validation_folds_dir}')
+    print(f'fold_glob={fold_glob}')
     print(f'output_root={output_root}')
     print(f'training_output_root={training_root}')
     print(f'artifacts_output_root={artifacts_root}')
     print(f'python_executable={python_exe}')
     print(f'label_columns={label_columns}')
-    if cfg.get('active_pipeline_preset') is not None:
-        print(f"active_pipeline_preset={cfg.get('active_pipeline_preset')}")
     print(f'stage toggles: train={train_enabled}, sampling={sampling_enabled}, analysis={analysis_enabled_global}')
 
-    fold_pairs = discover_fold_pairs(
-        train_folds_dir=train_folds_dir,
-        test_folds_dir=test_folds_dir,
+    fold_pairs = discover_cv_fold_iterations(
+        train_validation_folds_dir=train_validation_folds_dir,
         fold_glob=fold_glob,
     )
-    print(f'detected {len(fold_pairs)} fold pairs based on train/test folders')
+    print(f'detected {len(fold_pairs)} folds -> {len(fold_pairs)} CV iterations')
 
     if args.only_fold is not None:
-        fold_pairs = [p for p in fold_pairs if int(p.fold_index) == int(args.only_fold)]
+        fold_pairs = [p for p in fold_pairs if int(p.iteration_index) == int(args.only_fold)]
         if len(fold_pairs) == 0:
-            raise ValueError(f'No fold found for --only-fold={args.only_fold}')
-        print(f'filtered to single fold: {args.only_fold}')
+            raise ValueError(f'No iteration found for --only-fold={args.only_fold}')
+        print(f'filtered to single CV iteration: {args.only_fold}')
 
     os.makedirs(output_root, exist_ok=True)
     os.makedirs(training_root, exist_ok=True)
@@ -435,56 +441,73 @@ def main() -> None:
     global_manifest = {
         'config_path': os.path.abspath(args.config),
         'workspace_root': workspace_root,
-        'train_folds_dir': train_folds_dir,
-        'test_folds_dir': test_folds_dir,
+        'train_validation_folds_dir': train_validation_folds_dir,
         'training_output_root': training_root,
         'artifacts_output_root': artifacts_root,
-        'num_folds': len(fold_pairs),
-        'folds': [],
+        'num_iterations': len(fold_pairs),
+        'iterations': [],
         'started_unix': time.time(),
     }
 
     base_train_config = dict(cfg.get('train', {}).get('base_config', {}))
     sampling_cfg = dict(cfg.get('sampling', {}))
     analysis_cfg = dict(cfg.get('analysis', {}))
+    heldout_smiles_csv = _resolve_optional_path(sampling_cfg.get('heldout_smiles_csv'), base_dir=workspace_root)
+
+    if heldout_smiles_csv is not None:
+        print(f'heldout_smiles_csv={heldout_smiles_csv}')
+    else:
+        print('heldout_smiles_csv=None')
+
+    total_folds = int(len(fold_pairs))
 
     for pair in fold_pairs:
-        fold_name = f'fold_{pair.fold_index}'
+        fold_name = f'cv_iteration_{pair.iteration_index}'
+        _print_iteration_assignment(
+            iteration_index=int(pair.iteration_index),
+            total_folds=total_folds,
+            validation_fold_name=str(pair.validation_fold.fold_name),
+            validation_fold_index=int(pair.validation_fold.fold_index),
+            validation_fold_file=os.path.basename(str(pair.validation_fold.csv_path)),
+            training_fold_names=[str(f.fold_name) for f in pair.training_folds],
+            training_fold_indices=[int(f.fold_index) for f in pair.training_folds],
+        )
         # Fold-level manifests/config live with artifacts (not in save/).
         fold_dir = os.path.join(artifacts_root, fold_name)
         training_fold_dir = os.path.join(training_root, fold_name)
-        artifacts_fold_dir = fold_dir
-        data_dir = os.path.join(artifacts_fold_dir, 'data')
+        artifacts_iteration_dir = fold_dir
+        data_dir = os.path.join(artifacts_iteration_dir, 'data')
         train_dir = os.path.join(training_fold_dir, 'training')
-        sample_dir = os.path.join(artifacts_fold_dir, 'sampling')
-        analysis_dir = os.path.join(artifacts_fold_dir, 'analysis')
-        logs_dir = os.path.join(artifacts_fold_dir, 'logs')
+        sample_dir = os.path.join(artifacts_iteration_dir, 'generated')
+        analysis_dir = os.path.join(artifacts_iteration_dir, 'analysis')
+        logs_dir = os.path.join(artifacts_iteration_dir, 'logs')
 
-        for p in [fold_dir, training_fold_dir, artifacts_fold_dir, data_dir, train_dir, sample_dir, analysis_dir, logs_dir]:
+        for p in [fold_dir, training_fold_dir, artifacts_iteration_dir, data_dir, train_dir, sample_dir, analysis_dir, logs_dir]:
             os.makedirs(p, exist_ok=True)
 
         print('\n' + '=' * 90)
-        print(f'Running full pipeline for {fold_name}')
+        print(f'Running full pipeline for CV iteration {fold_name}')
         print('=' * 90)
 
-        converted = convert_fold_pair_to_prop_files(
-            pair=pair,
+        converted = convert_cv_iteration_to_prop_files(
+            iteration=pair,
             out_dir=data_dir,
             smiles_column=smiles_column,
             label_columns=label_columns,
         )
         print(
-            f'[{fold_name}] data converted: train_rows={converted.train_rows}, test_rows={converted.test_rows}, '
-            f'train_prop_txt={converted.train_prop_txt}, test_prop_txt={converted.test_prop_txt}'
+            f'[{fold_name}] data converted: train_rows={converted.train_rows}, '
+            f'validation_rows={converted.validation_rows}, '
+            f'train_prop_txt={converted.train_prop_txt}, validation_prop_txt={converted.validation_prop_txt}'
         )
-        print(f'[{fold_name}] input files: train_csv={converted.train_csv}')
-        print(f'[{fold_name}] input files: test_csv={converted.test_csv}')
+        print(f'[{fold_name}] input files: training_csvs={converted.training_csvs}')
+        print(f'[{fold_name}] input files: validation_csv={converted.validation_csv}')
 
-        fold_train_cfg = _build_train_config_for_fold(
+        fold_train_cfg = _build_train_config_for_iteration(
             base_train_config,
             train_dir=train_dir,
             train_prop_txt=converted.train_prop_txt,
-            test_prop_txt=converted.test_prop_txt,
+            test_prop_txt=converted.validation_prop_txt,
         )
         # Training config is part of the model setup; keep it under the training root (save/).
         train_cfg_path = _write_json(os.path.join(training_fold_dir, 'train_config.json'), fold_train_cfg)
@@ -495,7 +518,7 @@ def main() -> None:
         )
 
         run_analysis = bool(analysis_enabled_global)
-        _print_fold_start_summary(
+        _print_iteration_start_summary(
             fold_name=fold_name,
             converted=converted,
             fold_dir=fold_dir,
@@ -508,6 +531,16 @@ def main() -> None:
             train_enabled=train_enabled,
             sampling_enabled=sampling_enabled,
             analysis_enabled=run_analysis,
+            total_folds=total_folds,
+            validation_fold_index=int(pair.validation_fold.fold_index),
+        )
+
+        compact_train_indices = ','.join(str(int(f.fold_index)) for f in pair.training_folds)
+        print(
+            f'[{fold_name}] split.quick: '
+            f'validation={pair.validation_fold.fold_name} '
+            f'({int(pair.validation_fold.fold_index)}/{int(total_folds)}) | '
+            f'train=[{compact_train_indices}]'
         )
 
         if train_enabled:
@@ -531,9 +564,9 @@ def main() -> None:
             fold_sampling_cfg['pred_property_names'] = list(label_columns)
 
             checkpoint_glob = str(fold_sampling_cfg.get('checkpoint_glob', 'model_best.ckpt-*.pt'))
-            train_run_dir_for_sampling = _resolve_training_run_dir_for_sampling(
+            train_run_dir_for_sampling = _resolve_training_run_dir_for_iteration_sampling(
                 expected_train_dir=train_dir,
-                artifacts_fold_dir=artifacts_fold_dir,
+                artifacts_iteration_dir=artifacts_iteration_dir,
                 checkpoint_glob=checkpoint_glob,
             )
 
@@ -545,17 +578,18 @@ def main() -> None:
                 target_row = _resolve_target_row(
                     fold_sampling_cfg,
                     train_prop_txt=converted.train_prop_txt,
-                    test_prop_txt=converted.test_prop_txt,
+                    validation_prop_txt=converted.validation_prop_txt,
                 )
                 print(f'[{fold_name}] sampling target row: {target_row}')
 
-            sampling_result = run_sampling_for_fold(
+            sampling_result = run_sampling_for_iteration(
                 run_dir=train_run_dir_for_sampling,
                 output_dir=sample_dir,
                 target_row=target_row,
                 sampling_cfg=fold_sampling_cfg,
-                test_scaffold_csv=converted.test_csv,
-                test_scaffold_smiles_column=smiles_column,
+                test_smiles_csv=converted.validation_csv,
+                heldout_smiles_csv=heldout_smiles_csv,
+                smiles_column=smiles_column,
             )
             print(f'[{fold_name}] sampling complete: saved={sampling_result.num_saved}')
         else:
@@ -590,11 +624,11 @@ def main() -> None:
 
             label_for_analysis = label_columns[0] if len(label_columns) > 0 else 'prop_0'
             has_pred_labels = _contains_predicted_column(sampling_result.generated_csv_path, label_for_analysis)
-            fold_analysis_cfg = _build_analysis_config_for_fold(
+            fold_analysis_cfg = _build_analysis_config_for_iteration(
                 analysis_cfg=analysis_cfg,
                 fold_dir=fold_dir,
                 train_run_dir=train_run_dir_for_sampling,
-                test_csv_path=converted.test_csv,
+                test_csv_path=converted.validation_csv,
                 generated_csv_path=sampling_result.generated_csv_path,
                 has_pred_labels=has_pred_labels,
                 label_column=label_for_analysis,
@@ -612,14 +646,16 @@ def main() -> None:
             print(f'[{fold_name}] analysis disabled by config')
 
         fold_manifest = {
-            'fold_index': int(pair.fold_index),
-            'fold_name': fold_name,
-            'train_csv': converted.train_csv,
-            'test_csv': converted.test_csv,
+            'iteration_index': int(pair.iteration_index),
+            'iteration_name': fold_name,
+            'validation_fold_name': converted.validation_fold_name,
+            'training_fold_names': converted.training_fold_names,
+            'validation_csv': converted.validation_csv,
+            'training_csvs': converted.training_csvs,
             'train_prop_txt': converted.train_prop_txt,
-            'test_prop_txt': converted.test_prop_txt,
+            'validation_prop_txt': converted.validation_prop_txt,
             'training_fold_dir': training_fold_dir,
-            'artifacts_fold_dir': artifacts_fold_dir,
+            'artifacts_iteration_dir': artifacts_iteration_dir,
             'train_config_path': train_cfg_path,
             'train_run_dir': train_run_dir_for_sampling if sampling_enabled else train_dir,
             'sampling_result': asdict(sampling_result),
@@ -627,11 +663,11 @@ def main() -> None:
             'analysis_config_path': analysis_config_path,
             'completed_unix': time.time(),
         }
-        fold_manifest_path = _write_json(os.path.join(fold_dir, 'fold_manifest.json'), fold_manifest)
-        global_manifest['folds'].append(fold_manifest)
+        iteration_manifest_path = _write_json(os.path.join(fold_dir, 'iteration_manifest.json'), fold_manifest)
+        global_manifest['iterations'].append(fold_manifest)
 
         _write_json(os.path.join(artifacts_root, 'global_manifest.partial.json'), global_manifest)
-        _print_fold_end_summary(
+        _print_iteration_end_summary(
             fold_name=fold_name,
             converted=converted,
             train_cfg_path=train_cfg_path,
@@ -642,16 +678,16 @@ def main() -> None:
             sampling_result=sampling_result,
             analysis_enabled=run_analysis,
             analysis_config_path=analysis_config_path,
-            fold_manifest_path=fold_manifest_path,
+            iteration_manifest_path=iteration_manifest_path,
         )
-        print(f'[{fold_name}] fold complete and manifest saved')
+        print(f'[{fold_name}] CV iteration complete and manifest saved')
 
     global_manifest['finished_unix'] = time.time()
     global_manifest['duration_sec'] = float(global_manifest['finished_unix'] - global_manifest['started_unix'])
     final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
 
     print('\n' + '=' * 90)
-    print('All requested folds completed successfully.')
+    print('All requested CV iterations completed successfully.')
     print(f'Global manifest: {final_manifest_path}')
     print('=' * 90)
 
