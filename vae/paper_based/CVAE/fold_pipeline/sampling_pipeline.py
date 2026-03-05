@@ -115,6 +115,25 @@ def _safe_mol_from_smiles(smiles: str) -> Optional[Chem.Mol]:
         return None
 
 
+def _read_bool_config(cfg: dict, key: str, default: bool) -> bool:
+    """Read a boolean config value with strict, predictable coercion."""
+    value = cfg.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, np.integer)):
+        if int(value) in (0, 1):
+            return bool(int(value))
+        raise ValueError(f'sampling.{key} must be boolean (or 0/1), got: {value}')
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ('true', '1', 'yes', 'y', 'on'):
+            return True
+        if lowered in ('false', '0', 'no', 'n', 'off'):
+            return False
+        raise ValueError(f"sampling.{key} string value must be 'true' or 'false', got: {value!r}")
+    raise ValueError(f'sampling.{key} must be a boolean, got type: {type(value).__name__}')
+
+
 def _scaffold_smiles_from_mol(mol: Optional[Chem.Mol], *, make_generic: bool = True) -> Optional[str]:
     if mol is None:
         return None
@@ -308,9 +327,11 @@ def run_sampling_for_iteration(
     rejected_by_test_scaffold = 0
     rejected_by_heldout_scaffold = 0
 
-    make_generic_scaffold = bool(sampling_cfg.get('scaffold_make_generic', True))
+    make_generic_scaffold = _read_bool_config(sampling_cfg, 'scaffold_make_generic', True)
+    scaffold_mode = 'generic' if make_generic_scaffold else 'specific'
     effective_smiles_column = str(sampling_cfg.get('validation_smiles_column', smiles_column))
     effective_validation_csv = sampling_cfg.get('validation_scaffold_csv') or test_smiles_csv
+    print(f'[sampling] scaffold mode: {scaffold_mode} (scaffold_make_generic={make_generic_scaffold})')
 
     accept_predicate = None
     if not run_training_dist:

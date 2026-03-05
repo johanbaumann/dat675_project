@@ -98,7 +98,7 @@
     "heldout_smiles_csv": "../../../Preprocessing/heldout_datasets/heldout_testset.csv",
     "validation_smiles_column": "smiles",
     "heldout_smiles_column": "smiles",
-    "scaffold_make_generic": true,
+    "scaffold_make_generic": false,
     "strip_salts": true,
     "decharge": true,
     "canonicalize_tautomer": true,
