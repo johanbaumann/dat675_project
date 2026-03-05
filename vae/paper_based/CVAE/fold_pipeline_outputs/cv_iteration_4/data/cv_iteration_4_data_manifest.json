@@ -1,0 +1,28 @@
+{
+  "iteration_index": 4,
+  "iteration_name": "cv_iteration_4",
+  "validation_fold_name": "fold_4",
+  "training_fold_names": [
+    "fold_0",
+    "fold_1",
+    "fold_2",
+    "fold_3"
+  ],
+  "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_4.csv",
+  "training_csvs": [
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_0.csv",
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_1.csv",
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_2.csv",
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_3.csv"
+  ],
+  "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_4\\data\\cv_iteration_4_train_prop.txt",
+  "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_4\\data\\cv_iteration_4_validation_prop.txt",
+  "train_rows": 1040,
+  "validation_rows": 260,
+  "train_prop_mean": [
+    6.523249626159668
+  ],
+  "validation_prop_mean": [
+    6.280217170715332
+  ]
+}
