@@ -46,6 +46,15 @@ CHANGELOG
 """
 
 class PositionalEncoding(nn.Module):
+    """
+    Standard sinusoidal positional encoding module, used for the transformer variant of the CVAE.
+    It works by precomputing a fixed positional encoding matrix `pe` of shape (1, max_len, d_model) using sine and cosine functions of different frequencies.
+
+    the number of positions is determined by `max_len` and the dimensionality of the model is determined by `d_model`.
+    The number of 10000 is a common choice for the base of the exponential decay in the frequencies, as it allows for a wide range of frequencies to be represented across different dimensions.
+    
+    
+    """
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 2048):
         super().__init__()
         self.dropout = nn.Dropout(dropout)
@@ -134,10 +143,14 @@ class CVAE(nn.Module):
                 batch_first=True,
                 activation='gelu',
             )
-            self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.n_rnn_layer)
 
+            self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.n_rnn_layer)
+            # For the decoder, we concatenate [x_emb, z, c] as input at each step and project to unit_size.
+            # decoder_input_proj maps from (latent_size * 2 + num_prop) to unit_size)
+            # where latent_size * 2 is from concating the sampled latent vec 'z' and x_emb (which is also latent_size)
+            # num_prop is from concating the cond vec 'c'
             self.decoder_input_proj = nn.Linear((self.latent_size * 2) + self.num_prop, self.unit_size)
-            self.memory_proj = nn.Linear(self.latent_size + self.num_prop, self.unit_size)
+            self.memory_proj = nn.Linear(self.latent_size + self.num_prop, self.unit_size) # cross-attention memory is [z,c] projected to unit_size
             decoder_layer = nn.TransformerDecoderLayer(
                 d_model=self.unit_size,
                 nhead=int(self.transformer_heads),
@@ -262,6 +275,15 @@ class CVAE(nn.Module):
         ]
 
     def encode(self, x: torch.Tensor, c: torch.Tensor, l: torch.Tensor) -> tuple:
+        """
+        Encoding function that maps input to latent vector `z`:
+        - For lstm: input at each step is [x_emb, c], where c is repeated across sequence length.
+        - For transformer: input at each step is [x_emb, c] projected to unit_size, with no recurrence and cross-attention to [z, c] memory.
+        
+        
+        """
+
+
         if self.model_mode == 'lstm':
             x_emb = self.embedding(x)
             c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
@@ -277,10 +299,10 @@ class CVAE(nn.Module):
             h_last = h_n[-1]
         else:
             x_emb = self.embedding(x)
-            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1)
+            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1) # expand cond vec 'c' to seq_len dim
             encoder_input = torch.cat([x_emb, c_seq], dim=-1)
             encoder_input = self.encoder_input_proj(encoder_input)
-            encoder_input = self.positional_encoding(encoder_input)
+            encoder_input = self.positional_encoding(encoder_input) # positional encoding
 
             src_padding_mask = self._build_padding_mask(l, x_emb.size(1), x.device)
             with self._transformer_fp32_context():
