@@ -507,7 +507,7 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
     fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
 
     plot_path = os.path.abspath(os.path.join(out_dir, 'cv_combo_metrics_summary.png'))
-    fig.savefig(plot_path, dpi=220)
+    fig.savefig(plot_path, dpi=300)
     plt.close(fig)
 
     # -------------------------------------------------------------------------
@@ -574,8 +574,10 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
             y_low, y_high = 0.0, 1.0
 
         ax2.set_ylim(y_low, y_high)
-        ax2.set_title(f'{metric_title} boxplot across folds')
-        ax2.set_ylabel(metric_title,weight='bold',fontsize=15)
+        ax2.set_title(f'{metric_title} boxplot across folds', fontsize=16, fontweight='bold')
+        ax2.set_ylabel(metric_title, weight='bold', fontsize=15)
+        ax2.set_xlabel(metric_title, weight='bold', fontsize=15)
+        ax2.tick_params(axis='both', which='major', labelsize=10, width=1.5, length=7)
         ax2.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
 
         # Manual legend so median, mean, and points always show correctly.
@@ -594,7 +596,7 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
                 label='Fold values',
             ),
         ]
-        ax2.legend(handles=legend_handles, loc='best', frameon=True, framealpha=0.9)
+        ax2.legend(handles=legend_handles, loc='best', frameon=True, weight='bold', fontsize=12)
 
     fig2.suptitle('Cross-fold metric boxplots: V.U.N and diversity', fontsize=16)
     fig2.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
