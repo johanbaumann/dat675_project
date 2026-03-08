@@ -120,24 +120,24 @@
     "quality_summary_filename": "quality_summary.csv"
   },
   "analysis": {
-    "enabled": false,
+    "enabled": true,
     "script": "run_viz_pipeline.py",
     "profile": "bace_pic50_10k",
     "overrides": {
       "save_distribution_plot": true,
-      "save_scaffold_plot": true,
-      "save_scaffold_grids": true,
-      "run_prediction_error_plot": true,
-      "run_train_loss_plot": true,
-      "run_tanimoto_histogram": true,
-      "run_chemical_space": true,
-      "run_descriptor_space": true,
+      "save_scaffold_plot": false,
+      "save_scaffold_grids": false,
+      "run_prediction_error_plot": false,
+      "run_train_loss_plot": false,
+      "run_tanimoto_histogram": false,
+      "run_chemical_space": false,
+      "run_descriptor_space": false,
       "debug": true
     }
   },
   "cv_combo": {
-    "enabled": true,
-    "only": true,
+    "enabled": false,
+    "only": false,
     "cross_fold_summary_path": null
   }
 }

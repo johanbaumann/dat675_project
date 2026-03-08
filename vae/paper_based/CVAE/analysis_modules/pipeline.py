@@ -374,37 +374,62 @@ def _maybe_plot_property_distributions(
 
     # Draw generated first with partial transparency; overlay train/validation as
     # high-contrast outlines so they remain visible even when generated dominates.
-    if gen_prop_vals.size > 0:
+
+    only_train_vals = False
+    if not only_train_vals:
+        if gen_prop_vals.size > 0:
+            ax.hist(
+                gen_prop_vals,
+                bins=bins,
+                histtype='stepfilled',
+                alpha=0.30,
+                linewidth=1.0,
+                edgecolor='#8A1C0F',
+                color='#E8751A',
+                label=f'Generated ({gen_prop_col_used or "predicted"})',
+                zorder=1,
+            )
+            ax.hist(
+                gen_prop_vals,
+                bins=bins,
+                histtype='step',
+                alpha=0.95,
+                linewidth=1.6,
+                color='#B45309',
+                zorder=2,
+            )
+            if train_prop_vals.size > 0:
+                ax.hist(
+                    train_prop_vals,
+                    bins=bins,
+                    histtype='step',
+                    alpha=0.98,
+                    linewidth=2.0,
+                    color='#1E3A8A',
+                    label=f'Train ({train_target_col or "target"})',
+                    zorder=4,
+                )
+
+    if only_train_vals:
+        # in case of only 
         ax.hist(
-            gen_prop_vals,
+            train_prop_vals,
             bins=bins,
             histtype='stepfilled',
-            alpha=0.30,
+            alpha=0.3,
             linewidth=1.0,
-            edgecolor='#8A1C0F',
-            color='#E8751A',
-            label=f'Generated ({gen_prop_col_used or "predicted"})',
-            zorder=1,
+            edgecolor="#FF1515",
+            color='#FF1515',
+            label=f'Train ({train_target_col or "target"})',
+            zorder=4,
         )
-        ax.hist(
-            gen_prop_vals,
-            bins=bins,
-            histtype='step',
-            alpha=0.95,
-            linewidth=1.6,
-            color='#B45309',
-            zorder=2,
-        )
-
-    if train_prop_vals.size > 0:
         ax.hist(
             train_prop_vals,
             bins=bins,
             histtype='step',
             alpha=0.98,
             linewidth=2.0,
-            color='#1E3A8A',
-            label=f'Train ({train_target_col or "target"})',
+            color='#FF1515',
             zorder=4,
         )
 
@@ -415,14 +440,23 @@ def _maybe_plot_property_distributions(
             histtype='step',
             alpha=0.98,
             linewidth=2.0,
-            color='#0F766E',
+            color="#00FF15",
             label=f'Validation ({val_target_col or "target"})',
             zorder=5,
         )
 
     x_label = gen_prop_col_used or train_target_col or 'Property value'
     title_label = 'pIC50' if 'pic50' in str(x_label).lower() else str(x_label)
-    ax.set_title(f'{title_label} distribution: train vs validation vs generated')
+    
+    title_lab = f'{title_label} distribution: train/val'
+    if not only_train_vals:
+        title_lab += '/generated'
+    
+    
+    ax.set_title(title_lab)
+    
+    
+    
     ax.set_xlabel(x_label)
     ax.set_ylabel('Count')
     ax.grid(axis='y', linestyle='--', linewidth=0.7, alpha=0.35)
