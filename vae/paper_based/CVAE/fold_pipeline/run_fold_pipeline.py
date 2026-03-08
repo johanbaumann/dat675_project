@@ -334,6 +334,286 @@ def _write_cross_fold_analysis_summary(
     return out_path
 
 
+def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root: str) -> dict:
+    """Create cross-fold combo plots and dedicated boxplots for validity, uniqueness,
+    novelty, and diversity.
+
+    Notes on uncertainty display:
+    - We do not draw the same y-error bar on every fold point, because each fold contributes
+      only one scalar metric value here, so a per-point uncertainty is not available from this data.
+    - Instead, we show:
+        1) the raw fold values,
+        2) the cross-fold mean,
+        3) a mean standard error band,
+        4) and a standard deviation band.
+    """
+    payload = _read_json(cross_fold_summary_path)
+    per_fold = list(payload.get('per_fold', []) or [])
+    if len(per_fold) == 0:
+        print('[analysis] cv_combo skipped: cross-fold summary has no per_fold entries.')
+        return {'plot_path': None, 'boxplot_path': None, 'stats_path': None}
+
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
+    except Exception:
+        print('[analysis] cv_combo skipped: matplotlib is not available in this environment.')
+        return {'plot_path': None, 'boxplot_path': None, 'stats_path': None}
+
+    out_dir = os.path.join(artifacts_root, 'cv_combo')
+    os.makedirs(out_dir, exist_ok=True)
+
+    metric_specs = [
+        ('validity', 'Validity', '#1E3A8A'),
+        ('uniqueness', 'Uniqueness', '#0F766E'),
+        ('novelty', 'Novelty', '#7C3AED'),
+        ('diversity_score', 'Diversity', '#B45309'),
+    ]
+    iteration_names = [str(row.get('iteration_name', f'fold_{i}')) for i, row in enumerate(per_fold)]
+    x_all = np.arange(len(iteration_names), dtype=float)
+
+    stats_payload = {
+        'cross_fold_summary_path': os.path.abspath(cross_fold_summary_path),
+        'num_folds': int(len(iteration_names)),
+        'metrics': {},
+    }
+
+    # -------------------------------------------------------------------------
+    # Plot 1: Fold-value line plots + mean + stderr band + std band
+    # -------------------------------------------------------------------------
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=True)
+    axes_list = list(axes.ravel())
+
+    for ax, (metric_key, metric_title, color) in zip(axes_list, metric_specs):
+        values = np.asarray([_to_float(row.get(metric_key)) for row in per_fold], dtype=float)
+        valid_mask = np.isfinite(values)
+        valid_indices = np.where(valid_mask)[0]
+        x = x_all[valid_mask]
+        y = values[valid_mask]
+
+        if y.size == 0:
+            ax.set_title(f'{metric_title} across folds')
+            ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
+            ax.set_ylim(0.0, 1.0)
+            stats_payload['metrics'][metric_key] = {
+                'count': 0,
+                'mean': None,
+                'std': None,
+                'stderr': None,
+                'per_fold': [],
+            }
+            continue
+
+        mean_val = float(np.mean(y))
+        std_val = float(np.std(y, ddof=1)) if y.size > 1 else 0.0
+        stderr_val = float(std_val / np.sqrt(y.size)) if y.size > 1 else 0.0
+
+        # Plot raw fold values as a connected line with markers.
+        ax.plot(
+            x,
+            y,
+            'o-',
+            color=color,
+            markersize=5.5,
+            linewidth=1.7,
+            alpha=0.95,
+            label='Fold values',
+        )
+
+        # Mean line across the subplot.
+        x_min = float(np.min(x)) - 0.4
+        x_max = float(np.max(x)) + 0.4
+        ax.hlines(
+            y=mean_val,
+            xmin=x_min,
+            xmax=x_max,
+            colors='#111111',
+            linestyles='--',
+            linewidth=1.3,
+            label=f'Mean = {mean_val:.4f}',
+        )
+
+        # Standard error band around the mean.
+        if stderr_val > 0.0:
+            ax.fill_between(
+                [x_min, x_max],
+                [mean_val - stderr_val, mean_val - stderr_val],
+                [mean_val + stderr_val, mean_val + stderr_val],
+                color='#111111',
+                alpha=0.10,
+                label=f'Standard error = {stderr_val:.4f}',
+            )
+
+        # Standard deviation band around the mean.
+        if std_val > 0.0:
+            ax.fill_between(
+                [x_min, x_max],
+                [mean_val - std_val, mean_val - std_val],
+                [mean_val + std_val, mean_val + std_val],
+                color=color,
+                alpha=0.12,
+                label=f'Standard deviation = {std_val:.4f}',
+            )
+
+        y_pad = max(0.02, std_val * 1.5 if std_val > 0.0 else 0.02)
+        y_low = max(0.0, float(np.min(y) - y_pad))
+        y_high = min(1.0, float(np.max(y) + y_pad))
+        if y_high <= y_low:
+            y_low, y_high = 0.0, 1.0
+
+        ax.set_ylim(y_low, y_high)
+        ax.set_title(f'{metric_title} across folds')
+        ax.set_ylabel(metric_title)
+        ax.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
+
+        # Build a clean legend manually so all entries always appear.
+        legend_handles = [
+            Line2D([0], [0], color=color, marker='o', linewidth=1.7, markersize=5.5, label='Fold values'),
+            Line2D([0], [0], color='#111111', linestyle='--', linewidth=1.3, label=f'Mean = {mean_val:.4f}'),
+        ]
+        if stderr_val > 0.0:
+            legend_handles.append(
+                Patch(facecolor='#111111', edgecolor='none', alpha=0.10, label=f'Standard error = {stderr_val:.4f}')
+            )
+        if std_val > 0.0:
+            legend_handles.append(
+                Patch(facecolor=color, edgecolor='none', alpha=0.12, label=f'Standard deviation = {std_val:.4f}')
+            )
+
+        ax.legend(handles=legend_handles, loc='best', frameon=True, framealpha=0.9)
+
+        stats_payload['metrics'][metric_key] = {
+            'count': int(y.size),
+            'mean': mean_val,
+            'std': std_val,
+            'stderr': stderr_val,
+            'per_fold': [
+                {
+                    'iteration_name': iteration_names[int(idx)],
+                    'value': float(values[int(idx)]),
+                }
+                for idx in valid_indices
+            ],
+        }
+
+    for ax in axes_list[2:]:
+        ax.set_xlabel('CV iteration')
+    for ax in axes_list:
+        ax.set_xticks(x_all)
+        ax.set_xticklabels(iteration_names, rotation=30, ha='right')
+
+    fig.suptitle('Cross-fold metrics with mean, standard error, and standard deviation', fontsize=13)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+
+    plot_path = os.path.abspath(os.path.join(out_dir, 'cv_combo_metrics_summary.png'))
+    fig.savefig(plot_path, dpi=220)
+    plt.close(fig)
+
+    # -------------------------------------------------------------------------
+    # Plot 2: Dedicated boxplots, one subplot per metric
+    # -------------------------------------------------------------------------
+    boxplot_path = None
+    fig2, axes2 = plt.subplots(2, 2, figsize=(12, 9), sharey=False)
+    axes2_list = list(axes2.ravel())
+    have_boxplot_data = False
+
+    for ax2, (metric_key, metric_title, color) in zip(axes2_list, metric_specs):
+        metric_vals = np.asarray([_to_float(row.get(metric_key)) for row in per_fold], dtype=float)
+        metric_vals = metric_vals[np.isfinite(metric_vals)]
+
+        if metric_vals.size == 0:
+            ax2.set_title(f'{metric_title} boxplot')
+            ax2.text(0.5, 0.5, 'No data', transform=ax2.transAxes, ha='center', va='center')
+            ax2.set_ylim(0.0, 1.0)
+            continue
+
+        have_boxplot_data = True
+
+        # Make the box narrower so the plot looks cleaner and less bulky.
+        bp = ax2.boxplot(
+            [metric_vals],
+            tick_labels=[metric_title],
+            patch_artist=True,
+            widths=0.28,
+            showmeans=True,
+            meanline=True,
+        )
+
+        bp['boxes'][0].set(facecolor=color, alpha=0.24, edgecolor=color, linewidth=1.6)
+        bp['medians'][0].set(color='#111111', linewidth=1.6)
+        bp['means'][0].set(color='#CC0000', linewidth=1.5, linestyle='--')
+
+        #whiskers are lines from box to most extreme
+        for whisker in bp['whiskers']:
+            whisker.set(color='#444444', linewidth=1.1)
+        # cap is the horizontal line at the end of the whisker
+        for cap in bp['caps']:
+            cap.set(color='#444444', linewidth=1.1)
+        # flier are the individual points
+        for flier in bp.get('fliers', []):
+            flier.set(marker='o', markersize=6, markerfacecolor=color, markeredgecolor="#EEFF00", alpha=0.9)
+
+    
+        ax2.scatter(
+            np.full(metric_vals.size, 1.0, dtype=float),
+            metric_vals,
+            s=38,
+            alpha=0.92,
+            color=color,
+            edgecolor='white',
+            linewidth=0.6,
+            zorder=3,
+        )
+
+        local_std = float(np.std(metric_vals, ddof=1)) if metric_vals.size > 1 else 0.0
+        y_pad = max(0.01, local_std * 1.8 if local_std > 0.0 else 0.02)
+        y_low = max(0.0, float(np.min(metric_vals) - y_pad))
+        y_high = min(1.0, float(np.max(metric_vals) + y_pad))
+        if y_high <= y_low:
+            y_low, y_high = 0.0, 1.0
+
+        ax2.set_ylim(y_low, y_high)
+        ax2.set_title(f'{metric_title} boxplot across folds')
+        ax2.set_ylabel(metric_title,weight='bold',fontsize=15)
+        ax2.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
+
+        # Manual legend so median, mean, and points always show correctly.
+        legend_handles = [
+            Patch(facecolor=color, edgecolor=color, alpha=0.24, label='Interquartile range'),
+            Line2D([0], [0], color='#111111', linewidth=1.6, label='Median'),
+            Line2D([0], [0], color='#CC0000', linewidth=1.5, linestyle='--', label='Mean'),
+            Line2D(
+                [0], [0],
+                marker='o',
+                color='w',
+                markerfacecolor=color,
+                markeredgecolor='white',
+                markersize=7,
+                linewidth=0.0,
+                label='Fold values',
+            ),
+        ]
+        ax2.legend(handles=legend_handles, loc='best', frameon=True, framealpha=0.9)
+
+    fig2.suptitle('Cross-fold metric boxplots: V.U.N and diversity', fontsize=16)
+    fig2.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+
+    if have_boxplot_data:
+        boxplot_path = os.path.abspath(os.path.join(out_dir, 'cv_combo_metrics_boxplots.png'))
+        fig2.savefig(boxplot_path, dpi=300)
+    plt.close(fig2)
+
+    stats_path = _write_json(os.path.join(out_dir, 'cv_combo_metrics_stats.json'), stats_payload)
+
+    print(f'[analysis] cv_combo plot written: {plot_path}')
+    if boxplot_path is not None:
+        print(f'[analysis] cv_combo boxplot written: {boxplot_path}')
+    print(f'[analysis] cv_combo stats written: {stats_path}')
+
+    return {'plot_path': plot_path, 'boxplot_path': boxplot_path, 'stats_path': stats_path}
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Run CV fold iterations: train -> sample -> analysis.')
     parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH)
@@ -674,11 +954,6 @@ def main() -> None:
     workspace_root = os.path.abspath(str(cfg.get('workspace_root', _ROOT_DIR)))
     os.chdir(workspace_root)
 
-    folds_dir_raw = cfg.get('train_validation_folds_dir', cfg.get('train_validation_folds'))
-    if folds_dir_raw is None:
-        raise KeyError('Config is missing required key: train_validation_folds_dir')
-    train_validation_folds_dir = os.path.abspath(str(folds_dir_raw))
-
     # Output roots:
     # - training_output_root: checkpoints/history/training config (ideally under save/)
     # - artifacts_output_root: fold data, sampling outputs, analysis outputs, logs (outside save/)
@@ -702,6 +977,74 @@ def main() -> None:
     output_root = os.path.abspath(str(artifacts_root_cfg))
     training_root = os.path.abspath(str(training_root_cfg))
     artifacts_root = os.path.abspath(str(artifacts_root_cfg))
+
+    cv_combo_cfg = dict(cfg.get('cv_combo', {}) or {})
+    cv_combo_enabled = bool(cv_combo_cfg.get('enabled', True))
+    cv_combo_only = bool(cv_combo_cfg.get('only', False))
+    cv_combo_summary_override = _resolve_optional_path(
+        cv_combo_cfg.get('cross_fold_summary_path'),
+        base_dir=workspace_root,
+    )
+
+    os.makedirs(output_root, exist_ok=True)
+    os.makedirs(training_root, exist_ok=True)
+    os.makedirs(artifacts_root, exist_ok=True)
+
+    if cv_combo_only:
+        # Combo-only mode: skip fold discovery and all per-fold stages.
+        cross_fold_summary_path = (
+            cv_combo_summary_override
+            if cv_combo_summary_override is not None
+            else os.path.join(artifacts_root, 'cross_fold_analysis_summary.json')
+        )
+        cross_fold_summary_path = os.path.abspath(cross_fold_summary_path)
+        if not os.path.isfile(cross_fold_summary_path):
+            raise FileNotFoundError(
+                'cv_combo.only=true but no cross-fold summary was found at '
+                f'{cross_fold_summary_path}. Provide cv_combo.cross_fold_summary_path or run analysis first.'
+            )
+
+        print('===== CV combo-only mode =====')
+        print(f'workspace_root={workspace_root}')
+        print(f'artifacts_output_root={artifacts_root}')
+        print(f'cross_fold_summary_path={cross_fold_summary_path}')
+
+        cv_combo_outputs = _write_cv_combo_metric_plots(
+            cross_fold_summary_path=cross_fold_summary_path,
+            artifacts_root=artifacts_root,
+        )
+
+        final_manifest_path = os.path.join(artifacts_root, 'global_manifest.json')
+        existing_manifest = {}
+        if os.path.isfile(final_manifest_path):
+            try:
+                existing_manifest = _read_json(final_manifest_path)
+            except Exception:
+                existing_manifest = {}
+
+        existing_manifest['config_path'] = os.path.abspath(args.config)
+        existing_manifest['workspace_root'] = workspace_root
+        existing_manifest['training_output_root'] = training_root
+        existing_manifest['artifacts_output_root'] = artifacts_root
+        existing_manifest['cv_combo_only'] = True
+        existing_manifest['cross_fold_analysis_summary_path'] = cross_fold_summary_path
+        existing_manifest['cv_combo_metrics_plot_path'] = cv_combo_outputs.get('plot_path')
+        existing_manifest['cv_combo_metrics_boxplot_path'] = cv_combo_outputs.get('boxplot_path')
+        existing_manifest['cv_combo_metrics_stats_path'] = cv_combo_outputs.get('stats_path')
+        existing_manifest['finished_unix'] = time.time()
+        _write_json(final_manifest_path, existing_manifest)
+
+        print('\n' + '=' * 90)
+        print('CV combo-only run completed successfully.')
+        print(f'Global manifest: {final_manifest_path}')
+        print('=' * 90)
+        return
+
+    folds_dir_raw = cfg.get('train_validation_folds_dir', cfg.get('train_validation_folds'))
+    if folds_dir_raw is None:
+        raise KeyError('Config is missing required key: train_validation_folds_dir')
+    train_validation_folds_dir = os.path.abspath(str(folds_dir_raw))
+
     smiles_column = str(cfg.get('smiles_column', 'smiles'))
     label_columns = [str(x) for x in cfg.get('label_columns', [cfg.get('label_column', 'pIC50')])]
     fold_glob = str(cfg.get('fold_glob', 'fold_*.csv'))
@@ -723,6 +1066,7 @@ def main() -> None:
     print(f'python_executable={python_exe}')
     print(f'label_columns={label_columns}')
     print(f'stage toggles: train={train_enabled}, sampling={sampling_enabled}, analysis={analysis_enabled_global}')
+    print(f'cv_combo toggles: enabled={cv_combo_enabled}, only={cv_combo_only}')
 
     fold_pairs = discover_cv_fold_iterations(
         train_validation_folds_dir=train_validation_folds_dir,
@@ -735,10 +1079,6 @@ def main() -> None:
         if len(fold_pairs) == 0:
             raise ValueError(f'No iteration found for --only-fold={args.only_fold}')
         print(f'filtered to single CV iteration: {args.only_fold}')
-
-    os.makedirs(output_root, exist_ok=True)
-    os.makedirs(training_root, exist_ok=True)
-    os.makedirs(artifacts_root, exist_ok=True)
 
     global_manifest = {
         'config_path': os.path.abspath(args.config),
@@ -1001,15 +1341,24 @@ def main() -> None:
         print(f'[{fold_name}] CV iteration complete and manifest saved')
 
     cross_fold_summary_path = None
+    cv_combo_outputs = {'plot_path': None, 'boxplot_path': None, 'stats_path': None}
     if analysis_enabled_global:
         cross_fold_summary_path = _write_cross_fold_analysis_summary(
             artifacts_root=artifacts_root,
             global_manifest=global_manifest,
         )
+        if cross_fold_summary_path is not None and cv_combo_enabled:
+            cv_combo_outputs = _write_cv_combo_metric_plots(
+                cross_fold_summary_path=cross_fold_summary_path,
+                artifacts_root=artifacts_root,
+            )
 
     global_manifest['finished_unix'] = time.time()
     global_manifest['duration_sec'] = float(global_manifest['finished_unix'] - global_manifest['started_unix'])
     global_manifest['cross_fold_analysis_summary_path'] = cross_fold_summary_path
+    global_manifest['cv_combo_metrics_plot_path'] = cv_combo_outputs.get('plot_path')
+    global_manifest['cv_combo_metrics_boxplot_path'] = cv_combo_outputs.get('boxplot_path')
+    global_manifest['cv_combo_metrics_stats_path'] = cv_combo_outputs.get('stats_path')
     final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
 
     print('\n' + '=' * 90)

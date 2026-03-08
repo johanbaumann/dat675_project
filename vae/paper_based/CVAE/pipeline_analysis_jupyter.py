@@ -8,6 +8,33 @@ import sys
 import pandas as pd
 
 
+def _apply_projector_plot_style() -> None:
+    """Make all plots easier to read on low-quality projectors."""
+    plt.rcParams.update(
+        {
+            'font.size': 14,
+            'font.weight': 'bold',
+            'axes.titlesize': 17,
+            'axes.titleweight': 'bold',
+            'axes.labelsize': 15,
+            'axes.labelweight': 'bold',
+            'xtick.labelsize': 13,
+            'ytick.labelsize': 13,
+            'xtick.major.size': 7,
+            'ytick.major.size': 7,
+            'xtick.major.width': 1.4,
+            'ytick.major.width': 1.4,
+            'legend.fontsize': 12,
+            'legend.title_fontsize': 13,
+            'figure.titlesize': 18,
+            'figure.titleweight': 'bold',
+        }
+    )
+
+
+_apply_projector_plot_style()
+
+
 import rdkit
 from rdkit import Chem
 from rdkit.Chem.Descriptors import ExactMolWt
@@ -102,7 +129,8 @@ def stats_logP(df:pd.DataFrame) -> dict[str, float]:
     return stats
 def plot_errors(ground_truth:np.ndarray, error_as_function_of_logp:np.ndarray):
     plt.figure(figsize=(10, 5))
-    plt.scatter(ground_truth, error_as_function_of_logp, alpha=0.5)
+    edge_kwargs = {'edgecolors': point_edge_color, 'linewidths': point_edge_width} if point_edgecolors_enabled else {}
+    plt.scatter(ground_truth, error_as_function_of_logp, alpha=0.5, s=14, **edge_kwargs)
     plt.xlabel('Ground Truth LogP')
     plt.ylabel('Absolute Error')
 
@@ -949,7 +977,12 @@ fp_size = 2048
 pca_pre_dim = 50          # preprojection dimension before t-SNE
 tsne_perplexity = 30      # typical range: 5 to 50, must be < n_samples
 tsne_alpha = 0.5 # point transparency for t-SNE plot
-point_size = 6 # point size for scatter plots
+point_size = 14 # point size for scatter plots (increased for projector visibility)
+point_size_train = 14  # separate size for train points
+point_size_generated = 14  # separate size for generated points
+point_edge_color = 'black'  # edge color for points
+point_edge_width = 0.5  # edge width for points
+point_edgecolors_enabled = True  # enable/disable point outlines
 
 
 # -------------------------
@@ -1024,9 +1057,11 @@ X_pca_2d = pca_vis.fit_transform(X_all)
 
 def plot_pca_2d(X_pca_2d:np.ndarray, y_class:np.ndarray, colors:ListedColormap, out_dir:str) -> None:
     plt.figure(figsize=(8, 6))
+    edge_kwargs = {'edgecolors': point_edge_color, 'linewidths': point_edge_width} if point_edgecolors_enabled else {}
     sc = plt.scatter(
         X_pca_2d[:, 0], X_pca_2d[:, 1],
-        s=point_size, alpha=0.7, c=y_class, cmap=colors
+        s=point_size, alpha=0.7, c=y_class, cmap=colors,
+        **edge_kwargs
     )
     plt.colorbar(sc, label="Class (0=train, 1=generated)")
     plt.title("PCA (2D) on Morgan fingerprints colored by Class")
@@ -1064,8 +1099,9 @@ gen_tsne = X_tsne[X_train.shape[0] :]
 def plot_tsne_2d(train_tsne:np.ndarray, gen_tsne:np.ndarray, point_size:int, tsne_alpha:float, out_dir:str) -> None:
     # Plot: train vs generated (two colors, with legend)
     plt.figure(figsize=(8, 6))
-    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=point_size, alpha=tsne_alpha, label="Train")
-    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=point_size, alpha=tsne_alpha, label="Generated")
+    edge_kwargs = {'edgecolors': point_edge_color, 'linewidths': point_edge_width} if point_edgecolors_enabled else {}
+    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=point_size_train, alpha=tsne_alpha, label="Train", **edge_kwargs)
+    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=point_size_generated, alpha=tsne_alpha, label="Generated", **edge_kwargs)
     plt.legend()
     plt.title(f"t-SNE on Morgan fingerprints (PCA-{pca_pre_dim} preprojection)")
     plt.tight_layout()
@@ -1092,10 +1128,12 @@ def plot_tsne_colored_by_tanimoto(gen_tsne:np.ndarray, gen_tanimoto:np.ndarray, 
             )
 
         plt.figure(figsize=(8, 6))
+        edge_kwargs = {'edgecolors': point_edge_color, 'linewidths': point_edge_width} if point_edgecolors_enabled else {}
         sc = plt.scatter(
             gen_tsne[:, 0], gen_tsne[:, 1],
-            s=point_size, alpha=0.85, c=gen_tanimoto,
-            vmin=0.0, vmax=1.0, cmap=cmap
+            s=point_size_generated, alpha=0.85, c=gen_tanimoto,
+            vmin=0.0, vmax=1.0, cmap=cmap,
+            **edge_kwargs
         )
         plt.colorbar(sc, label="Max Tanimoto to train")
         plt.title("Generated t-SNE colored by max Tanimoto to train")
@@ -1524,7 +1562,7 @@ def draw_top_novel_scaffolds_grid(
         ax = axes_list[i]
         img = Draw.MolToImage(mol, size=mol_size)
         ax.imshow(img)
-        ax.set_title(legend, fontsize=10)
+        ax.set_title(legend, fontsize=13, fontweight='bold')
 
     plt.tight_layout()
     plt.show()
@@ -1572,7 +1610,7 @@ def draw_most_common_scaffolds_grid(
     fig, axes = plt.subplots(n_rows, n_cols_eff, figsize=(fig_w, fig_h))
     # add title if provided
     if title is not None:
-        plt.suptitle(title, fontsize=16,fontweight='bold')
+        plt.suptitle(title, fontsize=18,fontweight='bold')
 
     if isinstance(axes, np.ndarray):
         axes_list = axes.flatten().tolist()
@@ -1586,7 +1624,7 @@ def draw_most_common_scaffolds_grid(
         ax = axes_list[i]
         img = Draw.MolToImage(mol, size=mol_size)
         ax.imshow(img)
-        ax.set_title(legend, fontsize=10)
+        ax.set_title(legend, fontsize=13, fontweight='bold')
 
     plt.tight_layout()
     plt.show()
@@ -1785,6 +1823,8 @@ desc_pca_pre_dim = 0           # 0 or None means "no PCA preprojection" for desc
 desc_tsne_perplexity = 30      # must be < n_samples
 desc_tsne_alpha = 0.5
 desc_point_size = point_size   # reuse your scatter size
+desc_point_size_train = point_size_train  # separate size for descriptor train points
+desc_point_size_generated = point_size_generated  # separate size for descriptor generated points
 
 
 def mol_to_descriptor_array(mol: Chem.Mol, descriptor_names: List[str]) -> np.ndarray:
@@ -1881,8 +1921,9 @@ gen_tsne_desc = X_tsne_desc[X_train_desc.shape[0] :]
 def train_to_gen_desc_plot(train_tsne_desc:np.ndarray, gen_tsne_desc:np.ndarray,desc_point_size,alpha:float=desc_tsne_alpha) -> None:
     # Plot: train vs generated in descriptor space
     plt.figure(figsize=(8, 6))
-    plt.scatter(train_tsne_desc[:, 0], train_tsne_desc[:, 1], s=desc_point_size, alpha=alpha, label="Train")
-    plt.scatter(gen_tsne_desc[:, 0], gen_tsne_desc[:, 1], s=desc_point_size, alpha=alpha, label="Generated")
+    edge_kwargs = {'edgecolors': point_edge_color, 'linewidths': point_edge_width} if point_edgecolors_enabled else {}
+    plt.scatter(train_tsne_desc[:, 0], train_tsne_desc[:, 1], s=desc_point_size_train, alpha=alpha, label="Train", **edge_kwargs)
+    plt.scatter(gen_tsne_desc[:, 0], gen_tsne_desc[:, 1], s=desc_point_size_generated, alpha=alpha, label="Generated", **edge_kwargs)
     plt.legend()
     plt.title("t-SNE on RDKit descriptors (scaled)")
     plt.tight_layout()
@@ -1896,10 +1937,12 @@ train_to_gen_desc_plot(train_tsne_desc, gen_tsne_desc, desc_point_size, alpha=de
 def gen_desc_colored_by_tanimoto_plot(gen_tsne_desc:np.ndarray, gen_tanimoto_desc:np.ndarray, desc_point_size:int) -> None:
     # Plot: generated colored by max Tanimoto to train in descriptor space
     plt.figure(figsize=(8, 6))
+    edge_kwargs = {'edgecolors': point_edge_color, 'linewidths': point_edge_width} if point_edgecolors_enabled else {}
     sc = plt.scatter(
         gen_tsne_desc[:, 0], gen_tsne_desc[:, 1],
-        s=desc_point_size, alpha=0.85, c=gen_tanimoto_desc,
-        vmin=0.0, vmax=1.0, cmap=cmap
+        s=desc_point_size_generated, alpha=0.85, c=gen_tanimoto_desc,
+        vmin=0.0, vmax=1.0, cmap=cmap,
+        **edge_kwargs
     )
     plt.colorbar(sc, label="Max Tanimoto to train")
     plt.title("Generated t-SNE on RDKit descriptors colored by max Tanimoto to train")

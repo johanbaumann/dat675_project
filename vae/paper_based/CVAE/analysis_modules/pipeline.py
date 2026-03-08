@@ -30,9 +30,46 @@ from .config import AnalysisConfig
 from .io_utils import load_generated_dataframe, load_train_dataframe
 
 
+def _apply_projector_plot_style() -> None:
+    """Use larger, bolder text so saved figures are readable on projectors."""
+    plt.rcParams.update(
+        {
+            'font.size': 14,
+            'font.weight': 'bold',
+            'axes.titlesize': 17,
+            'axes.titleweight': 'bold',
+            'axes.labelsize': 15,
+            'axes.labelweight': 'bold',
+            'xtick.labelsize': 13,
+            'ytick.labelsize': 13,
+            'xtick.major.size': 7,
+            'ytick.major.size': 7,
+            'xtick.major.width': 1.4,
+            'ytick.major.width': 1.4,
+            'legend.fontsize': 12,
+            'legend.title_fontsize': 13,
+            'figure.titlesize': 18,
+            'figure.titleweight': 'bold',
+        }
+    )
+
+
+_apply_projector_plot_style()
+
+
 def _debug_log(cfg: AnalysisConfig, message: str) -> None:
     if bool(cfg.debug):
         print(f'[analysis:debug] {message}')
+
+
+def _get_scatter_edgecolor_kwargs(cfg: AnalysisConfig) -> dict:
+    """Return edgecolor kwargs for scatter plots if enabled, else empty dict."""
+    if bool(cfg.embedding_point_edgecolors_enabled):
+        return {
+            'edgecolors': str(cfg.embedding_edge_color),
+            'linewidths': float(cfg.embedding_edge_width),
+        }
+    return {}
 
 
 def _save_figure(cfg: AnalysisConfig, filename: str, *, dpi: int = 180) -> str:
@@ -300,34 +337,7 @@ def _maybe_plot_property_distributions(
         return
 
     os.makedirs(cfg.output_dir, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-    train_mw_col = _resolve_by_aliases(train_df, ('MW', 'MolWt', 'molecular_weight', 'mw'))
-    val_mw_col = _resolve_by_aliases(validation_df, ('MW', 'MolWt', 'molecular_weight', 'mw')) if validation_df is not None else None
-    gen_mw_col = _resolve_by_aliases(gen_df, ('MW', 'MolWt', 'molecular_weight', 'mw'))
-
-    train_mw_vals = _extract_numeric_series(train_df, train_mw_col)
-    val_mw_vals = _extract_numeric_series(validation_df, val_mw_col) if validation_df is not None else np.asarray([], dtype=float)
-    gen_mw_vals = _extract_numeric_series(gen_df, gen_mw_col)
-
-    if train_mw_vals.size == 0:
-        train_mw_vals = _compute_mw_from_smiles(train_df, cfg.smiles_column)
-    if validation_df is not None and val_mw_vals.size == 0:
-        val_mw_vals = _compute_mw_from_smiles(validation_df, cfg.smiles_column)
-    if gen_mw_vals.size == 0:
-        gen_mw_vals = _compute_mw_from_smiles(gen_df, cfg.smiles_column)
-
-    if train_mw_vals.size > 0:
-        axes[0].hist(train_mw_vals, bins=80, alpha=0.60, label='Train')
-    if val_mw_vals.size > 0:
-        axes[0].hist(val_mw_vals, bins=80, alpha=0.60, label='Validation')
-    if gen_mw_vals.size > 0:
-        axes[0].hist(gen_mw_vals, bins=80, alpha=0.60, label='Generated')
-    axes[0].set_title('MW distribution')
-    axes[0].set_xlabel('MW')
-    axes[0].set_ylabel('Count')
-    if len(axes[0].patches) > 0:
-        axes[0].legend()
+    fig, ax = plt.subplots(1, 1, figsize=(11, 5))
 
     train_target_col = _resolve_property_column(train_df, cfg.target_property_column, role='target')
     val_target_col = (
@@ -348,63 +358,79 @@ def _maybe_plot_property_distributions(
         f'validation_target={val_target_col!r}, generated_property={gen_prop_col_used!r}',
     )
 
+    all_vals = np.concatenate(
+        [vals for vals in (train_prop_vals, val_prop_vals, gen_prop_vals) if vals.size > 0],
+        axis=0,
+    ) if (train_prop_vals.size > 0 or val_prop_vals.size > 0 or gen_prop_vals.size > 0) else np.asarray([], dtype=float)
+
+    if all_vals.size == 0:
+        _debug_log(cfg, 'Skipping property distribution plot (no numeric property values found).')
+        plt.close(fig)
+        return
+
+    bins = np.linspace(float(np.min(all_vals)), float(np.max(all_vals)), num=70)
+    if np.allclose(bins[0], bins[-1]):
+        bins = 40
+
+    # Draw generated first with partial transparency; overlay train/validation as
+    # high-contrast outlines so they remain visible even when generated dominates.
+    if gen_prop_vals.size > 0:
+        ax.hist(
+            gen_prop_vals,
+            bins=bins,
+            histtype='stepfilled',
+            alpha=0.30,
+            linewidth=1.0,
+            edgecolor='#8A1C0F',
+            color='#E8751A',
+            label=f'Generated ({gen_prop_col_used or "predicted"})',
+            zorder=1,
+        )
+        ax.hist(
+            gen_prop_vals,
+            bins=bins,
+            histtype='step',
+            alpha=0.95,
+            linewidth=1.6,
+            color='#B45309',
+            zorder=2,
+        )
+
     if train_prop_vals.size > 0:
-        axes[1].hist(
+        ax.hist(
             train_prop_vals,
-            bins=80,
-            alpha=0.60,
+            bins=bins,
+            histtype='step',
+            alpha=0.98,
+            linewidth=2.0,
+            color='#1E3A8A',
             label=f'Train ({train_target_col or "target"})',
-            color='#0046AB',
+            zorder=4,
         )
 
     if val_prop_vals.size > 0:
-        axes[1].hist(
+        ax.hist(
             val_prop_vals,
-            bins=80,
-            alpha=0.60,
+            bins=bins,
+            histtype='step',
+            alpha=0.98,
+            linewidth=2.0,
+            color='#0F766E',
             label=f'Validation ({val_target_col or "target"})',
-            color='#008B8B',
+            zorder=5,
         )
 
-    if gen_prop_vals.size > 0:
-        axes[1].hist(
-            gen_prop_vals,
-            bins=80,
-            alpha=0.60,
-            label=f'Generated ({gen_prop_col_used or "predicted"})',
-            color='#FF8400',
-        )
-
-    axes[1].set_title('Property distribution: train vs validation vs generated')
-    axes[1].set_xlabel(gen_prop_col_used or train_target_col or 'Property value')
-    axes[1].set_ylabel('Count')
-    if len(axes[1].patches) > 0:
-        axes[1].legend()
+    x_label = gen_prop_col_used or train_target_col or 'Property value'
+    title_label = 'pIC50' if 'pic50' in str(x_label).lower() else str(x_label)
+    ax.set_title(f'{title_label} distribution: train vs validation vs generated')
+    ax.set_xlabel(x_label)
+    ax.set_ylabel('Count')
+    ax.grid(axis='y', linestyle='--', linewidth=0.7, alpha=0.35)
+    ax.legend(frameon=True, framealpha=0.9)
 
     plt.tight_layout()
     _save_figure(cfg, cfg.distribution_plot_filename, dpi=180)
     plt.close(fig)
-
-    if train_mw_vals.size > 0 and gen_mw_vals.size > 0:
-        mw_min = float(min(np.min(train_mw_vals), np.min(gen_mw_vals)))
-        mw_max = float(max(np.max(train_mw_vals), np.max(gen_mw_vals)))
-        if mw_max > mw_min:
-            bins = np.linspace(mw_min, mw_max, num=81)
-            train_counts, edges = np.histogram(train_mw_vals, bins=bins)
-            gen_counts, _ = np.histogram(gen_mw_vals, bins=bins)
-            centers = 0.5 * (edges[:-1] + edges[1:])
-            diff = train_counts - gen_counts
-
-            fig = plt.figure(figsize=(10, 5))
-            plt.axhline(0.0, color='black', linewidth=1.0)
-            plt.plot(centers, diff, color='#6A1B9A', linewidth=1.5)
-            plt.fill_between(centers, diff, 0.0, alpha=0.25, color='#6A1B9A')
-            plt.title('MW distribution difference (train - generated)')
-            plt.xlabel('MW')
-            plt.ylabel('Count difference per bin')
-            plt.tight_layout()
-            _save_figure(cfg, cfg.mw_distribution_diff_plot_filename, dpi=180)
-            plt.close(fig)
 
 
 def _maybe_plot_train_loss(cfg: AnalysisConfig) -> None:
@@ -509,7 +535,8 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
     stdae = float(np.std(abs_err))
 
     fig = plt.figure(figsize=(10, 5))
-    plt.scatter(gt, abs_err, alpha=0.5, s=8)
+    edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
+    plt.scatter(gt, abs_err, alpha=0.5, s=16, **edge_kwargs)
     plt.xlabel(f'Ground Truth {target_col}')
     plt.ylabel('Absolute Error')
     plt.title(f'Absolute Error vs Ground Truth ({target_col})')
@@ -613,30 +640,34 @@ def _run_chemical_space_embedding(
     pca_vis = PCA(n_components=2, random_state=int(cfg.random_seed))
     x_pca_2d = pca_vis.fit_transform(x_all)
     fig = plt.figure(figsize=(8, 6))
+    edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
     plt.scatter(
         x_pca_2d[:idx_train_end, 0],
         x_pca_2d[:idx_train_end, 1],
-        s=int(cfg.embedding_point_size),
+        s=int(cfg.embedding_point_size_train),
         alpha=0.70,
         label='Train',
+        **edge_kwargs,
     )
     if x_validation.shape[0] > 0:
         plt.scatter(
             x_pca_2d[idx_train_end:idx_validation_end, 0],
             x_pca_2d[idx_train_end:idx_validation_end, 1],
-            s=int(cfg.embedding_point_size),
+            s=int(cfg.embedding_point_size_validation),
             alpha=0.70,
             label='Validation',
+            **edge_kwargs,
         )
     plt.scatter(
         x_pca_2d[idx_validation_end:, 0],
         x_pca_2d[idx_validation_end:, 1],
-        s=int(cfg.embedding_point_size),
+        s=int(cfg.embedding_point_size_generated),
         alpha=0.70,
         label='Generated',
+        **edge_kwargs,
     )
     plt.legend()
-    plt.title('PCA (2D) on Morgan fingerprints: train vs validation vs generated')
+    plt.title('PCA (2D) on Morgan fingerprints: train/val/generated')
     plt.tight_layout()
     _save_figure(cfg, cfg.chemical_pca_plot_filename, dpi=180)
     plt.close(fig)
@@ -661,39 +692,43 @@ def _run_chemical_space_embedding(
     gen_tsne = x_tsne[idx_validation_end:]
 
     fig = plt.figure(figsize=(8, 6))
-    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Train')
+    edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
+    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size_train), alpha=float(cfg.embedding_alpha), label='Train', **edge_kwargs)
     if validation_tsne.shape[0] > 0:
         plt.scatter(
             validation_tsne[:, 0],
             validation_tsne[:, 1],
-            s=int(cfg.embedding_point_size),
+            s=int(cfg.embedding_point_size_validation),
             alpha=float(cfg.embedding_alpha),
             label='Validation',
+            **edge_kwargs,
         )
-    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Generated')
+    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size_generated), alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
     plt.legend()
-    plt.title(f't-SNE on Morgan fingerprints (train/validation/generated, PCA-{pre_dim} preprojection)')
+    plt.title(f't-SNE on Morgan-fps (train/val/gen PCA-{pre_dim} preprojection)')
     plt.tight_layout()
-    _save_figure(cfg, cfg.chemical_tsne_plot_filename, dpi=180)
+    _save_figure(cfg, cfg.chemical_tsne_plot_filename, dpi=300)
     plt.close(fig)
 
     if gen_tanimoto is not None and gen_tanimoto.shape[0] == gen_tsne.shape[0]:
         cmap = LinearSegmentedColormap.from_list('custom', ['red', 'yellow', 'green'], N=256)
         fig = plt.figure(figsize=(8, 6))
+        edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
         sc2 = plt.scatter(
             gen_tsne[:, 0],
             gen_tsne[:, 1],
-            s=int(cfg.embedding_point_size),
+            s=int(cfg.embedding_point_size_generated),
             alpha=0.85,
             c=gen_tanimoto,
             vmin=0.0,
             vmax=1.0,
             cmap=cmap,
+            **edge_kwargs,
         )
         plt.colorbar(sc2, label='Max Tanimoto to train')
         plt.title('Generated t-SNE colored by max Tanimoto to train')
         plt.tight_layout()
-        _save_figure(cfg, cfg.chemical_tsne_tanimoto_plot_filename, dpi=180)
+        _save_figure(cfg, cfg.chemical_tsne_tanimoto_plot_filename, dpi=300)
         plt.close(fig)
 
 
@@ -743,32 +778,36 @@ def _run_descriptor_space_embedding(
 
     pca2 = PCA(n_components=2, random_state=int(cfg.random_seed)).fit_transform(x_all_scaled)
     fig = plt.figure(figsize=(8, 6))
+    edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
     plt.scatter(
         pca2[:idx_train_end, 0],
         pca2[:idx_train_end, 1],
-        s=int(cfg.embedding_point_size),
+        s=int(cfg.embedding_point_size_train),
         alpha=0.70,
         label='Train',
+        **edge_kwargs,
     )
     if x_validation_desc.shape[0] > 0:
         plt.scatter(
             pca2[idx_train_end:idx_validation_end, 0],
             pca2[idx_train_end:idx_validation_end, 1],
-            s=int(cfg.embedding_point_size),
+            s=int(cfg.embedding_point_size_validation),
             alpha=0.70,
             label='Validation',
+            **edge_kwargs,
         )
     plt.scatter(
         pca2[idx_validation_end:, 0],
         pca2[idx_validation_end:, 1],
-        s=int(cfg.embedding_point_size),
+        s=int(cfg.embedding_point_size_generated),
         alpha=0.70,
         label='Generated',
+        **edge_kwargs,
     )
     plt.legend()
     plt.title('PCA (2D) on RDKit descriptors: train vs validation vs generated')
     plt.tight_layout()
-    _save_figure(cfg, cfg.descriptor_pca_plot_filename, dpi=180)
+    _save_figure(cfg, cfg.descriptor_pca_plot_filename, dpi=300)
     plt.close(fig)
 
     pre_dim = int(cfg.descriptor_pca_pre_dim)
@@ -790,16 +829,18 @@ def _run_descriptor_space_embedding(
     gen_tsne = x_tsne[idx_validation_end:]
 
     fig = plt.figure(figsize=(8, 6))
-    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Train')
+    edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
+    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size_train), alpha=float(cfg.embedding_alpha), label='Train', **edge_kwargs)
     if validation_tsne.shape[0] > 0:
         plt.scatter(
             validation_tsne[:, 0],
             validation_tsne[:, 1],
-            s=int(cfg.embedding_point_size),
+            s=int(cfg.embedding_point_size_validation),
             alpha=float(cfg.embedding_alpha),
             label='Validation',
+            **edge_kwargs,
         )
-    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Generated')
+    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size_generated), alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
     plt.legend()
     plt.title('t-SNE on RDKit descriptors (scaled): train vs validation vs generated')
     plt.tight_layout()
@@ -809,15 +850,17 @@ def _run_descriptor_space_embedding(
     if gen_tanimoto is not None and gen_tanimoto.shape[0] == gen_tsne.shape[0]:
         cmap = LinearSegmentedColormap.from_list('custom', ['red', 'yellow', 'green'], N=256)
         fig = plt.figure(figsize=(8, 6))
+        edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
         sc2 = plt.scatter(
             gen_tsne[:, 0],
             gen_tsne[:, 1],
-            s=int(cfg.embedding_point_size),
+            s=int(cfg.embedding_point_size_generated),
             alpha=0.85,
             c=gen_tanimoto,
             vmin=0.0,
             vmax=1.0,
             cmap=cmap,
+            **edge_kwargs,
         )
         plt.colorbar(sc2, label='Max Tanimoto to train')
         plt.title('Generated descriptor t-SNE colored by max Tanimoto to train')
@@ -902,9 +945,9 @@ def _draw_scaffold_grid(scaffold_counts_dict: dict[str, int], out_path: str, n_t
     for i, (mol, legend) in enumerate(zip(mols, legends)):
         img = Draw.MolToImage(mol, size=(250, 250))
         axes_list[i].imshow(img)
-        axes_list[i].set_title(legend, fontsize=9)
+        axes_list[i].set_title(legend, fontsize=13, fontweight='bold')
 
-    fig.suptitle(title, fontsize=14, fontweight='bold')
+    fig.suptitle(title, fontsize=18, fontweight='bold')
     plt.tight_layout()
     plt.savefig(out_path, dpi=180)
     plt.close(fig)

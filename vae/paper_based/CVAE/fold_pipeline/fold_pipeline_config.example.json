@@ -134,5 +134,10 @@
       "run_descriptor_space": true,
       "debug": true
     }
+  },
+  "cv_combo": {
+    "enabled": true,
+    "only": false,
+    "cross_fold_summary_path": null
   }
 }

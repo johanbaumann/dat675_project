@@ -66,6 +66,12 @@ class AnalysisConfig:
     descriptor_tsne_perplexity: float = 30.0
     descriptor_pca_pre_dim: int = 0
     embedding_point_size: int = 6
+    embedding_point_size_train: int = 14
+    embedding_point_size_validation: int = 14
+    embedding_point_size_generated: int = 14
+    embedding_point_edgecolors_enabled: bool = True
+    embedding_edge_color: str = 'black'
+    embedding_edge_width: float = 0.5
     embedding_alpha: float = 0.5
     scaffold_grid_top_n: int = 24
     scaffold_grid_n_cols: int = 6

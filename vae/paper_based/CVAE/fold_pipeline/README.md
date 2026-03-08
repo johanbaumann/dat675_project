@@ -55,6 +55,38 @@ Cross-fold aggregate includes:
 - V.U.N metrics aggregated from quality-summary counts (`validity`, `uniqueness`, `novelty`, `acceptance_rate`)
 - Diversity aggregated from per-fold analysis summaries (same definition as analysis pipeline: `1 - mean_tanimoto_all_pairs`)
 - Per-fold metric snapshot table
+- Combined CV metric plots under `artifacts_output_root/cv_combo/`:
+  - `cv_combo_metrics_std.png` (4 subplots: validity, uniqueness, novelty, diversity with std bars)
+  - `cv_combo_metrics_boxplots.png` (4 subplots: one boxplot per metric across folds)
+  - `cv_combo_metrics_stats.json` (mean/std/count + per-fold values)
+
+## CV combo-only mode
+
+You can run only the cross-fold combo plots (no fold discovery, no train/sampling/analysis) by setting:
+
+- `cv_combo.enabled=true`
+- `cv_combo.only=true`
+
+Optional:
+
+- `cv_combo.cross_fold_summary_path`: explicit path to `cross_fold_analysis_summary.json`.
+  - If omitted, defaults to `artifacts_output_root/cross_fold_analysis_summary.json`.
+
+In combo-only mode, the runner writes/updates:
+
+- `artifacts_output_root/cv_combo/cv_combo_metrics_std.png`
+- `artifacts_output_root/cv_combo/cv_combo_metrics_boxplots.png`
+- `artifacts_output_root/cv_combo/cv_combo_metrics_stats.json`
+- `artifacts_output_root/global_manifest.json` (with combo output paths)
+
+## Distribution plot behavior (analysis)
+
+Per-fold analysis now writes a single high-contrast property distribution plot:
+
+- `property_distribution.png` shows only target-property distributions
+  (for BACE, this is `pIC50`) for train/validation/generated.
+- Generated is drawn semi-transparent with an outline.
+- Train and validation are drawn as high-contrast line histograms so they remain visible when generated dominates.
 
 ## Iteration behavior
 
@@ -104,6 +136,12 @@ Other key paths:
 - `training_output_root`: checkpoints/history output.
 - `artifacts_output_root`: per-iteration data/sampling/logs/manifests.
 
+Combo-only keys:
+
+- `cv_combo.enabled`: enable combo plotting.
+- `cv_combo.only`: run combo-only mode and skip per-fold pipeline.
+- `cv_combo.cross_fold_summary_path`: optional override path for the summary JSON.
+
 ## Heldout usage and scaffold exclusion
 
 Heldout set is used **only for scaffold exclusion**.
@@ -147,6 +185,9 @@ Global run manifest:
 
 - `artifacts_output_root/global_manifest.json`
 
-Additional aggregate (when `analysis.enabled=true`):
+Additional aggregate (when `analysis.enabled=true` and `cv_combo.enabled=true`):
 
 - `artifacts_output_root/cross_fold_analysis_summary.json`
+- `artifacts_output_root/cv_combo/cv_combo_metrics_std.png`
+- `artifacts_output_root/cv_combo/cv_combo_metrics_boxplots.png`
+- `artifacts_output_root/cv_combo/cv_combo_metrics_stats.json`
