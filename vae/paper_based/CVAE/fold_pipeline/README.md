@@ -31,6 +31,25 @@ Behavior in analysis-only mode:
 - The runner writes a cross-fold aggregate file:
   - `artifacts_output_root/cross_fold_analysis_summary.json`
 
+Per-iteration analysis summary now also includes V.U.N:
+
+- `artifacts_output_root/cv_iteration_<k>/analysis/analysis_summary.json`
+- Field: `summary.vun`
+
+`summary.vun` source priority:
+
+1. `generated/quality_summary.csv` (preferred, count-based V.U.N matching sampling stats)
+2. Fallback computed from loaded analysis data (`train` + `generated`) when quality summary is missing
+
+Included keys:
+
+- `source`
+- `quality_summary_csv_path`
+- `quality_run_scope`
+- `quality_counts`
+- `validity`, `uniqueness`, `novelty`, `acceptance_rate`
+- `valid_count`, `unique_count`, `novel_count`
+
 Cross-fold aggregate includes:
 
 - V.U.N metrics aggregated from quality-summary counts (`validity`, `uniqueness`, `novelty`, `acceptance_rate`)

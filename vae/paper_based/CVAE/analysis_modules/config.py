@@ -13,6 +13,7 @@ class AnalysisConfig:
     validation_data_path: Optional[str]
     generated_data_path: str
     output_dir: str
+    quality_summary_data_path: Optional[str] = None
 
     smiles_column: str = 'smiles'
     train_sep: Optional[str] = None

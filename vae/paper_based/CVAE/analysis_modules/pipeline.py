@@ -60,6 +60,192 @@ def _extract_numeric_series(df: pd.DataFrame, col: str | None) -> np.ndarray:
     return vals if vals.size > 0 else np.asarray([], dtype=float)
 
 
+def _coerce_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        raw = str(value).strip()
+        if raw == '':
+            return None
+        return int(float(raw))
+    except Exception:
+        return None
+
+
+def _coerce_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        raw = str(value).strip()
+        if raw == '':
+            return None
+        return float(raw)
+    except Exception:
+        return None
+
+
+def _compute_vun_from_counts(
+    *,
+    total_generated: int,
+    invalid_or_empty: int,
+    discarded_cleanup: int,
+    in_training: int,
+    duplicate: int,
+    accepted: int,
+) -> dict:
+    total = int(total_generated)
+    if total <= 0:
+        return {
+            'validity': 0.0,
+            'uniqueness': 0.0,
+            'novelty': 0.0,
+            'acceptance_rate': 0.0,
+            'valid_count': 0,
+            'unique_count': 0,
+            'novel_count': 0,
+        }
+
+    valid_count = int(total - int(invalid_or_empty) - int(discarded_cleanup))
+    unique_count = int(total - int(duplicate))
+    novel_count = int(total - int(in_training))
+    accepted_count = int(accepted)
+
+    return {
+        'validity': float(valid_count) / float(total),
+        'uniqueness': float(unique_count) / float(total),
+        'novelty': float(novel_count) / float(total),
+        'acceptance_rate': float(accepted_count) / float(total),
+        'valid_count': int(valid_count),
+        'unique_count': int(unique_count),
+        'novel_count': int(novel_count),
+    }
+
+
+def _try_read_vun_from_quality_summary_csv(path: str | None) -> dict | None:
+    if not path:
+        return None
+    if not os.path.isfile(path):
+        return None
+
+    try:
+        quality_df = pd.read_csv(path)
+    except Exception:
+        return None
+    if len(quality_df) == 0:
+        return None
+
+    row = quality_df.iloc[0].to_dict()
+    counts = {
+        'total_generated': _coerce_int(row.get('total_generated')),
+        'invalid_or_empty': _coerce_int(row.get('invalid_or_empty')),
+        'discarded_cleanup': _coerce_int(row.get('discarded_cleanup')),
+        'in_training': _coerce_int(row.get('in_training')),
+        'duplicate': _coerce_int(row.get('duplicate')),
+        'accepted': _coerce_int(row.get('accepted')),
+        'rejected_by_filter': _coerce_int(row.get('rejected_by_filter')),
+        'salt_stripped': _coerce_int(row.get('salt_stripped')),
+        'tautomer_canonicalized': _coerce_int(row.get('tautomer_canonicalized')),
+    }
+    required = ('total_generated', 'invalid_or_empty', 'discarded_cleanup', 'in_training', 'duplicate', 'accepted')
+    has_required_counts = all(counts.get(k) is not None for k in required)
+
+    if has_required_counts:
+        vun = _compute_vun_from_counts(
+            total_generated=int(counts['total_generated']),
+            invalid_or_empty=int(counts['invalid_or_empty']),
+            discarded_cleanup=int(counts['discarded_cleanup']),
+            in_training=int(counts['in_training']),
+            duplicate=int(counts['duplicate']),
+            accepted=int(counts['accepted']),
+        )
+        return {
+            'source': 'quality_summary_csv',
+            'quality_summary_csv_path': os.path.abspath(path),
+            'quality_run_scope': row.get('run_scope'),
+            'quality_counts': {k: int(v) for k, v in counts.items() if v is not None},
+            **vun,
+        }
+
+    validity = _coerce_float(row.get('validity'))
+    uniqueness = _coerce_float(row.get('uniqueness'))
+    novelty = _coerce_float(row.get('novelty'))
+    acceptance_rate = _coerce_float(row.get('acceptance_rate'))
+    if validity is None or uniqueness is None or novelty is None:
+        return None
+
+    return {
+        'source': 'quality_summary_csv_metrics_only',
+        'quality_summary_csv_path': os.path.abspath(path),
+        'quality_run_scope': row.get('run_scope'),
+        'quality_counts': {k: int(v) for k, v in counts.items() if v is not None},
+        'validity': float(validity),
+        'uniqueness': float(uniqueness),
+        'novelty': float(novelty),
+        'acceptance_rate': (None if acceptance_rate is None else float(acceptance_rate)),
+        'valid_count': _coerce_int(row.get('valid_count')),
+        'unique_count': _coerce_int(row.get('unique_count')),
+        'novel_count': _coerce_int(row.get('novel_count')),
+    }
+
+
+def _compute_vun_from_loaded_data(
+    *,
+    train_smiles: list[str],
+    gen_df: pd.DataFrame,
+) -> dict:
+    train_canonical = {
+        c
+        for c in (canonicalize_smiles(s) for s in train_smiles)
+        if c is not None and c != ''
+    }
+
+    is_valid_mask = gen_df['is_valid'].to_numpy(dtype=bool)
+    canonical_generated = gen_df['canonical_smiles'].astype(str).tolist()
+    valid_canonical = [
+        s
+        for s, is_valid in zip(canonical_generated, is_valid_mask)
+        if bool(is_valid) and s and s != 'None' and s != 'nan'
+    ]
+
+    unique_generated = set(valid_canonical)
+    novel_generated = {s for s in unique_generated if s not in train_canonical}
+
+    total = int(len(gen_df))
+    valid_count = int(np.sum(is_valid_mask))
+    unique_count = int(len(unique_generated))
+    novel_count = int(len(novel_generated))
+
+    if total <= 0:
+        validity = 0.0
+        uniqueness = 0.0
+        novelty = 0.0
+    else:
+        validity = float(valid_count) / float(total)
+        uniqueness = float(unique_count) / float(total)
+        novelty = float(novel_count) / float(total)
+
+    return {
+        'source': 'computed_from_analysis_inputs',
+        'quality_summary_csv_path': None,
+        'quality_run_scope': None,
+        'quality_counts': {
+            'total_generated': int(total),
+            'invalid_or_empty': int(max(0, total - valid_count)),
+            'discarded_cleanup': 0,
+            'in_training': int(max(0, total - novel_count)),
+            'duplicate': int(max(0, total - unique_count)),
+            'accepted': int(valid_count),
+        },
+        'validity': float(validity),
+        'uniqueness': float(uniqueness),
+        'novelty': float(novelty),
+        'acceptance_rate': float(validity),
+        'valid_count': int(valid_count),
+        'unique_count': int(unique_count),
+        'novel_count': int(novel_count),
+    }
+
+
 def _compute_mw_from_smiles(df: pd.DataFrame, smiles_col: str) -> np.ndarray:
     if smiles_col not in df.columns:
         return np.asarray([], dtype=float)
@@ -917,6 +1103,21 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     novel = len(gen_scaf_set - train_scaf_set)
     novel_vs_train_validation = len(gen_scaf_set - (train_scaf_set | validation_scaf_set))
 
+    vun_metrics = _try_read_vun_from_quality_summary_csv(cfg.quality_summary_data_path)
+    if vun_metrics is None:
+        vun_metrics = _compute_vun_from_loaded_data(
+            train_smiles=train_smiles,
+            gen_df=gen_df,
+        )
+    _debug_log(
+        cfg,
+        'V.U.N summary -> '
+        f"source={vun_metrics.get('source')}, "
+        f"validity={vun_metrics.get('validity')}, "
+        f"uniqueness={vun_metrics.get('uniqueness')}, "
+        f"novelty={vun_metrics.get('novelty')}",
+    )
+
     summary = {
         'profile_name': cfg.profile_name,
         'train_folder': cfg.train_folder,
@@ -930,6 +1131,23 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
         'num_validation_valid': int(sum(1 for m in validation_mols if m is not None)),
         'num_generated_rows': int(len(gen_df)),
         'num_generated_valid': int(int(gen_df['is_valid'].sum())),
+        'vun': {
+            'source': str(vun_metrics.get('source')),
+            'quality_summary_csv_path': vun_metrics.get('quality_summary_csv_path'),
+            'quality_run_scope': vun_metrics.get('quality_run_scope'),
+            'quality_counts': dict(vun_metrics.get('quality_counts', {})),
+            'validity': float(vun_metrics.get('validity', 0.0)),
+            'uniqueness': float(vun_metrics.get('uniqueness', 0.0)),
+            'novelty': float(vun_metrics.get('novelty', 0.0)),
+            'acceptance_rate': (
+                None
+                if vun_metrics.get('acceptance_rate') is None
+                else float(vun_metrics.get('acceptance_rate'))
+            ),
+            'valid_count': int(vun_metrics.get('valid_count', 0)),
+            'unique_count': int(vun_metrics.get('unique_count', 0)),
+            'novel_count': int(vun_metrics.get('novel_count', 0)),
+        },
         'diversity_score': float(diversity),
         'mean_tanimoto_all_pairs': float(mean_similarity) if not np.isnan(mean_similarity) else None,
         'unique_train_scaffolds': int(len(train_scaf_set)),

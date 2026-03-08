@@ -535,6 +535,7 @@ def _build_analysis_config_for_iteration(
     train_data_csv_path: str,
     validation_csv_path: str,
     generated_csv_path: str,
+    quality_summary_csv_path: Optional[str],
     has_pred_labels: bool,
     label_column: str,
 ) -> dict:
@@ -546,6 +547,7 @@ def _build_analysis_config_for_iteration(
             'train_data_path': train_data_csv_path,
             'validation_data_path': validation_csv_path,
             'generated_data_path': generated_csv_path,
+            'quality_summary_data_path': quality_summary_csv_path,
             'output_dir': os.path.join(fold_dir, 'analysis'),
             'smiles_column': 'smiles',
             'train_sep': ',',
@@ -939,6 +941,7 @@ def main() -> None:
                 train_data_csv_path=merged_train_csv_for_analysis,
                 validation_csv_path=converted.validation_csv,
                 generated_csv_path=sampling_result.generated_csv_path,
+                quality_summary_csv_path=sampling_result.quality_summary_csv_path,
                 has_pred_labels=has_pred_labels,
                 label_column=label_for_analysis,
             )
