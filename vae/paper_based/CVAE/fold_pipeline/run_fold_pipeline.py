@@ -333,7 +333,6 @@ def _write_cross_fold_analysis_summary(
     print(f'[analysis] cross-fold summary written: {out_path}')
     return out_path
 
-
 def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root: str) -> dict:
     """Create cross-fold combo plots and dedicated boxplots for validity, uniqueness,
     novelty, and diversity.
@@ -467,7 +466,6 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
         ax.set_ylabel(metric_title)
         ax.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
 
-        # Build a clean legend manually so all entries always appear.
         legend_handles = [
             Line2D([0], [0], color=color, marker='o', linewidth=1.7, markersize=5.5, label='Fold values'),
             Line2D([0], [0], color='#111111', linestyle='--', linewidth=1.3, label=f'Mean = {mean_val:.4f}'),
@@ -530,7 +528,8 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
 
         have_boxplot_data = True
 
-        # Make the box narrower so the plot looks cleaner and less bulky.
+        # Keep only one visible category label on the x axis.
+        # This comes from tick_labels here, so we do not set ax2.set_xlabel(...) later.
         bp = ax2.boxplot(
             [metric_vals],
             tick_labels=[metric_title],
@@ -544,17 +543,25 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
         bp['medians'][0].set(color='#111111', linewidth=1.6)
         bp['means'][0].set(color='#CC0000', linewidth=1.5, linestyle='--')
 
-        #whiskers are lines from box to most extreme
+        # whiskers are lines from box to most extreme non-outlier points
         for whisker in bp['whiskers']:
             whisker.set(color='#444444', linewidth=1.1)
-        # cap is the horizontal line at the end of the whisker
+
+        # caps are the small horizontal lines at whisker ends
         for cap in bp['caps']:
             cap.set(color='#444444', linewidth=1.1)
-        # flier are the individual points
-        for flier in bp.get('fliers', []):
-            flier.set(marker='o', markersize=6, markerfacecolor=color, markeredgecolor="#EEFF00", alpha=0.9)
 
-    
+        # fliers are outliers
+        for flier in bp.get('fliers', []):
+            flier.set(
+                marker='o',
+                markersize=6,
+                markerfacecolor=color,
+                markeredgecolor='#EEFF00',
+                alpha=0.9,
+            )
+
+        # Put all points at the exact same x position so they line up vertically.
         ax2.scatter(
             np.full(metric_vals.size, 1.0, dtype=float),
             metric_vals,
@@ -575,12 +582,15 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
 
         ax2.set_ylim(y_low, y_high)
         ax2.set_title(f'{metric_title}-cv-iterations', fontsize=16, fontweight='bold')
-        ax2.set_ylabel(metric_title, weight='bold', fontsize=15)
-        ax2.set_xlabel(metric_title, weight='bold', fontsize=15)
+        ax2.set_ylabel(metric_title, fontweight='bold', fontsize=15)
+
+        # Do not set xlabel here, because boxplot tick_labels already provide
+        # the single category label we want on the x axis.
+        # ax2.set_xlabel(metric_title, fontweight='bold', fontsize=15)
+
         ax2.tick_params(axis='both', which='major', labelsize=15, width=1.5, length=7)
         ax2.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
 
-        # Manual legend so median, mean, and points always show correctly.
         legend_handles = [
             Patch(facecolor=color, edgecolor=color, alpha=0.24, label='Interquartile range'),
             Line2D([0], [0], color='#111111', linewidth=1.6, label='Median'),
@@ -614,8 +624,6 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
     print(f'[analysis] cv_combo stats written: {stats_path}')
 
     return {'plot_path': plot_path, 'boxplot_path': boxplot_path, 'stats_path': stats_path}
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Run CV fold iterations: train -> sample -> analysis.')
     parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH)
