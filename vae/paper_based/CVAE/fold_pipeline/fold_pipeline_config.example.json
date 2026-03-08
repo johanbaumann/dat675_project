@@ -120,7 +120,7 @@
     "quality_summary_filename": "quality_summary.csv"
   },
   "analysis": {
-    "enabled": true,
+    "enabled": false,
     "script": "run_viz_pipeline.py",
     "profile": "bace_pic50_10k",
     "overrides": {
@@ -137,7 +137,7 @@
   },
   "cv_combo": {
     "enabled": true,
-    "only": false,
+    "only": true,
     "cross_fold_summary_path": null
   }
 }

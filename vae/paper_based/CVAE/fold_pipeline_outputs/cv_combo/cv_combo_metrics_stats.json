@@ -1,0 +1,118 @@
+{
+  "cross_fold_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cross_fold_analysis_summary.json",
+  "num_folds": 5,
+  "metrics": {
+    "validity": {
+      "count": 5,
+      "mean": 0.33959855202265815,
+      "std": 0.050183441236713776,
+      "stderr": 0.022442717190031623,
+      "per_fold": [
+        {
+          "iteration_name": "cv_iteration_0",
+          "value": 0.38901785714285714
+        },
+        {
+          "iteration_name": "cv_iteration_1",
+          "value": 0.394237895256917
+        },
+        {
+          "iteration_name": "cv_iteration_2",
+          "value": 0.2871373211446741
+        },
+        {
+          "iteration_name": "cv_iteration_3",
+          "value": 0.29702995867768595
+        },
+        {
+          "iteration_name": "cv_iteration_4",
+          "value": 0.33056972789115646
+        }
+      ]
+    },
+    "uniqueness": {
+      "count": 5,
+      "mean": 0.960446194121252,
+      "std": 0.016050403095612484,
+      "stderr": 0.007177958477612514,
+      "per_fold": [
+        {
+          "iteration_name": "cv_iteration_0",
+          "value": 0.9402380952380952
+        },
+        {
+          "iteration_name": "cv_iteration_1",
+          "value": 0.9505311264822134
+        },
+        {
+          "iteration_name": "cv_iteration_2",
+          "value": 0.9771462639109698
+        },
+        {
+          "iteration_name": "cv_iteration_3",
+          "value": 0.9759555785123967
+        },
+        {
+          "iteration_name": "cv_iteration_4",
+          "value": 0.9583599064625851
+        }
+      ]
+    },
+    "novelty": {
+      "count": 5,
+      "mean": 0.9862368526294377,
+      "std": 0.006006001372073124,
+      "stderr": 0.002685965468182502,
+      "per_fold": [
+        {
+          "iteration_name": "cv_iteration_0",
+          "value": 0.9797619047619047
+        },
+        {
+          "iteration_name": "cv_iteration_1",
+          "value": 0.9799592391304348
+        },
+        {
+          "iteration_name": "cv_iteration_2",
+          "value": 0.9909578696343402
+        },
+        {
+          "iteration_name": "cv_iteration_3",
+          "value": 0.9923037190082644
+        },
+        {
+          "iteration_name": "cv_iteration_4",
+          "value": 0.9882015306122449
+        }
+      ]
+    },
+    "diversity_score": {
+      "count": 5,
+      "mean": 0.8375192294354697,
+      "std": 0.001142983278781694,
+      "stderr": 0.0005111576617002921,
+      "per_fold": [
+        {
+          "iteration_name": "cv_iteration_0",
+          "value": 0.8364510587875568
+        },
+        {
+          "iteration_name": "cv_iteration_1",
+          "value": 0.8363877055510829
+        },
+        {
+          "iteration_name": "cv_iteration_2",
+          "value": 0.8384128336372888
+        },
+        {
+          "iteration_name": "cv_iteration_3",
+          "value": 0.8389314991469088
+        },
+        {
+          "iteration_name": "cv_iteration_4",
+          "value": 0.8374130500545116
+        }
+      ]
+    }
+  }
+}
