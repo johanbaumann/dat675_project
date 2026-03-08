@@ -15,31 +15,22 @@
     "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_3.csv",
     "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_4.csv"
   ],
-  "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_train_prop.txt",
-  "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_validation_prop.txt",
-  "training_fold_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\save\\fold_pipeline_runs\\cv_iteration_0",
-  "artifacts_iteration_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_0",
-  "train_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\save\\fold_pipeline_runs\\cv_iteration_0\\train_config.json",
-  "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
+  "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_train_prop.txt",
+  "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_validation_prop.txt",
+  "training_fold_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0",
+  "artifacts_iteration_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0",
+  "train_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\train_config.json",
+  "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
   "sampling_result": {
-    "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
-    "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\save\\fold_pipeline_runs\\cv_iteration_0\\training\\model_best.ckpt-36.pt",
-    "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_0\\generated\\generated.csv",
-    "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_0\\generated\\quality_summary.csv",
+    "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
+    "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
+    "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\generated.csv",
+    "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\quality_summary.csv",
     "num_saved": 10000,
-    "stats": {
-      "total_generated": 33600,
-      "accepted": 10382,
-      "invalid_or_empty": 20529,
-      "discarded_cleanup": 0,
-      "in_training": 680,
-      "duplicate": 2008,
-      "rejected_by_filter": 374,
-      "salt_stripped": 0,
-      "tautomer_canonicalized": 1554
-    }
+    "stats": {}
   },
-  "analysis_enabled": false,
-  "analysis_config_path": null,
-  "completed_unix": 1772711931.5012321
+  "analysis_enabled": true,
+  "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\analysis\\analysis_config.json",
+  "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\analysis\\analysis_summary.json",
+  "completed_unix": 1772967643.0435028
 }

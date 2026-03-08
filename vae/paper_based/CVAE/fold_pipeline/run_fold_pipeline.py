@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import subprocess
@@ -57,6 +58,280 @@ def _write_json(path: str, payload: dict) -> str:
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2)
     return path
+
+
+def _read_first_csv_row(path: str) -> dict:
+    with open(path, 'r', encoding='utf-8', errors='ignore', newline='') as f:
+        reader = csv.DictReader(f)
+        row = next(reader, None)
+    if row is None:
+        raise ValueError(f'CSV has no data rows: {path}')
+    return dict(row)
+
+
+def _count_csv_data_rows(path: str) -> int:
+    with open(path, 'r', encoding='utf-8', errors='ignore', newline='') as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if header is None:
+            return 0
+        return int(sum(1 for _ in reader))
+
+
+def _to_int(value, *, default: int = 0) -> int:
+    if value is None:
+        return int(default)
+    raw = str(value).strip()
+    if raw == '':
+        return int(default)
+    try:
+        return int(float(raw))
+    except Exception:
+        return int(default)
+
+
+def _to_float(value, *, default: Optional[float] = None) -> Optional[float]:
+    if value is None:
+        return default
+    raw = str(value).strip()
+    if raw == '':
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
+def _compute_vun_from_counts(
+    *,
+    total_generated: int,
+    invalid_or_empty: int,
+    discarded_cleanup: int,
+    in_training: int,
+    duplicate: int,
+    accepted: int,
+) -> dict:
+    total = int(total_generated)
+    if total <= 0:
+        return {
+            'validity': 0.0,
+            'uniqueness': 0.0,
+            'novelty': 0.0,
+            'acceptance_rate': 0.0,
+            'valid_count': 0,
+            'unique_count': 0,
+            'novel_count': 0,
+        }
+
+    valid_count = int(total - int(invalid_or_empty) - int(discarded_cleanup))
+    unique_count = int(total - int(duplicate))
+    novel_count = int(total - int(in_training))
+    accepted_count = int(accepted)
+
+    return {
+        'validity': float(valid_count) / float(total),
+        'uniqueness': float(unique_count) / float(total),
+        'novelty': float(novel_count) / float(total),
+        'acceptance_rate': float(accepted_count) / float(total),
+        'valid_count': int(valid_count),
+        'unique_count': int(unique_count),
+        'novel_count': int(novel_count),
+    }
+
+
+def _resolve_existing_sampling_result_for_analysis_only(
+    *,
+    fold_name: str,
+    train_run_dir: str,
+    generated_csv_path: str,
+    quality_summary_csv_path: str,
+) -> SamplingResult:
+    if not os.path.isfile(generated_csv_path):
+        raise RuntimeError(
+            f'{fold_name}: sampling is disabled but no generated CSV was found at: {generated_csv_path}. '
+            'Set sampling.enabled=true to generate molecules first, or point artifacts_output_root to existing outputs.'
+        )
+
+    num_saved = _count_csv_data_rows(generated_csv_path)
+    if int(num_saved) <= 0:
+        raise RuntimeError(
+            f'{fold_name}: sampling is disabled and generated CSV has zero molecules: {generated_csv_path}. '
+            'Hard-failing to avoid running analysis on empty generated data.'
+        )
+
+    if not os.path.isfile(quality_summary_csv_path):
+        print(
+            f'[{fold_name}] NOTE: expected quality summary is missing: {quality_summary_csv_path}. '
+            'Cross-fold V.U.N aggregation will skip this fold unless the file exists.'
+        )
+
+    return SamplingResult(
+        run_dir=os.path.abspath(train_run_dir),
+        checkpoint_path='REUSED_EXISTING_GENERATED_CSV',
+        generated_csv_path=os.path.abspath(generated_csv_path),
+        quality_summary_csv_path=os.path.abspath(quality_summary_csv_path),
+        num_saved=int(num_saved),
+        stats={},
+    )
+
+
+def _write_cross_fold_analysis_summary(
+    *,
+    artifacts_root: str,
+    global_manifest: dict,
+) -> Optional[str]:
+    iterations = list(global_manifest.get('iterations', []))
+    if len(iterations) == 0:
+        return None
+
+    total_generated = 0
+    accepted = 0
+    invalid_or_empty = 0
+    discarded_cleanup = 0
+    in_training = 0
+    duplicate = 0
+    rejected_by_filter = 0
+    salt_stripped = 0
+    tautomer_canonicalized = 0
+
+    diversity_weighted_sum = 0.0
+    diversity_weight_sum = 0
+    mean_tanimoto_weighted_sum = 0.0
+    mean_tanimoto_weight_sum = 0
+
+    per_fold: list[dict] = []
+    folds_with_quality = 0
+    folds_with_diversity = 0
+
+    for fold in iterations:
+        fold_name = str(fold.get('iteration_name', 'unknown_fold'))
+        sampling_result = dict(fold.get('sampling_result', {}) or {})
+        quality_path = str(sampling_result.get('quality_summary_csv_path', '')).strip()
+        generated_rows = int(sampling_result.get('num_saved', 0) or 0)
+
+        fold_row = {
+            'iteration_name': fold_name,
+            'quality_summary_csv_path': quality_path,
+            'generated_rows': int(generated_rows),
+            'validity': None,
+            'uniqueness': None,
+            'novelty': None,
+            'acceptance_rate': None,
+            'diversity_score': None,
+            'mean_tanimoto_all_pairs': None,
+        }
+
+        if quality_path and os.path.isfile(quality_path):
+            row = _read_first_csv_row(quality_path)
+            row_total_generated = _to_int(row.get('total_generated'))
+            row_accepted = _to_int(row.get('accepted'))
+            row_invalid = _to_int(row.get('invalid_or_empty'))
+            row_discarded = _to_int(row.get('discarded_cleanup'))
+            row_in_training = _to_int(row.get('in_training'))
+            row_duplicate = _to_int(row.get('duplicate'))
+            row_rejected = _to_int(row.get('rejected_by_filter'))
+            row_salt = _to_int(row.get('salt_stripped'))
+            row_tautomer = _to_int(row.get('tautomer_canonicalized'))
+
+            total_generated += int(row_total_generated)
+            accepted += int(row_accepted)
+            invalid_or_empty += int(row_invalid)
+            discarded_cleanup += int(row_discarded)
+            in_training += int(row_in_training)
+            duplicate += int(row_duplicate)
+            rejected_by_filter += int(row_rejected)
+            salt_stripped += int(row_salt)
+            tautomer_canonicalized += int(row_tautomer)
+            folds_with_quality += 1
+
+            vun_fold = _compute_vun_from_counts(
+                total_generated=row_total_generated,
+                invalid_or_empty=row_invalid,
+                discarded_cleanup=row_discarded,
+                in_training=row_in_training,
+                duplicate=row_duplicate,
+                accepted=row_accepted,
+            )
+            fold_row['validity'] = float(vun_fold['validity'])
+            fold_row['uniqueness'] = float(vun_fold['uniqueness'])
+            fold_row['novelty'] = float(vun_fold['novelty'])
+            fold_row['acceptance_rate'] = float(vun_fold['acceptance_rate'])
+
+        analysis_summary_path = str(fold.get('analysis_summary_path', '')).strip()
+        if analysis_summary_path and os.path.isfile(analysis_summary_path):
+            payload = _read_json(analysis_summary_path)
+            summary = dict(payload.get('summary', {}) or {})
+            div = _to_float(summary.get('diversity_score'))
+            mean_sim = _to_float(summary.get('mean_tanimoto_all_pairs'))
+            n_rows = _to_int(summary.get('num_generated_rows'), default=generated_rows)
+            if div is not None and n_rows > 0:
+                diversity_weighted_sum += float(div) * float(n_rows)
+                diversity_weight_sum += int(n_rows)
+                fold_row['diversity_score'] = float(div)
+                folds_with_diversity += 1
+            if mean_sim is not None and n_rows > 0:
+                mean_tanimoto_weighted_sum += float(mean_sim) * float(n_rows)
+                mean_tanimoto_weight_sum += int(n_rows)
+                fold_row['mean_tanimoto_all_pairs'] = float(mean_sim)
+
+        per_fold.append(fold_row)
+
+    vun_agg = _compute_vun_from_counts(
+        total_generated=total_generated,
+        invalid_or_empty=invalid_or_empty,
+        discarded_cleanup=discarded_cleanup,
+        in_training=in_training,
+        duplicate=duplicate,
+        accepted=accepted,
+    )
+
+    mean_tanimoto_weighted = (
+        float(mean_tanimoto_weighted_sum) / float(mean_tanimoto_weight_sum)
+        if mean_tanimoto_weight_sum > 0
+        else None
+    )
+    diversity_weighted = (
+        float(diversity_weighted_sum) / float(diversity_weight_sum)
+        if diversity_weight_sum > 0
+        else None
+    )
+
+    payload = {
+        'num_iterations': int(len(iterations)),
+        'num_folds_with_quality_summary': int(folds_with_quality),
+        'num_folds_with_diversity_summary': int(folds_with_diversity),
+        'quality_counts': {
+            'total_generated': int(total_generated),
+            'accepted': int(accepted),
+            'invalid_or_empty': int(invalid_or_empty),
+            'discarded_cleanup': int(discarded_cleanup),
+            'in_training': int(in_training),
+            'duplicate': int(duplicate),
+            'rejected_by_filter': int(rejected_by_filter),
+            'salt_stripped': int(salt_stripped),
+            'tautomer_canonicalized': int(tautomer_canonicalized),
+        },
+        'vun_aggregated': {
+            'validity': float(vun_agg['validity']),
+            'uniqueness': float(vun_agg['uniqueness']),
+            'novelty': float(vun_agg['novelty']),
+            'acceptance_rate': float(vun_agg['acceptance_rate']),
+            'valid_count': int(vun_agg['valid_count']),
+            'unique_count': int(vun_agg['unique_count']),
+            'novel_count': int(vun_agg['novel_count']),
+        },
+        'diversity_aggregated': {
+            # Diversity follows existing analysis definition: diversity = 1 - mean_tanimoto.
+            'weighted_mean_tanimoto_all_pairs': mean_tanimoto_weighted,
+            'weighted_diversity_score': diversity_weighted,
+            'weight_total_generated_rows': int(diversity_weight_sum),
+        },
+        'per_fold': per_fold,
+    }
+
+    out_path = _write_json(os.path.join(artifacts_root, 'cross_fold_analysis_summary.json'), payload)
+    print(f'[analysis] cross-fold summary written: {out_path}')
+    return out_path
 
 
 def _parse_args() -> argparse.Namespace:
@@ -341,6 +616,7 @@ def _print_iteration_end_summary(
     sampling_result,
     analysis_enabled: bool,
     analysis_config_path: Optional[str],
+    analysis_summary_path: Optional[str],
     iteration_manifest_path: str,
 ) -> None:
     print('')
@@ -362,6 +638,7 @@ def _print_iteration_end_summary(
     print(f'[{fold_name}] output.analysis_log         : {os.path.join(logs_dir, "analysis.log")}')
     print(f'[{fold_name}] output.analysis_enabled     : {bool(analysis_enabled)}')
     print(f'[{fold_name}] output.analysis_config_json : {analysis_config_path}')
+    print(f'[{fold_name}] output.analysis_summary_json: {analysis_summary_path}')
     print(f'[{fold_name}] output.iteration_manifest   : {iteration_manifest_path}')
     print('=' * 90)
     print('')
@@ -602,22 +879,26 @@ def main() -> None:
             expected_quality_csv = os.path.abspath(
                 os.path.join(sample_dir, str(sampling_cfg.get('quality_summary_filename', 'quality_summary.csv')))
             )
-            sampling_result = SamplingResult(
-                run_dir=os.path.abspath(train_run_dir_for_sampling),
-                checkpoint_path='SKIPPED_SAMPLING',
-                generated_csv_path=expected_generated_csv,
-                quality_summary_csv_path=expected_quality_csv,
-                num_saved=0,
-                stats={},
-            )
+            if run_analysis:
+                sampling_result = _resolve_existing_sampling_result_for_analysis_only(
+                    fold_name=fold_name,
+                    train_run_dir=train_run_dir_for_sampling,
+                    generated_csv_path=expected_generated_csv,
+                    quality_summary_csv_path=expected_quality_csv,
+                )
+            else:
+                sampling_result = SamplingResult(
+                    run_dir=os.path.abspath(train_run_dir_for_sampling),
+                    checkpoint_path='SKIPPED_SAMPLING',
+                    generated_csv_path=expected_generated_csv,
+                    quality_summary_csv_path=expected_quality_csv,
+                    num_saved=0,
+                    stats={},
+                )
 
         analysis_config_path = None
+        analysis_summary_path = None
         if run_analysis:
-            if str(sampling_result.checkpoint_path).startswith('SKIPPED_'):
-                raise RuntimeError(
-                    f'{fold_name}: analysis enabled but sampling was disabled. '
-                    'Set analysis.enabled=false or enable sampling.'
-                )
             if str(sampling_result.generated_csv_path).startswith('SKIPPED_'):
                 raise RuntimeError(
                     f'{fold_name}: analysis enabled but generated CSV was not saved. '
@@ -636,6 +917,10 @@ def main() -> None:
                 label_column=label_for_analysis,
             )
             analysis_config_path = _write_json(os.path.join(analysis_dir, 'analysis_config.json'), fold_analysis_cfg)
+            analysis_summary_path = os.path.join(
+                analysis_dir,
+                str(fold_analysis_cfg.get('overrides', {}).get('summary_json_filename', 'analysis_summary.json')),
+            )
             print(f'[{fold_name}] wrote analysis config: {analysis_config_path}')
 
             _run_subprocess(
@@ -663,6 +948,7 @@ def main() -> None:
             'sampling_result': asdict(sampling_result),
             'analysis_enabled': run_analysis,
             'analysis_config_path': analysis_config_path,
+            'analysis_summary_path': analysis_summary_path,
             'completed_unix': time.time(),
         }
         iteration_manifest_path = _write_json(os.path.join(fold_dir, 'iteration_manifest.json'), fold_manifest)
@@ -680,12 +966,21 @@ def main() -> None:
             sampling_result=sampling_result,
             analysis_enabled=run_analysis,
             analysis_config_path=analysis_config_path,
+            analysis_summary_path=analysis_summary_path,
             iteration_manifest_path=iteration_manifest_path,
         )
         print(f'[{fold_name}] CV iteration complete and manifest saved')
 
+    cross_fold_summary_path = None
+    if analysis_enabled_global:
+        cross_fold_summary_path = _write_cross_fold_analysis_summary(
+            artifacts_root=artifacts_root,
+            global_manifest=global_manifest,
+        )
+
     global_manifest['finished_unix'] = time.time()
     global_manifest['duration_sec'] = float(global_manifest['finished_unix'] - global_manifest['started_unix'])
+    global_manifest['cross_fold_analysis_summary_path'] = cross_fold_summary_path
     final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
 
     print('\n' + '=' * 90)

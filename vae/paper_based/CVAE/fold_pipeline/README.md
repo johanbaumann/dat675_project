@@ -10,6 +10,33 @@ For each CV iteration:
 4. 10k molecules (or configured `num_unique`) are sampled.
 5. Optional analysis runs.
 
+## Analysis-only mode (no resampling)
+
+You can now run with:
+
+- `train.enabled=false`
+- `sampling.enabled=false`
+- `analysis.enabled=true`
+
+In this mode, the pipeline reuses existing per-fold files from:
+
+- `artifacts_output_root/cv_iteration_<k>/generated/generated.csv`
+- `artifacts_output_root/cv_iteration_<k>/generated/quality_summary.csv`
+
+Behavior in analysis-only mode:
+
+- Per-fold analysis still runs for each discovered CV iteration.
+- A hard fail is triggered if `generated.csv` is missing or has zero data rows.
+- Missing `quality_summary.csv` does not stop per-fold analysis, but that fold is skipped for cross-fold V.U.N aggregation.
+- The runner writes a cross-fold aggregate file:
+  - `artifacts_output_root/cross_fold_analysis_summary.json`
+
+Cross-fold aggregate includes:
+
+- V.U.N metrics aggregated from quality-summary counts (`validity`, `uniqueness`, `novelty`, `acceptance_rate`)
+- Diversity aggregated from per-fold analysis summaries (same definition as analysis pipeline: `1 - mean_tanimoto_all_pairs`)
+- Per-fold metric snapshot table
+
 ## Iteration behavior
 
 If you have `fold_0.csv ... fold_4.csv`, the pipeline creates 5 iterations:
@@ -100,3 +127,7 @@ Training artifacts under `training_output_root/cv_iteration_<k>/training/`.
 Global run manifest:
 
 - `artifacts_output_root/global_manifest.json`
+
+Additional aggregate (when `analysis.enabled=true`):
+
+- `artifacts_output_root/cross_fold_analysis_summary.json`
