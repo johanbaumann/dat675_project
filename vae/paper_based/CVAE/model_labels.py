@@ -48,9 +48,9 @@ CHANGELOG
 class PositionalEncoding(nn.Module):
     """
     Standard sinusoidal positional encoding module, used for the transformer variant of the CVAE.
-    It works by precomputing a fixed positional encoding matrix `pe` of shape (1, max_len, d_model) using sine and cosine functions of different frequencies.
+    It works by precomputing a fixed positional encoding matrix 'pe' of shape (1, max_len, d_model) using sine and cosine functions of different frequencies.
 
-    the number of positions is determined by `max_len` and the dimensionality of the model is determined by `d_model`.
+    the number of positions is determined by 'max_len' and the dimensionality of the model is determined by 'd_model'.
     The number of 10000 is a common choice for the base of the exponential decay in the frequencies, as it allows for a wide range of frequencies to be represented across different dimensions.
     
     

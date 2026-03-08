@@ -193,6 +193,32 @@ def _compute_vun_from_loaded_data(
     train_smiles: list[str],
     gen_df: pd.DataFrame,
 ) -> dict:
+
+    """
+    Compute the V.U.N. metrics (validity, uniqueness, novelty) based on the provided training SMILES and generated DataFrame.
+
+    - C_s = canonical valid smiles
+    - n_s = total generated smiles
+    - D = training set canonical smiles
+
+    V = |C_s| / n_s
+    U = set(C_s) / n_s
+    N = (1- (|C_s ∩ D|/|C_s|))
+
+    V = valid_count / total_generated; 
+    U = unique_count / total_generated
+    N = novel_count / total_generated
+
+    Where:
+    - valid_count: Number of generated molecules that are valid (can be parsed and are not empty).
+    - unique_count: Number of unique valid generated molecules not in the generated set more than once.
+    - novel_count: Number of unique valid generated molecules that are not in the training set.
+
+    
+    """
+
+
+
     train_canonical = {
         c
         for c in (canonicalize_smiles(s) for s in train_smiles)
@@ -220,9 +246,9 @@ def _compute_vun_from_loaded_data(
         uniqueness = 0.0
         novelty = 0.0
     else:
-        validity = float(valid_count) / float(total)
-        uniqueness = float(unique_count) / float(total)
-        novelty = float(novel_count) / float(total)
+        validity = float(valid_count) / float(total) # validity = valid_count / total_generated
+        uniqueness = float(unique_count) / float(total) # uniqueness = unique_count / total_generated
+        novelty = float(novel_count) / float(total) # novelty = novel_count / total_generated
 
     return {
         'source': 'computed_from_analysis_inputs',
@@ -1062,6 +1088,12 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     for j, idx in enumerate(query_valid_idx):
         max_sim[idx] = max_sims_valid[j]
     gen_df['tanimoto_max_to_ref'] = max_sim
+
+
+    #======================================================
+    # NOTE: Diversity is defined as 1 - mean_similarity, where:
+    # mean similarity is the avg of max Tanimoto sim of gen vs train
+    # ========================================================
 
     diversity = float(1.0 - mean_similarity) if not np.isnan(mean_similarity) else 0.0
     gen_df['diversity_score'] = diversity
