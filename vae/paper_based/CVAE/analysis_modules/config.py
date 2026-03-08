@@ -10,17 +10,20 @@ class AnalysisConfig:
     profile_name: str
     train_folder: str
     train_data_path: str
+    validation_data_path: Optional[str]
     generated_data_path: str
     output_dir: str
 
     smiles_column: str = 'smiles'
     train_sep: Optional[str] = None
+    validation_sep: Optional[str] = None
     generated_sep: str = ','
 
     target_property_column: Optional[str] = None
     predicted_property_column: Optional[str] = None
 
     train_max: int = 50_000
+    validation_max: int = 50_000
     generated_max: int = 50_000
     random_seed: int = 42
 
@@ -54,6 +57,7 @@ class AnalysisConfig:
     debug: bool = False
 
     embedding_train_sample: int = 10_000
+    embedding_validation_sample: int = 10_000
     embedding_generated_sample: int = 10_000
 
     chemical_tsne_perplexity: float = 30.0
@@ -86,6 +90,7 @@ DEFAULT_ZINC_PROFILE = AnalysisConfig(
     profile_name='zinc_logp',
     train_folder='save/run_20260224_205844',
     train_data_path='250k_zinc_clean.txt',
+    validation_data_path=None,
     generated_data_path='train_dist_temp_transformer_300k_test.txt',
     output_dir='save/run_20260224_205844/analysis',
     target_property_column='LogP',
@@ -97,6 +102,7 @@ DEFAULT_BACE_PROFILE = AnalysisConfig(
     profile_name='bace_pic50_10k',
     train_folder='save/run_20260226_095012',
     train_data_path='bace_pic50.txt',
+    validation_data_path=None,
     generated_data_path='10k_bace_test.txt',
     output_dir='save/run_20260226_095012/analysis_bace_10k',
     target_property_column='pIC50',

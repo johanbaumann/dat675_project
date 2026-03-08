@@ -42,7 +42,47 @@ def _save_figure(cfg: AnalysisConfig, filename: str, *, dpi: int = 180) -> str:
     return out_path
 
 
-def _maybe_plot_property_distributions(train_df: pd.DataFrame, gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
+def _resolve_by_aliases(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
+    lower_map = {c.lower(): c for c in df.columns}
+    for alias in aliases:
+        if alias in df.columns:
+            return alias
+        found = lower_map.get(alias.lower())
+        if found is not None:
+            return found
+    return None
+
+
+def _extract_numeric_series(df: pd.DataFrame, col: str | None) -> np.ndarray:
+    if not col or col not in df.columns:
+        return np.asarray([], dtype=float)
+    vals = pd.to_numeric(df[col], errors='coerce').dropna().to_numpy(dtype=float)
+    return vals if vals.size > 0 else np.asarray([], dtype=float)
+
+
+def _compute_mw_from_smiles(df: pd.DataFrame, smiles_col: str) -> np.ndarray:
+    if smiles_col not in df.columns:
+        return np.asarray([], dtype=float)
+    out = []
+    for s in df[smiles_col].astype(str).tolist():
+        mol = safe_mol_from_smiles(s)
+        if mol is None:
+            continue
+        try:
+            out.append(float(Descriptors.MolWt(mol)))
+        except Exception:
+            continue
+    if len(out) == 0:
+        return np.asarray([], dtype=float)
+    return np.asarray(out, dtype=float)
+
+
+def _maybe_plot_property_distributions(
+    train_df: pd.DataFrame,
+    validation_df: pd.DataFrame | None,
+    gen_df: pd.DataFrame,
+    cfg: AnalysisConfig,
+) -> None:
     if not bool(cfg.save_distribution_plot):
         _debug_log(cfg, 'Skipping property distribution plots (save_distribution_plot=False).')
         return
@@ -50,53 +90,27 @@ def _maybe_plot_property_distributions(train_df: pd.DataFrame, gen_df: pd.DataFr
     os.makedirs(cfg.output_dir, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    def _resolve_by_aliases(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
-        lower_map = {c.lower(): c for c in df.columns}
-        for alias in aliases:
-            if alias in df.columns:
-                return alias
-            found = lower_map.get(alias.lower())
-            if found is not None:
-                return found
-        return None
-
-    def _extract_numeric_series(df: pd.DataFrame, col: str | None) -> np.ndarray:
-        if not col or col not in df.columns:
-            return np.asarray([], dtype=float)
-        vals = pd.to_numeric(df[col], errors='coerce').dropna().to_numpy(dtype=float)
-        return vals if vals.size > 0 else np.asarray([], dtype=float)
-
-    def _compute_mw_from_smiles(df: pd.DataFrame, smiles_col: str) -> np.ndarray:
-        if smiles_col not in df.columns:
-            return np.asarray([], dtype=float)
-        out = []
-        for s in df[smiles_col].astype(str).tolist():
-            mol = safe_mol_from_smiles(s)
-            if mol is None:
-                continue
-            try:
-                out.append(float(Descriptors.MolWt(mol)))
-            except Exception:
-                continue
-        if len(out) == 0:
-            return np.asarray([], dtype=float)
-        return np.asarray(out, dtype=float)
-
     train_mw_col = _resolve_by_aliases(train_df, ('MW', 'MolWt', 'molecular_weight', 'mw'))
+    val_mw_col = _resolve_by_aliases(validation_df, ('MW', 'MolWt', 'molecular_weight', 'mw')) if validation_df is not None else None
     gen_mw_col = _resolve_by_aliases(gen_df, ('MW', 'MolWt', 'molecular_weight', 'mw'))
 
     train_mw_vals = _extract_numeric_series(train_df, train_mw_col)
+    val_mw_vals = _extract_numeric_series(validation_df, val_mw_col) if validation_df is not None else np.asarray([], dtype=float)
     gen_mw_vals = _extract_numeric_series(gen_df, gen_mw_col)
 
     if train_mw_vals.size == 0:
         train_mw_vals = _compute_mw_from_smiles(train_df, cfg.smiles_column)
+    if validation_df is not None and val_mw_vals.size == 0:
+        val_mw_vals = _compute_mw_from_smiles(validation_df, cfg.smiles_column)
     if gen_mw_vals.size == 0:
         gen_mw_vals = _compute_mw_from_smiles(gen_df, cfg.smiles_column)
 
     if train_mw_vals.size > 0:
-        axes[0].hist(train_mw_vals, bins=80, alpha=0.65, label='Original train')
+        axes[0].hist(train_mw_vals, bins=80, alpha=0.60, label='Train')
+    if val_mw_vals.size > 0:
+        axes[0].hist(val_mw_vals, bins=80, alpha=0.60, label='Validation')
     if gen_mw_vals.size > 0:
-        axes[0].hist(gen_mw_vals, bins=80, alpha=0.65, label='Generated')
+        axes[0].hist(gen_mw_vals, bins=80, alpha=0.60, label='Generated')
     axes[0].set_title('MW distribution')
     axes[0].set_xlabel('MW')
     axes[0].set_ylabel('Count')
@@ -104,36 +118,52 @@ def _maybe_plot_property_distributions(train_df: pd.DataFrame, gen_df: pd.DataFr
         axes[0].legend()
 
     train_target_col = _resolve_property_column(train_df, cfg.target_property_column, role='target')
+    val_target_col = (
+        _resolve_property_column(validation_df, cfg.target_property_column, role='target')
+        if validation_df is not None
+        else None
+    )
     gen_pred_col = _resolve_property_column(gen_df, cfg.predicted_property_column, role='pred')
     gen_target_col = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
 
     train_prop_vals = _extract_numeric_series(train_df, train_target_col)
+    val_prop_vals = _extract_numeric_series(validation_df, val_target_col) if validation_df is not None else np.asarray([], dtype=float)
     gen_prop_col_used = gen_pred_col if gen_pred_col else gen_target_col
     gen_prop_vals = _extract_numeric_series(gen_df, gen_prop_col_used)
     _debug_log(
         cfg,
-        f'Property distribution columns -> train_target={train_target_col!r}, generated_property={gen_prop_col_used!r}',
+        f'Property distribution columns -> train_target={train_target_col!r}, '
+        f'validation_target={val_target_col!r}, generated_property={gen_prop_col_used!r}',
     )
 
     if train_prop_vals.size > 0:
         axes[1].hist(
             train_prop_vals,
             bins=80,
-            alpha=0.65,
-            label=f'Original train ({train_target_col or "target"})',
+            alpha=0.60,
+            label=f'Train ({train_target_col or "target"})',
             color='#0046AB',
+        )
+
+    if val_prop_vals.size > 0:
+        axes[1].hist(
+            val_prop_vals,
+            bins=80,
+            alpha=0.60,
+            label=f'Validation ({val_target_col or "target"})',
+            color='#008B8B',
         )
 
     if gen_prop_vals.size > 0:
         axes[1].hist(
             gen_prop_vals,
             bins=80,
-            alpha=0.65,
+            alpha=0.60,
             label=f'Generated ({gen_prop_col_used or "predicted"})',
             color='#FF8400',
         )
 
-    axes[1].set_title('Property distribution: original train vs generated')
+    axes[1].set_title('Property distribution: train vs validation vs generated')
     axes[1].set_xlabel(gen_prop_col_used or train_target_col or 'Property value')
     axes[1].set_ylabel('Count')
     if len(axes[1].patches) > 0:
@@ -292,30 +322,59 @@ def _safe_tsne_perplexity(desired: float, n_samples: int) -> float:
     return float(max(2.0, min(float(desired), float(n_samples - 1))))
 
 
-def _sample_smiles_for_embeddings(train_df: pd.DataFrame, gen_df: pd.DataFrame, cfg: AnalysisConfig) -> tuple[list[str], pd.DataFrame, list[str], np.ndarray | None]:
+def _sample_smiles_for_embeddings(
+    train_df: pd.DataFrame,
+    validation_df: pd.DataFrame | None,
+    gen_df: pd.DataFrame,
+    cfg: AnalysisConfig,
+) -> tuple[list[str], list[str], list[str], np.ndarray | None]:
     train_sample = train_df.sample(n=min(int(cfg.embedding_train_sample), len(train_df)), random_state=int(cfg.random_seed))
+    validation_sample = None
+    if validation_df is not None and len(validation_df) > 0:
+        validation_sample = validation_df.sample(
+            n=min(int(cfg.embedding_validation_sample), len(validation_df)),
+            random_state=int(cfg.random_seed),
+        )
     gen_sample = gen_df.sample(n=min(int(cfg.embedding_generated_sample), len(gen_df)), random_state=int(cfg.random_seed)).copy()
 
     gen_smiles_col = 'canonical_smiles' if 'canonical_smiles' in gen_sample.columns else cfg.smiles_column
     train_smiles = train_sample[cfg.smiles_column].astype(str).tolist()
+    validation_smiles = (
+        validation_sample[cfg.smiles_column].astype(str).tolist()
+        if validation_sample is not None
+        else []
+    )
     gen_smiles = gen_sample[gen_smiles_col].astype(str).tolist()
     gen_tanimoto = (
         gen_sample['tanimoto_max_to_ref'].to_numpy(dtype=float)
         if 'tanimoto_max_to_ref' in gen_sample.columns
         else None
     )
-    return train_smiles, gen_sample, gen_smiles, gen_tanimoto
+    return train_smiles, validation_smiles, gen_smiles, gen_tanimoto
 
 
-def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
+def _run_chemical_space_embedding(
+    train_df: pd.DataFrame,
+    validation_df: pd.DataFrame | None,
+    gen_df: pd.DataFrame,
+    cfg: AnalysisConfig,
+) -> None:
     if not bool(cfg.run_chemical_space):
         _debug_log(cfg, 'Skipping chemical-space embedding (run_chemical_space=False).')
         return
 
-    train_smiles, _, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(train_df, gen_df, cfg)
+    train_smiles, validation_smiles, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(
+        train_df,
+        validation_df,
+        gen_df,
+        cfg,
+    )
     fp_gen = morgan_fp_generator(radius=cfg.tanimoto_radius, n_bits=cfg.tanimoto_n_bits)
 
     x_train, _ = smiles_list_to_fp_matrix(fp_gen, train_smiles, dtype=np.int8)
+    x_validation = np.zeros((0, int(cfg.tanimoto_n_bits)), dtype=np.int8)
+    if len(validation_smiles) > 0:
+        x_validation, _ = smiles_list_to_fp_matrix(fp_gen, validation_smiles, dtype=np.int8)
     x_gen, gen_valid_mask = smiles_list_to_fp_matrix(fp_gen, gen_smiles, dtype=np.int8)
     if x_train.shape[0] == 0 or x_gen.shape[0] == 0:
         _debug_log(cfg, 'Skipping chemical-space embedding (no valid fingerprint rows in train or generated sample).')
@@ -323,24 +382,49 @@ def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
 
     _debug_log(
         cfg,
-        f'Chemical-space molecules -> train_valid={x_train.shape[0]}, generated_valid={x_gen.shape[0]}',
+        f'Chemical-space molecules -> train_valid={x_train.shape[0]}, '
+        f'validation_valid={x_validation.shape[0]}, generated_valid={x_gen.shape[0]}',
     )
 
     if gen_tanimoto is not None:
         gen_tanimoto = gen_tanimoto[gen_valid_mask]
 
-    x_all = np.vstack([x_train, x_gen])
-    y_class = np.concatenate([
-        np.zeros((x_train.shape[0],), dtype=np.int32),
-        np.ones((x_gen.shape[0],), dtype=np.int32),
-    ])
+    blocks = [x_train]
+    if x_validation.shape[0] > 0:
+        blocks.append(x_validation)
+    blocks.append(x_gen)
+    x_all = np.vstack(blocks)
+
+    idx_train_end = int(x_train.shape[0])
+    idx_validation_end = int(idx_train_end + x_validation.shape[0])
 
     pca_vis = PCA(n_components=2, random_state=int(cfg.random_seed))
     x_pca_2d = pca_vis.fit_transform(x_all)
     fig = plt.figure(figsize=(8, 6))
-    sc = plt.scatter(x_pca_2d[:, 0], x_pca_2d[:, 1], s=int(cfg.embedding_point_size), alpha=0.7, c=y_class, cmap='coolwarm')
-    plt.colorbar(sc, label='Class (0=train, 1=generated)')
-    plt.title('PCA (2D) on Morgan fingerprints colored by Class')
+    plt.scatter(
+        x_pca_2d[:idx_train_end, 0],
+        x_pca_2d[:idx_train_end, 1],
+        s=int(cfg.embedding_point_size),
+        alpha=0.70,
+        label='Train',
+    )
+    if x_validation.shape[0] > 0:
+        plt.scatter(
+            x_pca_2d[idx_train_end:idx_validation_end, 0],
+            x_pca_2d[idx_train_end:idx_validation_end, 1],
+            s=int(cfg.embedding_point_size),
+            alpha=0.70,
+            label='Validation',
+        )
+    plt.scatter(
+        x_pca_2d[idx_validation_end:, 0],
+        x_pca_2d[idx_validation_end:, 1],
+        s=int(cfg.embedding_point_size),
+        alpha=0.70,
+        label='Generated',
+    )
+    plt.legend()
+    plt.title('PCA (2D) on Morgan fingerprints: train vs validation vs generated')
     plt.tight_layout()
     _save_figure(cfg, cfg.chemical_pca_plot_filename, dpi=180)
     plt.close(fig)
@@ -360,14 +444,23 @@ def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
         learning_rate='auto',
     )
     x_tsne = tsne.fit_transform(x_pre)
-    train_tsne = x_tsne[: x_train.shape[0]]
-    gen_tsne = x_tsne[x_train.shape[0] :]
+    train_tsne = x_tsne[:idx_train_end]
+    validation_tsne = x_tsne[idx_train_end:idx_validation_end]
+    gen_tsne = x_tsne[idx_validation_end:]
 
     fig = plt.figure(figsize=(8, 6))
     plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Train')
+    if validation_tsne.shape[0] > 0:
+        plt.scatter(
+            validation_tsne[:, 0],
+            validation_tsne[:, 1],
+            s=int(cfg.embedding_point_size),
+            alpha=float(cfg.embedding_alpha),
+            label='Validation',
+        )
     plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Generated')
     plt.legend()
-    plt.title(f't-SNE on Morgan fingerprints (PCA-{pre_dim} preprojection)')
+    plt.title(f't-SNE on Morgan fingerprints (train/validation/generated, PCA-{pre_dim} preprojection)')
     plt.tight_layout()
     _save_figure(cfg, cfg.chemical_tsne_plot_filename, dpi=180)
     plt.close(fig)
@@ -392,14 +485,27 @@ def _run_chemical_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, 
         plt.close(fig)
 
 
-def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
+def _run_descriptor_space_embedding(
+    train_df: pd.DataFrame,
+    validation_df: pd.DataFrame | None,
+    gen_df: pd.DataFrame,
+    cfg: AnalysisConfig,
+) -> None:
     if not bool(cfg.run_descriptor_space):
         _debug_log(cfg, 'Skipping descriptor-space embedding (run_descriptor_space=False).')
         return
 
-    train_smiles, _, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(train_df, gen_df, cfg)
+    train_smiles, validation_smiles, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(
+        train_df,
+        validation_df,
+        gen_df,
+        cfg,
+    )
 
     x_train_desc, _ = smiles_list_to_descriptor_matrix(train_smiles, cfg.descriptor_names)
+    x_validation_desc = np.zeros((0, len(cfg.descriptor_names)), dtype=np.float32)
+    if len(validation_smiles) > 0:
+        x_validation_desc, _ = smiles_list_to_descriptor_matrix(validation_smiles, cfg.descriptor_names)
     x_gen_desc, gen_desc_valid_mask = smiles_list_to_descriptor_matrix(gen_smiles, cfg.descriptor_names)
     if x_train_desc.shape[0] == 0 or x_gen_desc.shape[0] == 0:
         _debug_log(cfg, 'Skipping descriptor-space embedding (no valid descriptor rows in train or generated sample).')
@@ -407,24 +513,48 @@ def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame
 
     _debug_log(
         cfg,
-        f'Descriptor-space molecules -> train_valid={x_train_desc.shape[0]}, generated_valid={x_gen_desc.shape[0]}',
+        f'Descriptor-space molecules -> train_valid={x_train_desc.shape[0]}, '
+        f'validation_valid={x_validation_desc.shape[0]}, generated_valid={x_gen_desc.shape[0]}',
     )
 
     if gen_tanimoto is not None:
         gen_tanimoto = gen_tanimoto[gen_desc_valid_mask]
 
-    x_all_desc = np.vstack([x_train_desc, x_gen_desc])
+    blocks = [x_train_desc]
+    if x_validation_desc.shape[0] > 0:
+        blocks.append(x_validation_desc)
+    blocks.append(x_gen_desc)
+    x_all_desc = np.vstack(blocks)
     x_all_scaled = StandardScaler().fit_transform(x_all_desc)
-    y_class = np.concatenate([
-        np.zeros((x_train_desc.shape[0],), dtype=np.int32),
-        np.ones((x_gen_desc.shape[0],), dtype=np.int32),
-    ])
+    idx_train_end = int(x_train_desc.shape[0])
+    idx_validation_end = int(idx_train_end + x_validation_desc.shape[0])
 
     pca2 = PCA(n_components=2, random_state=int(cfg.random_seed)).fit_transform(x_all_scaled)
     fig = plt.figure(figsize=(8, 6))
-    sc = plt.scatter(pca2[:, 0], pca2[:, 1], s=int(cfg.embedding_point_size), alpha=0.7, c=y_class, cmap='coolwarm')
-    plt.colorbar(sc, label='Class (0=train, 1=generated)')
-    plt.title('PCA (2D) on RDKit descriptors (scaled)')
+    plt.scatter(
+        pca2[:idx_train_end, 0],
+        pca2[:idx_train_end, 1],
+        s=int(cfg.embedding_point_size),
+        alpha=0.70,
+        label='Train',
+    )
+    if x_validation_desc.shape[0] > 0:
+        plt.scatter(
+            pca2[idx_train_end:idx_validation_end, 0],
+            pca2[idx_train_end:idx_validation_end, 1],
+            s=int(cfg.embedding_point_size),
+            alpha=0.70,
+            label='Validation',
+        )
+    plt.scatter(
+        pca2[idx_validation_end:, 0],
+        pca2[idx_validation_end:, 1],
+        s=int(cfg.embedding_point_size),
+        alpha=0.70,
+        label='Generated',
+    )
+    plt.legend()
+    plt.title('PCA (2D) on RDKit descriptors: train vs validation vs generated')
     plt.tight_layout()
     _save_figure(cfg, cfg.descriptor_pca_plot_filename, dpi=180)
     plt.close(fig)
@@ -443,14 +573,23 @@ def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame
         init='random',
         learning_rate='auto',
     ).fit_transform(x_pre)
-    train_tsne = x_tsne[: x_train_desc.shape[0]]
-    gen_tsne = x_tsne[x_train_desc.shape[0] :]
+    train_tsne = x_tsne[:idx_train_end]
+    validation_tsne = x_tsne[idx_train_end:idx_validation_end]
+    gen_tsne = x_tsne[idx_validation_end:]
 
     fig = plt.figure(figsize=(8, 6))
     plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Train')
+    if validation_tsne.shape[0] > 0:
+        plt.scatter(
+            validation_tsne[:, 0],
+            validation_tsne[:, 1],
+            s=int(cfg.embedding_point_size),
+            alpha=float(cfg.embedding_alpha),
+            label='Validation',
+        )
     plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size), alpha=float(cfg.embedding_alpha), label='Generated')
     plt.legend()
-    plt.title('t-SNE on RDKit descriptors (scaled)')
+    plt.title('t-SNE on RDKit descriptors (scaled): train vs validation vs generated')
     plt.tight_layout()
     _save_figure(cfg, cfg.descriptor_tsne_plot_filename, dpi=180)
     plt.close(fig)
@@ -475,15 +614,25 @@ def _run_descriptor_space_embedding(train_df: pd.DataFrame, gen_df: pd.DataFrame
         plt.close(fig)
 
 
-def _maybe_plot_scaffold_distribution(train_scaffolds: list, gen_scaffolds: list, cfg: AnalysisConfig) -> None:
+def _maybe_plot_scaffold_distribution(
+    train_scaffolds: list,
+    validation_scaffolds: list,
+    gen_scaffolds: list,
+    cfg: AnalysisConfig,
+) -> None:
     if not bool(cfg.save_scaffold_plot):
         _debug_log(cfg, 'Skipping scaffold distribution plot (save_scaffold_plot=False).')
         return
 
     train_counts = scaffold_counts(train_scaffolds)
+    validation_counts = scaffold_counts(validation_scaffolds)
     gen_counts = scaffold_counts(gen_scaffolds)
-    keys = list(set(train_counts.keys()) | set(gen_counts.keys()))
-    keys_sorted = sorted(keys, key=lambda k: train_counts.get(k, 0) + gen_counts.get(k, 0), reverse=True)[:20]
+    keys = list(set(train_counts.keys()) | set(validation_counts.keys()) | set(gen_counts.keys()))
+    keys_sorted = sorted(
+        keys,
+        key=lambda k: train_counts.get(k, 0) + validation_counts.get(k, 0) + gen_counts.get(k, 0),
+        reverse=True,
+    )[:20]
 
     if len(keys_sorted) == 0:
         _debug_log(cfg, 'Skipping scaffold distribution plot (no scaffold keys to plot).')
@@ -492,15 +641,17 @@ def _maybe_plot_scaffold_distribution(train_scaffolds: list, gen_scaffolds: list
     os.makedirs(cfg.output_dir, exist_ok=True)
     x = np.arange(len(keys_sorted))
     train_vals = [train_counts.get(k, 0) for k in keys_sorted]
+    validation_vals = [validation_counts.get(k, 0) for k in keys_sorted]
     gen_vals = [gen_counts.get(k, 0) for k in keys_sorted]
 
     fig, ax = plt.subplots(figsize=(12, 6))
-    width = 0.4
-    ax.bar(x - width / 2.0, train_vals, width=width, label='Train')
-    ax.bar(x + width / 2.0, gen_vals, width=width, label='Generated')
+    width = 0.25
+    ax.bar(x - width, train_vals, width=width, label='Train')
+    ax.bar(x, validation_vals, width=width, label='Validation')
+    ax.bar(x + width, gen_vals, width=width, label='Generated')
     ax.set_xticks(x)
     ax.set_xticklabels(keys_sorted, rotation=90)
-    ax.set_title('Top scaffolds: train vs generated')
+    ax.set_title('Top scaffolds: train vs validation vs generated')
     ax.set_ylabel('Frequency')
     ax.legend()
     plt.tight_layout()
@@ -549,24 +700,44 @@ def _draw_scaffold_grid(scaffold_counts_dict: dict[str, int], out_path: str, n_t
     return {'saved': True, 'num_drawn': int(len(mols))}
 
 
-def _maybe_save_scaffold_grids_and_stats(train_scaffolds: list, gen_scaffolds: list, cfg: AnalysisConfig) -> dict:
+def _maybe_save_scaffold_grids_and_stats(
+    train_scaffolds: list,
+    validation_scaffolds: list,
+    gen_scaffolds: list,
+    cfg: AnalysisConfig,
+) -> dict:
     train_counts = scaffold_counts(train_scaffolds)
+    validation_counts = scaffold_counts(validation_scaffolds)
     gen_counts = scaffold_counts(gen_scaffolds)
     train_set = set(train_counts.keys())
+    validation_set = set(validation_counts.keys())
     gen_set = set(gen_counts.keys())
 
     overlap = int(len(train_set & gen_set))
+    overlap_validation_generated = int(len(validation_set & gen_set))
+    overlap_train_validation = int(len(train_set & validation_set))
     novel = int(len(gen_set - train_set))
+    novel_vs_train_and_validation = int(len(gen_set - (train_set | validation_set)))
 
     novel_gen_counts = {k: int(v) for k, v in gen_counts.items() if k not in train_set}
+    novel_gen_counts_vs_train_validation = {
+        k: int(v) for k, v in gen_counts.items() if k not in (train_set | validation_set)
+    }
 
     scaffold_stats = {
         'unique_train_scaffolds': int(len(train_set)),
+        'unique_validation_scaffolds': int(len(validation_set)),
         'unique_generated_scaffolds': int(len(gen_set)),
         'overlap_scaffolds': overlap,
+        'overlap_train_validation_scaffolds': overlap_train_validation,
+        'overlap_validation_generated_scaffolds': overlap_validation_generated,
         'novel_generated_scaffolds': novel,
+        'novel_generated_scaffolds_vs_train_validation': novel_vs_train_and_validation,
         'top_train_scaffolds': [
             {'scaffold': str(k), 'count': int(v)} for k, v in train_counts.most_common(int(cfg.scaffold_grid_top_n))
+        ],
+        'top_validation_scaffolds': [
+            {'scaffold': str(k), 'count': int(v)} for k, v in validation_counts.most_common(int(cfg.scaffold_grid_top_n))
         ],
         'top_generated_scaffolds': [
             {'scaffold': str(k), 'count': int(v)} for k, v in gen_counts.most_common(int(cfg.scaffold_grid_top_n))
@@ -574,6 +745,12 @@ def _maybe_save_scaffold_grids_and_stats(train_scaffolds: list, gen_scaffolds: l
         'top_novel_generated_scaffolds': [
             {'scaffold': str(k), 'count': int(v)}
             for k, v in sorted(novel_gen_counts.items(), key=lambda x: x[1], reverse=True)[: int(cfg.scaffold_grid_top_n)]
+        ],
+        'top_novel_generated_scaffolds_vs_train_validation': [
+            {'scaffold': str(k), 'count': int(v)}
+            for k, v in sorted(novel_gen_counts_vs_train_validation.items(), key=lambda x: x[1], reverse=True)[
+                : int(cfg.scaffold_grid_top_n)
+            ]
         ],
     }
 
@@ -628,27 +805,55 @@ def _subset_df(df: pd.DataFrame, max_rows: int, seed: int) -> pd.DataFrame:
 def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     os.makedirs(cfg.output_dir, exist_ok=True)
     _debug_log(cfg, f'Output directory ready: {cfg.output_dir}')
-    _debug_log(cfg, f'Inputs -> train_data_path={cfg.train_data_path}, generated_data_path={cfg.generated_data_path}')
+    _debug_log(
+        cfg,
+        f'Inputs -> train_data_path={cfg.train_data_path}, '
+        f'validation_data_path={cfg.validation_data_path}, generated_data_path={cfg.generated_data_path}',
+    )
     _debug_log(cfg, f'Target settings -> target_property_column={cfg.target_property_column!r}, predicted_property_column={cfg.predicted_property_column!r}')
     _maybe_plot_train_loss(cfg)
 
     train_df = load_train_dataframe(cfg.train_data_path, smiles_column=cfg.smiles_column, sep=cfg.train_sep)
+    validation_df = None
+    if cfg.validation_data_path:
+        validation_df = load_train_dataframe(
+            cfg.validation_data_path,
+            smiles_column=cfg.smiles_column,
+            sep=cfg.validation_sep,
+        )
     gen_df = load_generated_dataframe(cfg.generated_data_path, sep=cfg.generated_sep)
-    _debug_log(cfg, f'Loaded rows -> train={len(train_df)}, generated={len(gen_df)}')
+    _debug_log(
+        cfg,
+        f'Loaded rows -> train={len(train_df)}, '
+        f'validation={(0 if validation_df is None else len(validation_df))}, generated={len(gen_df)}',
+    )
 
     if cfg.smiles_column not in train_df.columns:
         raise ValueError(f"Train data is missing smiles column '{cfg.smiles_column}'")
+    if validation_df is not None and cfg.smiles_column not in validation_df.columns:
+        raise ValueError(f"Validation data is missing smiles column '{cfg.smiles_column}'")
     if cfg.smiles_column not in gen_df.columns:
         raise ValueError(f"Generated data is missing smiles column '{cfg.smiles_column}'")
 
     train_df = _subset_df(train_df, cfg.train_max, cfg.random_seed)
+    if validation_df is not None:
+        validation_df = _subset_df(validation_df, cfg.validation_max, cfg.random_seed)
     gen_df = _subset_df(gen_df, cfg.generated_max, cfg.random_seed)
-    _debug_log(cfg, f'Subset rows -> train={len(train_df)} (max={cfg.train_max}), generated={len(gen_df)} (max={cfg.generated_max})')
+    _debug_log(
+        cfg,
+        f'Subset rows -> train={len(train_df)} (max={cfg.train_max}), '
+        f'validation={(0 if validation_df is None else len(validation_df))} (max={cfg.validation_max}), '
+        f'generated={len(gen_df)} (max={cfg.generated_max})',
+    )
 
     train_smiles = train_df[cfg.smiles_column].astype(str).tolist()
+    validation_smiles = (
+        validation_df[cfg.smiles_column].astype(str).tolist() if validation_df is not None else []
+    )
     gen_smiles = gen_df[cfg.smiles_column].astype(str).tolist()
 
     train_mols = [safe_mol_from_smiles(s) for s in train_smiles]
+    validation_mols = [safe_mol_from_smiles(s) for s in validation_smiles]
     gen_mols = [safe_mol_from_smiles(s) for s in gen_smiles]
 
     gen_df = gen_df.copy()
@@ -657,6 +862,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     _debug_log(cfg, f'Validity progress -> valid_generated={int(np.sum(gen_df["is_valid"].to_numpy(dtype=bool)))}/{len(gen_df)}')
 
     train_scaffolds = [safe_murcko_scaffold_smiles(m) for m in train_mols]
+    validation_scaffolds = [safe_murcko_scaffold_smiles(m) for m in validation_mols]
     gen_scaffolds = [safe_murcko_scaffold_smiles(m) for m in gen_mols]
     gen_df['murcko_scaffold_smiles'] = gen_scaffolds
 
@@ -688,35 +894,52 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     gen_df.to_csv(processed_csv_path, index=False)
     _debug_log(cfg, f'Wrote processed CSV: {processed_csv_path}')
 
-    _maybe_plot_property_distributions(train_df, gen_df, cfg)
-    _maybe_plot_scaffold_distribution(train_scaffolds, gen_scaffolds, cfg)
+    _maybe_plot_property_distributions(train_df, validation_df, gen_df, cfg)
+    _maybe_plot_scaffold_distribution(train_scaffolds, validation_scaffolds, gen_scaffolds, cfg)
     _maybe_plot_tanimoto_histogram(gen_df, cfg)
     pred_error_stats = _maybe_plot_prediction_errors(gen_df, cfg)
-    _run_chemical_space_embedding(train_df, gen_df, cfg)
-    _run_descriptor_space_embedding(train_df, gen_df, cfg)
+    _run_chemical_space_embedding(train_df, validation_df, gen_df, cfg)
+    _run_descriptor_space_embedding(train_df, validation_df, gen_df, cfg)
 
-    scaffold_stats = _maybe_save_scaffold_grids_and_stats(train_scaffolds, gen_scaffolds, cfg)
+    scaffold_stats = _maybe_save_scaffold_grids_and_stats(
+        train_scaffolds,
+        validation_scaffolds,
+        gen_scaffolds,
+        cfg,
+    )
 
     train_scaf_set = set(s for s in train_scaffolds if s is not None)
+    validation_scaf_set = set(s for s in validation_scaffolds if s is not None)
     gen_scaf_set = set(s for s in gen_scaffolds if s is not None)
     overlap = len(train_scaf_set & gen_scaf_set)
+    overlap_train_validation = len(train_scaf_set & validation_scaf_set)
+    overlap_validation_generated = len(validation_scaf_set & gen_scaf_set)
     novel = len(gen_scaf_set - train_scaf_set)
+    novel_vs_train_validation = len(gen_scaf_set - (train_scaf_set | validation_scaf_set))
 
     summary = {
         'profile_name': cfg.profile_name,
         'train_folder': cfg.train_folder,
         'train_data_path': cfg.train_data_path,
+        'validation_data_path': cfg.validation_data_path,
         'generated_data_path': cfg.generated_data_path,
         'output_dir': cfg.output_dir,
         'num_train_rows': int(len(train_df)),
+        'num_train_valid': int(sum(1 for m in train_mols if m is not None)),
+        'num_validation_rows': int(0 if validation_df is None else len(validation_df)),
+        'num_validation_valid': int(sum(1 for m in validation_mols if m is not None)),
         'num_generated_rows': int(len(gen_df)),
         'num_generated_valid': int(int(gen_df['is_valid'].sum())),
         'diversity_score': float(diversity),
         'mean_tanimoto_all_pairs': float(mean_similarity) if not np.isnan(mean_similarity) else None,
         'unique_train_scaffolds': int(len(train_scaf_set)),
+        'unique_validation_scaffolds': int(len(validation_scaf_set)),
         'unique_generated_scaffolds': int(len(gen_scaf_set)),
         'overlap_scaffolds': int(overlap),
+        'overlap_train_validation_scaffolds': int(overlap_train_validation),
+        'overlap_validation_generated_scaffolds': int(overlap_validation_generated),
         'novel_generated_scaffolds': int(novel),
+        'novel_generated_scaffolds_vs_train_validation': int(novel_vs_train_validation),
         'processed_csv': processed_csv_path,
         'scaffold_stats_file': scaffold_stats.get('scaffold_stats_file'),
         'train_top_scaffold_grid': scaffold_stats.get('train_top_scaffold_grid', {}).get('saved', False),

@@ -509,12 +509,31 @@ def _resolve_training_run_dir_for_iteration_sampling(
     return expected_train_dir
 
 
+def _merge_csv_files_for_analysis(*, csv_paths: list[str], out_csv_path: str) -> str:
+    if len(csv_paths) == 0:
+        raise ValueError('Cannot merge zero CSV files for analysis train_data_path.')
+    try:
+        import pandas as pd
+    except Exception as e:
+        raise RuntimeError('pandas is required to merge fold training CSV files for analysis.') from e
+
+    frames = []
+    for path in csv_paths:
+        frames.append(pd.read_csv(path))
+
+    merged = pd.concat(frames, axis=0, ignore_index=True, sort=False)
+    os.makedirs(os.path.dirname(out_csv_path), exist_ok=True)
+    merged.to_csv(out_csv_path, index=False)
+    return os.path.abspath(out_csv_path)
+
+
 def _build_analysis_config_for_iteration(
     *,
     analysis_cfg: dict,
     fold_dir: str,
     train_run_dir: str,
-    test_csv_path: str,
+    train_data_csv_path: str,
+    validation_csv_path: str,
     generated_csv_path: str,
     has_pred_labels: bool,
     label_column: str,
@@ -524,11 +543,13 @@ def _build_analysis_config_for_iteration(
     overrides = _deep_update_dict(
         {
             'train_folder': train_run_dir,
-            'train_data_path': test_csv_path,
+            'train_data_path': train_data_csv_path,
+            'validation_data_path': validation_csv_path,
             'generated_data_path': generated_csv_path,
             'output_dir': os.path.join(fold_dir, 'analysis'),
             'smiles_column': 'smiles',
             'train_sep': ',',
+            'validation_sep': ',',
             'generated_sep': ',',
             'target_property_column': str(label_column),
             'predicted_property_column': f'pred_{label_column}' if has_pred_labels else None,
@@ -907,11 +928,16 @@ def main() -> None:
 
             label_for_analysis = label_columns[0] if len(label_columns) > 0 else 'prop_0'
             has_pred_labels = _contains_predicted_column(sampling_result.generated_csv_path, label_for_analysis)
+            merged_train_csv_for_analysis = _merge_csv_files_for_analysis(
+                csv_paths=list(converted.training_csvs),
+                out_csv_path=os.path.join(data_dir, f'{fold_name}_train_merged.csv'),
+            )
             fold_analysis_cfg = _build_analysis_config_for_iteration(
                 analysis_cfg=analysis_cfg,
                 fold_dir=fold_dir,
                 train_run_dir=train_run_dir_for_sampling,
-                test_csv_path=converted.validation_csv,
+                train_data_csv_path=merged_train_csv_for_analysis,
+                validation_csv_path=converted.validation_csv,
                 generated_csv_path=sampling_result.generated_csv_path,
                 has_pred_labels=has_pred_labels,
                 label_column=label_for_analysis,

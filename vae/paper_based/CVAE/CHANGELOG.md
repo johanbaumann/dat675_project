@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- `analysis_modules/pipeline.py`: Analysis visualizations and statistics now support three split targets (`train`, `validation`, `generated`) for fold workflows, including 3-way distribution/scaffold comparisons and PCA/t-SNE legends that show all three sets.
 - `fold_pipeline/run_fold_pipeline.py`: Each CV iteration now prints a compact pre-train split line for quick scanning, e.g. `validation=fold_0 (0/5) | train=[1,2,3,4]`.
 - `fold_pipeline/run_fold_pipeline.py`: Iteration generated outputs now write under `fold_pipeline_outputs/cv_iteration_<k>/generated/` (default molecules CSV at `generated/generated.csv`) for a clearer artifact layout.
 - `fold_pipeline/run_fold_pipeline.py`: iteration debug output now explicitly reports the validation fold index as `index x of n` using the parsed fold filename metadata (not just loop order), and prints parsed training fold indices for every iteration.
@@ -32,6 +33,7 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- `analysis_modules/config.py` / `fold_pipeline/run_fold_pipeline.py`: Added explicit `validation_data_path`/`validation_sep` analysis inputs and fold-run wiring that passes merged training CSV + validation fold CSV into analysis, so per-fold statistics include train, validation, and generated sets.
 - `fold_pipeline/sampling_pipeline.py` / `fold_pipeline/run_fold_pipeline.py`: Added fold-level training-distribution sampling mode (`sampling.run_training_dist`) with per-molecule target sampling (`training_dist_std_scale`, `training_dist_clip_n_std`, `training_dist_seed`) so generated targets are no longer fixed to a single conditioning value across all rows.
 - `fold_pipeline/run_fold_pipeline.py` / `fold_pipeline/fold_pipeline_config.example.json`: Added output-root split controls (`training_output_root`, `artifacts_output_root`) so checkpoints can remain under `save/` while generated outputs/quality summaries/logs are written outside that folder.
 - `fold_pipeline/sampling_pipeline.py`: Added save toggles (`sampling.save_generated_csv`, `sampling.save_quality_summary`) for generated CSV and quality-summary persistence control.
