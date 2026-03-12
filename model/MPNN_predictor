@@ -1,421 +1,706 @@
-import pandas as pd
+import copy
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
+from rdkit import Chem
+from scipy.stats import spearmanr
+from sklearn.metrics import mean_squared_error, r2_score
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GATv2Conv, global_mean_pool, global_max_pool
-from rdkit import Chem
-from sklearn.metrics import mean_squared_error, r2_score
-from pathlib import Path
-from scipy.stats import spearmanr
-import os
-import copy 
+from torch_geometric.nn import GATv2Conv, global_max_pool, global_mean_pool
 
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"current device: {device}")
+# ==================== changelog ====================
+# 2026-03-12
+# - Added a centralized nested CONFIG dictionary for all important settings.
+# - Switched categorical atom/bond fields to one-hot (+unknown) encoding.
+# - Added stronger training stability patches: min-delta early stopping,
+#   configurable monitor metric, gradient clipping, and improved scheduler usage.
+# - Fixed target-column selection logic with explicit real vs synthetic priorities.
+# - Removed duplicate test-set loading and improved fold-level diagnostics printing.
+# - Kept optimization loss as MSE, while early stopping defaults to RMSE.
 
-# get possible node and edge features for reference
-# from rdkit.Chem.rdchem import Atom, Bond
-print("possible_node features: ")
-print(Chem.rdchem.Atom.GetAtomicNum.__doc__)
 
-
-# Node Features: 9D
-HYBRIDIZATION_TO_INT = {
-    Chem.rdchem.HybridizationType.SP: 0,
-    Chem.rdchem.HybridizationType.SP2: 1,
-    Chem.rdchem.HybridizationType.SP3: 2,
-    Chem.rdchem.HybridizationType.SP3D: 3,
-    Chem.rdchem.HybridizationType.SP3D2: 4,
+# ==================== configuration ====================
+CONFIG = {
+	"experiment": {
+		"target_folder": "./0%",  # Change to ./33% or ./67% for other experiments.
+		"actual_test_file": "heldout_testset.csv",
+		"total_folds": 5,
+		"seed": 42,
+	},
+	"data": {
+		"batch_size": 32,
+		"shuffle_train": True,
+		"real_target_column": "pIC50",
+		"synthetic_target_column": "pred_pIC50",
+		"fallback_target_columns": ["target_pIC50", "pred_pIC50"],
+	},
+	"features": {
+		"scale_atomic_mass_by": 100.0,
+	},
+	"model": {
+		"hidden_dim": 256,
+		"num_conv_layers": 3,
+		"heads": 4,
+		"dropout": 0.15,
+	},
+	"optimization": {
+		"learning_rate": 2e-4,
+		"weight_decay": 1e-5,
+		"grad_clip_norm": 10.0,
+	},
+	"scheduler": {
+		"enabled": True,
+		"mode": "min",
+		"factor": 0.5,
+		"patience": 8,
+		"monitor_metric": "rmse",  # rmse/mse/r2/rho
+	},
+	"training": {
+		"num_epochs": 200,
+		"print_every": 1,
+		"early_stopping": {
+			"enabled": True,
+			"monitor_metric": "rmse",  # rmse/mse/r2/rho
+			"patience": 10,
+			"min_delta": 1e-4,
+		},
+	},
 }
 
-CHIRALITY_TO_INT = {
-    Chem.rdchem.ChiralType.CHI_UNSPECIFIED: 0,
-    Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW: 1,
-    Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW: 2,
-    Chem.rdchem.ChiralType.CHI_OTHER: 3,
-}
 
-BOND_STEREO_TO_INT = {
-    Chem.rdchem.BondStereo.STEREONONE: 0,
-    Chem.rdchem.BondStereo.STEREOANY: 1,
-    Chem.rdchem.BondStereo.STEREOZ: 2,
-    Chem.rdchem.BondStereo.STEREOE: 3,
-    Chem.rdchem.BondStereo.STEREOCIS: 4,
-    Chem.rdchem.BondStereo.STEREOTRANS: 5,
-}
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Current device: {device}")
 
-ATOM_FEATURE_DIM = 9
-EDGE_FEATURE_NAMES = [
-    "is_single",
-    "is_double",
-    "is_triple",
-    "is_aromatic",
-    "bond_order",
-    "is_conjugated",
-    "is_in_ring",
-    "stereo",
+
+# ==================== feature spaces ====================
+# These categorical sets are one-hot encoded with an extra "other" bucket.
+HYBRIDIZATION_TYPES = [
+	("sp", Chem.rdchem.HybridizationType.SP),
+	("sp2", Chem.rdchem.HybridizationType.SP2),
+	("sp3", Chem.rdchem.HybridizationType.SP3),
+	("sp3d", Chem.rdchem.HybridizationType.SP3D),
+	("sp3d2", Chem.rdchem.HybridizationType.SP3D2),
 ]
+
+CHIRAL_TYPES = [
+	("chi_unspecified", Chem.rdchem.ChiralType.CHI_UNSPECIFIED),
+	("chi_cw", Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW),
+	("chi_ccw", Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW),
+	("chi_other", Chem.rdchem.ChiralType.CHI_OTHER),
+]
+
+BOND_TYPE_VALUES = [
+	("single", Chem.rdchem.BondType.SINGLE),
+	("double", Chem.rdchem.BondType.DOUBLE),
+	("triple", Chem.rdchem.BondType.TRIPLE),
+	("aromatic", Chem.rdchem.BondType.AROMATIC),
+]
+
+BOND_STEREO_TYPES = [
+	("none", Chem.rdchem.BondStereo.STEREONONE),
+	("any", Chem.rdchem.BondStereo.STEREOANY),
+	("z", Chem.rdchem.BondStereo.STEREOZ),
+	("e", Chem.rdchem.BondStereo.STEREOE),
+	("cis", Chem.rdchem.BondStereo.STEREOCIS),
+	("trans", Chem.rdchem.BondStereo.STEREOTRANS),
+]
+
+
+ATOM_BASE_FEATURE_NAMES = [
+	"atomic_num",
+	"degree",
+	"total_num_hs",
+	"formal_charge",
+	"implicit_valence",
+	"mass_scaled",
+	"is_aromatic",
+	"is_in_ring",
+]
+
+ATOM_FEATURE_NAMES = (
+	ATOM_BASE_FEATURE_NAMES
+	+ [f"hybridization_{name}" for name, _ in HYBRIDIZATION_TYPES]
+	+ ["hybridization_other"]
+	+ [f"chirality_{name}" for name, _ in CHIRAL_TYPES]
+	+ ["chirality_other"]
+)
+
+EDGE_FEATURE_NAMES = (
+	[f"bond_type_{name}" for name, _ in BOND_TYPE_VALUES]
+	+ ["bond_type_other"]
+	+ ["bond_order", "is_conjugated", "is_in_ring"]
+	+ [f"bond_stereo_{name}" for name, _ in BOND_STEREO_TYPES]
+	+ ["bond_stereo_other"]
+)
+
+ATOM_FEATURE_DIM = len(ATOM_FEATURE_NAMES)
 EDGE_FEATURE_DIM = len(EDGE_FEATURE_NAMES)
+CONFIG["features"]["atom_feature_dim"] = ATOM_FEATURE_DIM
+CONFIG["features"]["edge_feature_dim"] = EDGE_FEATURE_DIM
 
+
+def set_seed(seed: int) -> None:
+	np.random.seed(seed)
+	torch.manual_seed(seed)
+	if torch.cuda.is_available():
+		torch.cuda.manual_seed_all(seed)
+
+
+def one_hot_with_unknown(value, allowed_values):
+	encoded = [1 if value == allowed else 0 for allowed in allowed_values]
+	encoded.append(1 if value not in allowed_values else 0)
+	return encoded
+
+
+# ==================== featurization ====================
+# Atom features contain physically meaningful numeric values + one-hot categorical tags.
 def get_atom_features(atom: Chem.rdchem.Atom) -> list:
-    return [
-        atom.GetAtomicNum(),
-        atom.GetDegree(),
-        atom.GetTotalNumHs(),
-        atom.GetFormalCharge(),
-        HYBRIDIZATION_TO_INT.get(atom.GetHybridization(), len(HYBRIDIZATION_TO_INT)),
-        int(atom.GetIsAromatic()),
-        int(atom.IsInRing()),
-        CHIRALITY_TO_INT.get(atom.GetChiralTag(), len(CHIRALITY_TO_INT)),
-        atom.GetValence(Chem.ValenceType.IMPLICIT),
-    ]
+	hybridization_values = [v for _, v in HYBRIDIZATION_TYPES]
+	chirality_values = [v for _, v in CHIRAL_TYPES]
 
-# Edge Features: 8D
-# Chosen bond features:
-# 1. bond type flags (single, double, triple, aromatic)
-# 2. bond order as a numeric value
-# 3. conjugation flag
-# 4. ring-membership flag
-# 5. stereochemistry tag
+	base_features = [
+		float(atom.GetAtomicNum()),
+		float(atom.GetDegree()),
+		float(atom.GetTotalNumHs()),
+		float(atom.GetFormalCharge()),
+		float(atom.GetValence(Chem.ValenceType.IMPLICIT)),
+		float(atom.GetMass()) / CONFIG["features"]["scale_atomic_mass_by"],
+		float(atom.GetIsAromatic()),
+		float(atom.IsInRing()),
+	]
+
+	return (
+		base_features
+		+ one_hot_with_unknown(atom.GetHybridization(), hybridization_values)
+		+ one_hot_with_unknown(atom.GetChiralTag(), chirality_values)
+	)
+
+
+# Bond features also use one-hot categorical fields (+unknown) for stability.
 def get_bond_features(bond: Chem.rdchem.Bond) -> list:
-    bond_type = bond.GetBondType()
-    return [
-        int(bond_type == Chem.rdchem.BondType.SINGLE),
-        int(bond_type == Chem.rdchem.BondType.DOUBLE),
-        int(bond_type == Chem.rdchem.BondType.TRIPLE),
-        int(bond_type == Chem.rdchem.BondType.AROMATIC),
-        bond.GetBondTypeAsDouble(),
-        int(bond.GetIsConjugated()),
-        int(bond.IsInRing()),
-        BOND_STEREO_TO_INT.get(bond.GetStereo(), len(BOND_STEREO_TO_INT)),
-    ]
+	bond_type_values = [v for _, v in BOND_TYPE_VALUES]
+	stereo_values = [v for _, v in BOND_STEREO_TYPES]
+
+	return (
+		one_hot_with_unknown(bond.GetBondType(), bond_type_values)
+		+ [
+			float(bond.GetBondTypeAsDouble()),
+			float(bond.GetIsConjugated()),
+			float(bond.IsInRing()),
+		]
+		+ one_hot_with_unknown(bond.GetStereo(), stereo_values)
+	)
 
 
 def smiles_to_graph(smiles: str, target: float) -> Data:
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return None 
-    
-    node_features = [get_atom_features(atom) for atom in mol.GetAtoms()]
-    x = torch.tensor(node_features, dtype=torch.float)
-    
-    edge_indices = []
-    edge_attrs = []
-    for bond in mol.GetBonds():
-        i = bond.GetBeginAtomIdx()
-        j = bond.GetEndAtomIdx()
-        e_feat = get_bond_features(bond)
-        
-        edge_indices += [[i, j], [j, i]]
-        edge_attrs += [e_feat, e_feat]
-        
-    if len(edge_indices) > 0:
-        edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
-        edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
-    else:
-        edge_index = torch.empty((2, 0), dtype=torch.long)
-        edge_attr = torch.empty((0, EDGE_FEATURE_DIM), dtype=torch.float)
-        
-    y = torch.tensor([[target]], dtype=torch.float)
-    
-    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
+	mol = Chem.MolFromSmiles(smiles)
+	if mol is None:
+		return None
 
-# load dataset
+	node_features = [get_atom_features(atom) for atom in mol.GetAtoms()]
+	x = torch.tensor(node_features, dtype=torch.float)
 
+	edge_indices = []
+	edge_attrs = []
+	for bond in mol.GetBonds():
+		i = bond.GetBeginAtomIdx()
+		j = bond.GetEndAtomIdx()
+		e_feat = get_bond_features(bond)
+
+		edge_indices += [[i, j], [j, i]]
+		edge_attrs += [e_feat, e_feat]
+
+	if edge_indices:
+		edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+		edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
+	else:
+		edge_index = torch.empty((2, 0), dtype=torch.long)
+		edge_attr = torch.empty((0, EDGE_FEATURE_DIM), dtype=torch.float)
+
+	y = torch.tensor([[float(target)]], dtype=torch.float)
+	return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
+
+
+# ==================== data loading ====================
 def get_fold_files(target_dir: str, val_idx: int, total_folds: int = 5):
-    dir_path = Path(target_dir)
-    
-    val_file = dir_path / f"fold_{val_idx}.csv"
-    train_files = []
-    for i in range(total_folds):
-        if i != val_idx:
-            train_files.append(dir_path / f"fold_{i}.csv")
+	dir_path = Path(target_dir)
+	val_file = dir_path / f"fold_{val_idx}.csv"
 
-    synthetic_file = dir_path / f"synthetic_data_iteration_{val_idx}.csv"
-    if synthetic_file.exists():
-        train_files.append(synthetic_file)
-        print(f"{synthetic_file.name} added to training set")
-    else:
-        print(f" no synthetic data")
-        
-    return train_files, val_file
+	train_files = [dir_path / f"fold_{i}.csv" for i in range(total_folds) if i != val_idx]
+
+	synthetic_file = dir_path / f"synthetic_data_iteration_{val_idx}.csv"
+	if synthetic_file.exists():
+		train_files.append(synthetic_file)
+		print(f"  Added synthetic file: {synthetic_file.name}")
+	else:
+		print("  No synthetic file for this fold.")
+
+	return train_files, val_file
+
+
+def choose_target_column(df: pd.DataFrame, file_path: Path) -> str:
+	is_synthetic = file_path.name.startswith("synthetic_data_iteration_")
+
+	if is_synthetic:
+		preferred = [
+			CONFIG["data"]["synthetic_target_column"],
+			*CONFIG["data"]["fallback_target_columns"],
+			CONFIG["data"]["real_target_column"],
+		]
+	else:
+		preferred = [
+			CONFIG["data"]["real_target_column"],
+			*CONFIG["data"]["fallback_target_columns"],
+		]
+
+	for col in preferred:
+		if col in df.columns:
+			return col
+
+	raise ValueError(
+		f"No valid target column found in {file_path}. Tried: {preferred}"
+	)
+
 
 def load_dataset(file_paths):
-    if not isinstance(file_paths, list):
-        file_paths = [file_paths]
-        
-    data_list = []
-    for file_path in file_paths:
-        df = pd.read_csv(file_path)
-        
-        if 'pred_pIC50' in df.columns:
-            target_col = 'pred_pIC50'
-        elif 'pIC50' in df.columns:
-            target_col = 'pIC50'
-        else:
-            raise ValueError(f"in {file_path} can not find 'pIC50' or 'pred_pIC50' ")
+	if not isinstance(file_paths, list):
+		file_paths = [file_paths]
 
-        for _, row in df.iterrows():
-            g = smiles_to_graph(row['smiles'], row[target_col]) 
-            if g is not None:
-                data_list.append(g)
-                
-    return data_list
+	data_list = []
+	for file_path in file_paths:
+		path_obj = Path(file_path)
+		df = pd.read_csv(path_obj)
+		if "smiles" not in df.columns:
+			raise ValueError(f"Missing required 'smiles' column in {path_obj}")
+
+		target_col = choose_target_column(df, path_obj)
+
+		for _, row in df.iterrows():
+			smiles = row["smiles"]
+			target = row[target_col]
+
+			if pd.isna(smiles) or pd.isna(target):
+				continue
+
+			graph = smiles_to_graph(str(smiles), float(target))
+			if graph is not None:
+				data_list.append(graph)
+
+	return data_list
 
 
-# MPNN (GATv2)
+def get_targets_from_graphs(data_list):
+	return np.array([float(data.y.item()) for data in data_list], dtype=np.float32)
+
+
+def baseline_rmse(train_targets: np.ndarray, val_targets: np.ndarray) -> float:
+	train_mean = float(np.mean(train_targets))
+	preds = np.full_like(val_targets, train_mean, dtype=np.float32)
+	return float(np.sqrt(mean_squared_error(val_targets, preds)))
+
+
+def print_fold_data_summary(val_idx: int, train_data, val_data) -> None:
+	train_targets = get_targets_from_graphs(train_data)
+	val_targets = get_targets_from_graphs(val_data)
+	fold_baseline_rmse = baseline_rmse(train_targets, val_targets)
+
+	print(
+		f"[Fold {val_idx}] train_n={len(train_data)} val_n={len(val_data)} "
+		f"train_mean={np.mean(train_targets):.4f} val_mean={np.mean(val_targets):.4f} "
+		f"baseline_rmse={fold_baseline_rmse:.4f}"
+	)
+
+
+# ==================== model ====================
 class GATModel(torch.nn.Module):
-    def __init__(self, node_in_dim, edge_in_dim, hidden_dim,dropout=0.2):
-        super(GATModel, self).__init__()
-        self.conv1 = GATv2Conv(node_in_dim, hidden_dim, heads=4,dropout=dropout, edge_dim=edge_in_dim, concat=False)
-        self.conv2 = GATv2Conv(hidden_dim, hidden_dim, heads=4,dropout=dropout, edge_dim=edge_in_dim, concat=False)
-        self.conv3 = GATv2Conv(hidden_dim, hidden_dim, heads=4,dropout=dropout, edge_dim=edge_in_dim, concat=False)
-        
-        self.fc1 = torch.nn.Linear(hidden_dim * 2, hidden_dim)
-        self.fc2 = torch.nn.Linear(hidden_dim, 1)
-        
-        self.dropout = torch.nn.Dropout(p=dropout)
+	def __init__(
+		self,
+		node_in_dim: int,
+		edge_in_dim: int,
+		hidden_dim: int,
+		num_conv_layers: int,
+		heads: int,
+		dropout: float = 0.2,
+	):
+		super().__init__()
 
-    def forward(self, data):
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-        
-        x = F.elu(self.conv1(x, edge_index, edge_attr))
-        x = F.elu(self.conv2(x, edge_index, edge_attr))
-        x = F.elu(self.conv3(x, edge_index, edge_attr))
-        
-        x_mean = global_mean_pool(x, batch)
-        x_max = global_max_pool(x, batch)
-        x = torch.cat([x_mean, x_max], dim=1)
-        
-        x = F.elu(self.fc1(x))
-        x = self.dropout(x)
-        out = self.fc2(x)
-        return out
-    def count_parameters(model):
-        return sum(p.numel() for p in model.parameters() if p.requires_grad)
-    def print_model_info(model):
-        total_params = GATModel.count_parameters(model)
-        print(f"Total trainable parameters: {total_params}")
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                print(f"{name}: {param.numel()} parameters")
-                #print size 
-                print(f"  shape: {param.shape}")
-                print(f"\n")
-            
-    
-# evaluate
+		if num_conv_layers < 1:
+			raise ValueError("num_conv_layers must be >= 1")
+
+		self.convs = torch.nn.ModuleList()
+		self.convs.append(
+			GATv2Conv(
+				node_in_dim,
+				hidden_dim,
+				heads=heads,
+				dropout=dropout,
+				edge_dim=edge_in_dim,
+				concat=False,
+			)
+		)
+		for _ in range(num_conv_layers - 1):
+			self.convs.append(
+				GATv2Conv(
+					hidden_dim,
+					hidden_dim,
+					heads=heads,
+					dropout=dropout,
+					edge_dim=edge_in_dim,
+					concat=False,
+				)
+			)
+
+		self.fc1 = torch.nn.Linear(hidden_dim * 2, hidden_dim)
+		self.fc2 = torch.nn.Linear(hidden_dim, 1)
+		self.dropout = torch.nn.Dropout(p=dropout)
+
+	def forward(self, data):
+		x, edge_index, edge_attr, batch = (
+			data.x,
+			data.edge_index,
+			data.edge_attr,
+			data.batch,
+		)
+
+		for conv in self.convs:
+			x = F.elu(conv(x, edge_index, edge_attr))
+
+		x_mean = global_mean_pool(x, batch)
+		x_max = global_max_pool(x, batch)
+		x = torch.cat([x_mean, x_max], dim=1)
+
+		x = F.elu(self.fc1(x))
+		x = self.dropout(x)
+		return self.fc2(x)
+
+	@staticmethod
+	def count_parameters(model):
+		return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+	@staticmethod
+	def print_model_info(model):
+		total_params = GATModel.count_parameters(model)
+		print(f"Total trainable parameters: {total_params}")
+		for name, param in model.named_parameters():
+			if param.requires_grad:
+				print(f"  {name}: {param.numel()} params | shape={tuple(param.shape)}")
+
+
+# ==================== training helpers ====================
 def evaluate(model: GATModel, loader: DataLoader) -> tuple:
-    model.eval()
-    y_true, y_pred = [], []
+	model.eval()
+	y_true, y_pred = [], []
 
-    with torch.no_grad():
-        for data in loader:
-            data = data.to(device)
-            out = model(data)
-            y_true.extend(data.y.cpu().numpy().flatten())
-            y_pred.extend(out.cpu().numpy().flatten())
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_true, y_pred)
-    rho = spearmanr(y_true, y_pred)[0]
-    return mse,rmse, r2, rho
+	with torch.no_grad():
+		for data in loader:
+			data = data.to(device)
+			out = model(data)
+			y_true.extend(data.y.cpu().numpy().flatten())
+			y_pred.extend(out.cpu().numpy().flatten())
+
+	mse = mean_squared_error(y_true, y_pred)
+	rmse = float(np.sqrt(mse))
+	r2 = r2_score(y_true, y_pred)
+	rho = spearmanr(y_true, y_pred)[0]
+	return mse, rmse, r2, rho
+
+
+def metric_from_name(metric_name: str, mse: float, rmse: float, r2: float, rho: float) -> float:
+	values = {
+		"mse": mse,
+		"rmse": rmse,
+		"r2": r2,
+		"rho": rho,
+	}
+	if metric_name not in values:
+		raise ValueError(f"Unsupported metric '{metric_name}'. Use one of: {list(values.keys())}")
+	return values[metric_name]
+
+
+def is_improvement(metric_name: str, current: float, best: float, min_delta: float) -> bool:
+	# Lower is better for mse/rmse. Higher is better for r2/rho.
+	if metric_name in {"mse", "rmse"}:
+		return current < (best - min_delta)
+	return current > (best + min_delta)
+
 
 # ==================== main ====================
-
 if __name__ == "__main__":
-    target_folder ='./0%' #change this to your target folder!!!
-    actual_test_file = 'heldout_testset.csv' 
-        
-    print(f"loading test set {actual_test_file} ...")
-    test_data = load_dataset(actual_test_file)
-    test_loader = DataLoader(test_data, batch_size=64, shuffle=False)
+	set_seed(CONFIG["experiment"]["seed"])
 
+	target_folder = CONFIG["experiment"]["target_folder"]
+	actual_test_file = CONFIG["experiment"]["actual_test_file"]
+	total_folds = CONFIG["experiment"]["total_folds"]
 
-    #change parameters here!!!
-    num_epochs = 200
-    batch_size = 64
-    learning_rate = 1e-4
-    patience = 15
-    smallest_improvement = 1e-4
-    dropout = 0.15
-        
-    print(f"Loading test set {actual_test_file} ...")
-    test_data = load_dataset(actual_test_file)
-    test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
+	batch_size = CONFIG["data"]["batch_size"]
+	num_epochs = CONFIG["training"]["num_epochs"]
+	print_every = CONFIG["training"]["print_every"]
 
-    global_best_val_rmse = float('inf')
-    global_best_weights = None
-    best_fold_idx = -1
-    cv_results = []
+	hidden_dim = CONFIG["model"]["hidden_dim"]
+	num_conv_layers = CONFIG["model"]["num_conv_layers"]
+	heads = CONFIG["model"]["heads"]
+	dropout = CONFIG["model"]["dropout"]
 
-    # ============== 5-Fold cross-validation ==============
+	learning_rate = CONFIG["optimization"]["learning_rate"]
+	weight_decay = CONFIG["optimization"]["weight_decay"]
+	grad_clip_norm = CONFIG["optimization"]["grad_clip_norm"]
 
-    # losses as train and test mse for each fold, can be used for plotting learning curves if needed
-    losses = {
-        "fold_0": {},
-        "fold_1": {},
-        "fold_2": {},
-        "fold_3": {},
-        "fold_4": {},
-    }
+	early_stop_cfg = CONFIG["training"]["early_stopping"]
+	early_stop_enabled = early_stop_cfg["enabled"]
+	early_stop_metric = early_stop_cfg["monitor_metric"]
+	early_stop_patience = early_stop_cfg["patience"]
+	early_stop_min_delta = early_stop_cfg["min_delta"]
 
+	scheduler_cfg = CONFIG["scheduler"]
+	scheduler_enabled = scheduler_cfg["enabled"]
+	scheduler_metric = scheduler_cfg["monitor_metric"]
 
+	print("\nFeature summary:")
+	print(f"  Atom feature dim: {ATOM_FEATURE_DIM}")
+	print(f"  Edge feature dim: {EDGE_FEATURE_DIM}")
+	print(f"  Atom features: {ATOM_FEATURE_NAMES}")
+	print(f"  Edge features: {EDGE_FEATURE_NAMES}")
 
+	print(f"\nLoading holdout test set: {actual_test_file}")
+	test_data = load_dataset(actual_test_file)
+	test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
+	global_best_val_rmse = float("inf")
+	global_best_weights = None
+	best_fold_idx = -1
+	cv_results = []
 
+	losses = {f"fold_{i}": {} for i in range(total_folds)}
 
+	print("\n==================== 5-Fold Cross-Validation ====================")
+	for val_idx in range(total_folds):
+		print(f"\n-------------------- Fold {val_idx} (validation) --------------------")
 
+		train_paths, val_path = get_fold_files(target_folder, val_idx, total_folds=total_folds)
+		train_data = load_dataset(train_paths)
+		val_data = load_dataset(val_path)
+		print_fold_data_summary(val_idx, train_data, val_data)
 
+		train_loader = DataLoader(
+			train_data,
+			batch_size=batch_size,
+			shuffle=CONFIG["data"]["shuffle_train"],
+		)
+		val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
 
-    for val_idx in range(5):
-        print(f"\n{'-'*20} Fold {val_idx} as validation set{'-'*20}")
-            
-        train_paths, val_path = get_fold_files(target_folder, val_idx)
-        train_data = load_dataset(train_paths)
-        val_data = load_dataset(val_path)
-            
-        train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
-            
-        model = GATModel(node_in_dim=ATOM_FEATURE_DIM, edge_in_dim=EDGE_FEATURE_DIM, hidden_dim=128, dropout=dropout).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-        criterion = torch.nn.MSELoss()
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+		model = GATModel(
+			node_in_dim=ATOM_FEATURE_DIM,
+			edge_in_dim=EDGE_FEATURE_DIM,
+			hidden_dim=hidden_dim,
+			num_conv_layers=num_conv_layers,
+			heads=heads,
+			dropout=dropout,
+		).to(device)
 
-        print(f"Model initialized for Fold {val_idx}:")
-        #GATModel.print_model_info(model)
-            
-        best_val_mse = float('inf')
-        best_val_rmse = float('inf')
-        best_val_r2 = -float('inf')
-        best_val_rho = -float('inf')
-        best_epoch = 0
-        best_model_weights = None
-        
-        train_losses = []
-        val_losses = []
+		optimizer = torch.optim.Adam(
+			model.parameters(), lr=learning_rate, weight_decay=weight_decay
+		)
+		criterion = torch.nn.MSELoss()
 
-        epochs_wo_improv = 0
+		scheduler = None
+		if scheduler_enabled:
+			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+				optimizer,
+				mode=scheduler_cfg["mode"],
+				factor=scheduler_cfg["factor"],
+				patience=scheduler_cfg["patience"],
+			)
 
-        for epoch in range(1, num_epochs + 1):
-            model.train()
-            train_loss = 0
-                
-            for data in train_loader:
-                data = data.to(device)
-                optimizer.zero_grad()
-                out = model(data)
-                    
-                loss = criterion(out.view(-1), data.y.view(-1))
-                loss.backward()
-                optimizer.step()
-                train_loss += loss.item() * data.num_graphs
-                    
-            train_loss /= len(train_loader.dataset)
-            val_mse,val_rmse, val_r2, val_rho = evaluate(model, val_loader)
-                
-            if val_rmse < best_val_rmse:
-                best_val_mse = val_mse
-                best_val_rmse = val_rmse
-                best_val_r2 = val_r2
-                best_val_rho = val_rho
-                best_epoch = epoch
-                best_model_weights = copy.deepcopy(model.state_dict())
-                epochs_wo_improv = 0
-            else:
-                epochs_wo_improv += 1
+		print(
+			f"[Fold {val_idx}] model params={GATModel.count_parameters(model)} "
+			f"| lr={learning_rate:.2e} | dropout={dropout:.2f}"
+		)
 
+		best_val_mse = float("inf")
+		best_val_rmse = float("inf")
+		best_val_r2 = -float("inf")
+		best_val_rho = -float("inf")
+		best_epoch = 0
+		best_model_weights = None
 
+		if early_stop_metric in {"mse", "rmse"}:
+			best_monitor_value = float("inf")
+		else:
+			best_monitor_value = -float("inf")
 
+		train_losses = []
+		val_losses = []
+		epochs_wo_improv = 0
 
-            if epoch % 1 == 0:
-                print(f"Epoch {epoch:03d} | Train Loss (MSE): {train_loss:.4f} | Val MSE: {val_mse:.4f} | lr={optimizer.param_groups[0]['lr']:.2e} | Val RMSE: {val_rmse:.4f} | Val R2: {val_r2:.4f} | Val Rho: {val_rho:.4f}")
-            scheduler.step(val_mse)
-            train_losses.append(train_loss)
-            val_losses.append(val_mse)
+		for epoch in range(1, num_epochs + 1):
+			model.train()
+			train_loss = 0.0
 
-            if epochs_wo_improv >= patience:
-                print(f"Early stopping at epoch {epoch} due to no improvement in Val RMSE for {patience} consecutive epochs.")
-                break
+			for batch in train_loader:
+				batch = batch.to(device)
+				optimizer.zero_grad()
+				out = model(batch)
 
+				loss = criterion(out.view(-1), batch.y.view(-1))
+				loss.backward()
 
-        print(f"Fold {val_idx} best performance at Epoch {best_epoch} -> Val RMSE: {best_val_rmse:.4f}, Val R2: {best_val_r2:.4f}, Val Rho: {best_val_rho:.4f}")
-        cv_results.append((best_val_mse, best_val_rmse, best_val_r2, best_val_rho))
-        
-        if best_val_rmse < global_best_val_rmse:
-            global_best_val_rmse = best_val_rmse
-            global_best_weights = copy.deepcopy(best_model_weights)
-            best_fold_idx = val_idx
-            print(f"The best from Fold {val_idx}")
-        losses[f"fold_{val_idx}"] = {
-            "train": train_losses,
-            "val": val_losses
-        }
+				if grad_clip_norm and grad_clip_norm > 0:
+					torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
 
-    # ============== Holdout test ==============
-    print(f"\n{'-'*20} Holdout Set Testing {'-'*20}")
-    print(f"Loading best model from Fold {best_fold_idx} (Val RMSE: {global_best_val_rmse:.4f})...")
-        
-    model.load_state_dict(global_best_weights)
-    test_mse, test_rmse, test_r2, test_rho = evaluate(model, test_loader)
-    print(f"Final Holdout set -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, R2: {test_r2:.4f}, Rho: {test_rho:.4f}")
+				optimizer.step()
+				train_loss += loss.item() * batch.num_graphs
 
+			train_loss /= len(train_loader.dataset)
+			val_mse, val_rmse, val_r2, val_rho = evaluate(model, val_loader)
 
-    # ==================== 5-Fold result summary ====================
-    print(f"\n{'-'*20} 5-Fold final results {'-'*20}")
-    summary_data = []
-        
-    for i in range(5):
-        v_mse, v_rmse, v_r2, v_rho = cv_results[i]
-        summary_data.append({
-                'Stage': f"Fold_{i}_Val",
-                'MSE': v_mse,
-                'RMSE': v_rmse,
-                'R2': v_r2,
-                'Rho': v_rho
-            })
-    avg_val_mse = np.mean([res[0] for res in cv_results])
-    avg_val_rmse = np.mean([res[1] for res in cv_results])
-    avg_val_r2   = np.mean([res[2] for res in cv_results])
-    avg_val_rho  = np.mean([res[3] for res in cv_results])
+			current_monitor = metric_from_name(
+				early_stop_metric, val_mse, val_rmse, val_r2, val_rho
+			)
 
-    summary_data.append({
-            'Stage': "Average_Val",
-            'MSE': avg_val_mse,
-            'RMSE': avg_val_rmse,
-            'R2': avg_val_r2,
-            'Rho': avg_val_rho
-        })
-        
-    summary_data.append({
-            'Stage': f"Holdout_Test (Model from Fold_{best_fold_idx})",
-            'MSE': test_mse,
-            'RMSE': test_rmse,
-            'R2': test_r2,
-            'Rho': test_rho
-        })
-        
-    df_results = pd.DataFrame(summary_data)
-    print(df_results.to_string(index=False))
-        
-    target_path_obj = Path(target_folder)
-    folder_name = target_path_obj.name if target_folder != '.' else 'default_experiment'
+			if is_improvement(
+				early_stop_metric, current_monitor, best_monitor_value, early_stop_min_delta
+			):
+				best_monitor_value = current_monitor
+				best_val_mse = val_mse
+				best_val_rmse = val_rmse
+				best_val_r2 = val_r2
+				best_val_rho = val_rho
+				best_epoch = epoch
+				best_model_weights = copy.deepcopy(model.state_dict())
+				epochs_wo_improv = 0
+			else:
+				epochs_wo_improv += 1
 
-    save_path = target_path_obj / f"MPNN_results_{folder_name}.csv"
+			if scheduler is not None:
+				scheduler_value = metric_from_name(
+					scheduler_metric, val_mse, val_rmse, val_r2, val_rho
+				)
+				scheduler.step(scheduler_value)
 
-    df_results.to_csv(save_path, index=False)
-    print(f"save to: {save_path.resolve()}")
+			train_losses.append(train_loss)
+			val_losses.append(val_mse)
 
-    with open(target_path_obj / f"MPNN_losses_{folder_name}.txt", 'w') as f:
-        for fold, loss_dict in losses.items():
-            df = pd.DataFrame(loss_dict)
-            f.write(f"{fold}:\n")
-            f.write(df.to_string(index=False))
-            f.write("\n\n")
-    print(f"losses saved to: {(target_path_obj / f'MPNN_losses_{folder_name}.txt').resolve()}")
+			if epoch % print_every == 0:
+				print(
+					f"[Fold {val_idx}][Epoch {epoch:03d}] "
+					f"train_mse={train_loss:.4f} "
+					f"val_mse={val_mse:.4f} val_rmse={val_rmse:.4f} "
+					f"val_r2={val_r2:.4f} val_rho={val_rho:.4f} "
+					f"lr={optimizer.param_groups[0]['lr']:.2e} "
+					f"best_val_rmse={best_val_rmse:.4f} "
+					f"no_improve={epochs_wo_improv}"
+				)
 
+			if early_stop_enabled and epochs_wo_improv >= early_stop_patience:
+				print(
+					f"[Fold {val_idx}] early stopping at epoch {epoch} "
+					f"(monitor={early_stop_metric}, patience={early_stop_patience}, "
+					f"min_delta={early_stop_min_delta})"
+				)
+				break
 
+		print(
+			f"[Fold {val_idx}] best epoch={best_epoch} | "
+			f"val_rmse={best_val_rmse:.4f} val_r2={best_val_r2:.4f} val_rho={best_val_rho:.4f}"
+		)
+
+		cv_results.append((best_val_mse, best_val_rmse, best_val_r2, best_val_rho))
+
+		if best_val_rmse < global_best_val_rmse:
+			global_best_val_rmse = best_val_rmse
+			global_best_weights = copy.deepcopy(best_model_weights)
+			best_fold_idx = val_idx
+			print(f"[Fold {val_idx}] is current global best.")
+
+		losses[f"fold_{val_idx}"] = {
+			"train": train_losses,
+			"val": val_losses,
+		}
+
+	if global_best_weights is None:
+		raise RuntimeError("Training finished without storing any best model weights.")
+
+	print("\n-------------------- Holdout Evaluation --------------------")
+	print(
+		f"Loading global-best model from fold {best_fold_idx} "
+		f"(val_rmse={global_best_val_rmse:.4f})"
+	)
+
+	best_model = GATModel(
+		node_in_dim=ATOM_FEATURE_DIM,
+		edge_in_dim=EDGE_FEATURE_DIM,
+		hidden_dim=hidden_dim,
+		num_conv_layers=num_conv_layers,
+		heads=heads,
+		dropout=dropout,
+	).to(device)
+	best_model.load_state_dict(global_best_weights)
+
+	test_mse, test_rmse, test_r2, test_rho = evaluate(best_model, test_loader)
+	print(
+		f"Holdout -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, "
+		f"R2: {test_r2:.4f}, Rho: {test_rho:.4f}"
+	)
+
+	print("\n-------------------- Final CV Summary --------------------")
+	summary_data = []
+	for i in range(total_folds):
+		v_mse, v_rmse, v_r2, v_rho = cv_results[i]
+		summary_data.append(
+			{
+				"Stage": f"Fold_{i}_Val",
+				"MSE": v_mse,
+				"RMSE": v_rmse,
+				"R2": v_r2,
+				"Rho": v_rho,
+			}
+		)
+
+	avg_val_mse = float(np.mean([res[0] for res in cv_results]))
+	avg_val_rmse = float(np.mean([res[1] for res in cv_results]))
+	avg_val_r2 = float(np.mean([res[2] for res in cv_results]))
+	avg_val_rho = float(np.mean([res[3] for res in cv_results]))
+
+	summary_data.append(
+		{
+			"Stage": "Average_Val",
+			"MSE": avg_val_mse,
+			"RMSE": avg_val_rmse,
+			"R2": avg_val_r2,
+			"Rho": avg_val_rho,
+		}
+	)
+	summary_data.append(
+		{
+			"Stage": f"Holdout_Test (Model from Fold_{best_fold_idx})",
+			"MSE": test_mse,
+			"RMSE": test_rmse,
+			"R2": test_r2,
+			"Rho": test_rho,
+		}
+	)
+
+	df_results = pd.DataFrame(summary_data)
+	print(df_results.to_string(index=False))
+
+	target_path_obj = Path(target_folder)
+	folder_name = target_path_obj.name if target_folder != "." else "default_experiment"
+
+	save_path = target_path_obj / f"MPNN_results_{folder_name}.csv"
+	df_results.to_csv(save_path, index=False)
+	print(f"Saved results to: {save_path.resolve()}")
+
+	loss_path = target_path_obj / f"MPNN_losses_{folder_name}.txt"
+	with open(loss_path, "w", encoding="utf-8") as f:
+		for fold, loss_dict in losses.items():
+			df = pd.DataFrame(loss_dict)
+			f.write(f"{fold}:\n")
+			f.write(df.to_string(index=False))
+			f.write("\n\n")
+
+	print(f"Saved learning curves to: {loss_path.resolve()}")
