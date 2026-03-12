@@ -22,6 +22,8 @@ from torch_geometric.nn import GATv2Conv, global_max_pool, global_mean_pool
 # - Fixed target-column selection logic with explicit real vs synthetic priorities.
 # - Removed duplicate test-set loading and improved fold-level diagnostics printing.
 # - Kept optimization loss as MSE, while early stopping defaults to RMSE.
+# - Added configurable residual connections and per-conv normalization blocks.
+# - Standardized the exported CV summary CSV columns to match actual_mpnn.py.
 
 
 # ==================== configuration ====================
@@ -41,30 +43,32 @@ CONFIG = {
 		"fallback_target_columns": ["target_pIC50", "pred_pIC50"],
 	},
 	"features": {
-		"scale_atomic_mass_by": 100.0,
+		"scale_atomic_mass_by": 100.0, # to keep atomic mass in a similar range as other features
 		"categorical_encoding_mode": "one_hot",  # one_hot or index
 	},
 	"model": {
-		"hidden_dim": 256,
-		"num_conv_layers": 3,
-		"heads": 8,
-		"dropout": 0.15,
-		"ffnn_hidden_layers": [128,256,128],  # Example: [128, 256, 512], or [] for direct output.
+		"hidden_dim": 128, # hidden dimension for GAT layers and FFN layers
+		"num_conv_layers": 3, # of GAT layers (message-passing steps)
+		"heads": 4,
+		"dropout": 0.2,
+		"residual": True,
+		"normalization": "layernorm",  # layernorm, batchnorm1d, or none
+		"ffnn_hidden_layers": [128,64],  # Example: [128, 256, 512], or [] for direct output.
 	},
 	"optimization": {
-		"learning_rate": 5e-4,
-		"weight_decay": 1e-5,
-		"grad_clip_norm": 20.0,
+		"learning_rate": 3e-4,
+		"weight_decay": 1e-4,
+		"grad_clip_norm": 10.0,
 	},
 	"scheduler": {
 		"enabled": True,
 		"mode": "min",
-		"factor": 0.85,
-		"patience": 3,
-		"monitor_metric": "mse",  # rmse/mse/r2/rho
+		"factor": 0.7,
+		"patience": 4,
+		"monitor_metric": "rmse",  # rmse/mse/r2/rho
 	},
 	"training": {
-		"num_epochs": 200,
+		"num_epochs": 150,
 		"print_every": 1,
 		"early_stopping": {
 			"enabled": True,
@@ -356,6 +360,10 @@ def baseline_rmse(train_targets: np.ndarray, val_targets: np.ndarray) -> float:
 	return float(np.sqrt(mean_squared_error(val_targets, preds)))
 
 
+def safe_nanmean(values) -> float:
+	return float(np.nanmean(np.asarray(values, dtype=np.float64)))
+
+
 def print_fold_data_summary(val_idx: int, train_data, val_data) -> None:
 	train_targets = get_targets_from_graphs(train_data)
 	val_targets = get_targets_from_graphs(val_data)
@@ -378,6 +386,8 @@ class GATModel(torch.nn.Module):
 		num_conv_layers: int,
 		heads: int,
 		ffnn_hidden_layers,
+		residual: bool = True,
+		normalization: str = "layernorm",
 		dropout: float = 0.2,
 	):
 		super().__init__()
@@ -385,21 +395,23 @@ class GATModel(torch.nn.Module):
 		if num_conv_layers < 1:
 			raise ValueError("num_conv_layers must be >= 1")
 
-		self.convs = torch.nn.ModuleList()
-		self.convs.append(
-			GATv2Conv(
-				node_in_dim,
-				hidden_dim,
-				heads=heads,
-				dropout=dropout,
-				edge_dim=edge_in_dim,
-				concat=False,
+		normalization = str(normalization).lower()
+		if normalization not in {"layernorm", "batchnorm1d", "none"}:
+			raise ValueError(
+				"normalization must be 'layernorm', 'batchnorm1d', or 'none'."
 			)
-		)
-		for _ in range(num_conv_layers - 1):
+
+		self.residual = bool(residual)
+		self.normalization = normalization
+
+		self.convs = torch.nn.ModuleList()
+		self.norm_layers = torch.nn.ModuleList()
+		self.residual_projections = torch.nn.ModuleList()
+		conv_in_dim = node_in_dim
+		for _ in range(num_conv_layers):
 			self.convs.append(
 				GATv2Conv(
-					hidden_dim,
+					conv_in_dim,
 					hidden_dim,
 					heads=heads,
 					dropout=dropout,
@@ -407,6 +419,14 @@ class GATModel(torch.nn.Module):
 					concat=False,
 				)
 			)
+			self.norm_layers.append(self._build_norm_layer(hidden_dim, normalization))
+			if conv_in_dim == hidden_dim:
+				self.residual_projections.append(torch.nn.Identity())
+			else:
+				self.residual_projections.append(
+					torch.nn.Linear(conv_in_dim, hidden_dim, bias=False)
+				)
+			conv_in_dim = hidden_dim
 
 		if ffnn_hidden_layers is None:
 			ffnn_hidden_layers = [hidden_dim]
@@ -422,7 +442,15 @@ class GATModel(torch.nn.Module):
 			ffnn_in_dim = layer_dim
 
 		self.output_layer = torch.nn.Linear(ffnn_in_dim, 1)
-		self.dropout = torch.nn.Dropout(p=dropout)
+		self.dropout_layer = torch.nn.Dropout(p=dropout)
+
+	@staticmethod
+	def _build_norm_layer(hidden_dim: int, normalization: str) -> torch.nn.Module:
+		if normalization == "layernorm":
+			return torch.nn.LayerNorm(hidden_dim)
+		if normalization == "batchnorm1d":
+			return torch.nn.BatchNorm1d(hidden_dim)
+		return torch.nn.Identity()
 
 	def forward(self, data):
 		x, edge_index, edge_attr, batch = (
@@ -432,8 +460,18 @@ class GATModel(torch.nn.Module):
 			data.batch,
 		)
 
-		for conv in self.convs:
-			x = F.elu(conv(x, edge_index, edge_attr))
+		for conv, norm_layer, residual_projection in zip(
+			self.convs,
+			self.norm_layers,
+			self.residual_projections,
+		):
+			x_in = x
+			x = conv(x, edge_index, edge_attr)
+			x = F.elu(x)
+			x = norm_layer(x)
+			if self.residual:
+				x = x + residual_projection(x_in)
+			x = self.dropout_layer(x)
 
 		x_mean = global_mean_pool(x, batch)
 		x_max = global_max_pool(x, batch)
@@ -441,7 +479,7 @@ class GATModel(torch.nn.Module):
 
 		for layer in self.ffnn_layers:
 			x = F.elu(layer(x))
-			x = self.dropout(x)
+			x = self.dropout_layer(x)
 		return self.output_layer(x)
 
 	@staticmethod
@@ -488,6 +526,18 @@ def metric_from_name(metric_name: str, mse: float, rmse: float, r2: float, rho: 
 	return values[metric_name]
 
 
+def metric_description(metric_name: str) -> str:
+	descriptions = {
+		"mse": "Validation mean squared error; lower is better.",
+		"rmse": "Validation root mean squared error; lower is better.",
+		"r2": "Validation R2 score; higher is better.",
+		"rho": "Validation Spearman rank correlation; higher is better.",
+	}
+	if metric_name not in descriptions:
+		raise ValueError(f"Unsupported metric '{metric_name}'. Use one of: {list(descriptions.keys())}")
+	return descriptions[metric_name]
+
+
 def is_improvement(metric_name: str, current: float, best: float, min_delta: float) -> bool:
 	# Lower is better for mse/rmse. Higher is better for r2/rho.
 	if metric_name in {"mse", "rmse"}:
@@ -497,285 +547,323 @@ def is_improvement(metric_name: str, current: float, best: float, min_delta: flo
 
 # ==================== main ====================
 if __name__ == "__main__":
-    set_seed(CONFIG["experiment"]["seed"])
+	set_seed(CONFIG["experiment"]["seed"])
 
-    target_folder = CONFIG["experiment"]["target_folder"]
-    actual_test_file = CONFIG["experiment"]["actual_test_file"]
-    total_folds = CONFIG["experiment"]["total_folds"]
-    output_weight_path = CONFIG["experiment"]["weight_save_path"]
-    batch_size = CONFIG["data"]["batch_size"]
-    num_epochs = CONFIG["training"]["num_epochs"]
-    print_every = CONFIG["training"]["print_every"]
+	target_folder = CONFIG["experiment"]["target_folder"]
+	actual_test_file = CONFIG["experiment"]["actual_test_file"]
+	total_folds = CONFIG["experiment"]["total_folds"]
+	output_weight_path = CONFIG["experiment"]["weight_save_path"]
+	batch_size = CONFIG["data"]["batch_size"]
+	num_epochs = CONFIG["training"]["num_epochs"]
+	print_every = CONFIG["training"]["print_every"]
 
-    hidden_dim = CONFIG["model"]["hidden_dim"]
-    num_conv_layers = CONFIG["model"]["num_conv_layers"]
-    heads = CONFIG["model"]["heads"]
-    dropout = CONFIG["model"]["dropout"]
-    ffnn_hidden_layers = CONFIG["model"]["ffnn_hidden_layers"]
+	hidden_dim = CONFIG["model"]["hidden_dim"]
+	num_conv_layers = CONFIG["model"]["num_conv_layers"]
+	heads = CONFIG["model"]["heads"]
+	dropout = CONFIG["model"]["dropout"]
+	residual = CONFIG["model"].get("residual", True)
+	normalization = str(CONFIG["model"].get("normalization", "layernorm")).lower()
+	ffnn_hidden_layers = CONFIG["model"]["ffnn_hidden_layers"]
 
-    learning_rate = CONFIG["optimization"]["learning_rate"]
-    weight_decay = CONFIG["optimization"]["weight_decay"]
-    grad_clip_norm = CONFIG["optimization"]["grad_clip_norm"]
+	learning_rate = CONFIG["optimization"]["learning_rate"]
+	weight_decay = CONFIG["optimization"]["weight_decay"]
+	grad_clip_norm = CONFIG["optimization"]["grad_clip_norm"]
 
-    early_stop_cfg = CONFIG["training"]["early_stopping"]
-    early_stop_enabled = early_stop_cfg["enabled"]
-    early_stop_metric = early_stop_cfg["monitor_metric"]
-    early_stop_patience = early_stop_cfg["patience"]
-    early_stop_min_delta = early_stop_cfg["min_delta"]
+	early_stop_cfg = CONFIG["training"]["early_stopping"]
+	early_stop_enabled = early_stop_cfg["enabled"]
+	early_stop_metric = early_stop_cfg["monitor_metric"]
+	early_stop_patience = early_stop_cfg["patience"]
+	early_stop_min_delta = early_stop_cfg["min_delta"]
 
-    scheduler_cfg = CONFIG["scheduler"]
-    scheduler_enabled = scheduler_cfg["enabled"]
-    scheduler_metric = scheduler_cfg["monitor_metric"]
+	scheduler_cfg = CONFIG["scheduler"]
+	scheduler_enabled = scheduler_cfg["enabled"]
+	scheduler_metric = scheduler_cfg["monitor_metric"]
 
-    print("\nFeature summary:")
-    print(f"  Categorical encoding mode: {CATEGORICAL_ENCODING_MODE}")
-    print(f"  Atom feature dim: {ATOM_FEATURE_DIM}")
-    print(f"  Edge feature dim: {EDGE_FEATURE_DIM}")
-    print(f"  Atom features: {ATOM_FEATURE_NAMES}")
-    print(f"  Edge features: {EDGE_FEATURE_NAMES}")
-    print(f"  FFNN hidden layers: {ffnn_hidden_layers}")
+	print("\nFeature summary:")
+	print(f"  Categorical encoding mode: {CATEGORICAL_ENCODING_MODE}")
+	print(f"  Atom feature dim: {ATOM_FEATURE_DIM}")
+	print(f"  Edge feature dim: {EDGE_FEATURE_DIM}")
+	print(f"  Atom features: {ATOM_FEATURE_NAMES}")
+	print(f"  Edge features: {EDGE_FEATURE_NAMES}")
+	print(f"  Residual connections: {residual}")
+	print(f"  Conv normalization: {normalization}")
+	print(f"  FFNN hidden layers: {ffnn_hidden_layers}")
 
-    print(f"\nLoading holdout test set: {actual_test_file}")
-    test_data = load_dataset(actual_test_file)
-    test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
+	print(f"\nLoading holdout test set: {actual_test_file}")
+	test_data = load_dataset(actual_test_file)
+	test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
-    global_best_val_rmse = float("inf")
-    global_best_weights = None
-    best_fold_idx = -1
-    cv_results = []
+	global_best_val_rmse = float("inf")
+	global_best_weights = None
+	best_fold_idx = -1
+	cv_results = []
 
-    losses = {f"fold_{i}": {} for i in range(total_folds)}
+	losses = {f"fold_{i}": {} for i in range(total_folds)}
 
-    print("\n==================== 5-Fold Cross-Validation ====================")
-    for val_idx in range(total_folds):
-        print(f"\n-------------------- Fold {val_idx} (validation) --------------------")
+	print("\n==================== 5-Fold Cross-Validation ====================")
+	for val_idx in range(total_folds):
+		print(f"\n-------------------- Fold {val_idx} (validation) --------------------")
 
-        train_paths, val_path = get_fold_files(target_folder, val_idx, total_folds=total_folds)
-        train_data = load_dataset(train_paths)
-        val_data = load_dataset(val_path)
-        print_fold_data_summary(val_idx, train_data, val_data)
+		train_paths, val_path = get_fold_files(target_folder, val_idx, total_folds=total_folds)
+		train_data = load_dataset(train_paths)
+		val_data = load_dataset(val_path)
+		print_fold_data_summary(val_idx, train_data, val_data)
 
-        train_loader = DataLoader(
-            train_data,
-            batch_size=batch_size,
-            shuffle=CONFIG["data"]["shuffle_train"],
-        )
-        val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+		train_loader = DataLoader(
+			train_data,
+			batch_size=batch_size,
+			shuffle=CONFIG["data"]["shuffle_train"],
+		)
+		val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
 
-        model = GATModel(
-            node_in_dim=ATOM_FEATURE_DIM,
-            edge_in_dim=EDGE_FEATURE_DIM,
-            hidden_dim=hidden_dim,
-            num_conv_layers=num_conv_layers,
-            heads=heads,
-            ffnn_hidden_layers=ffnn_hidden_layers,
-            dropout=dropout,
-        ).to(device)
+		model = GATModel(
+			node_in_dim=ATOM_FEATURE_DIM,
+			edge_in_dim=EDGE_FEATURE_DIM,
+			hidden_dim=hidden_dim,
+			num_conv_layers=num_conv_layers,
+			heads=heads,
+			ffnn_hidden_layers=ffnn_hidden_layers,
+			residual=residual,
+			normalization=normalization,
+			dropout=dropout,
+		).to(device)
 
-        optimizer = torch.optim.Adam(
-            model.parameters(), lr=learning_rate, weight_decay=weight_decay
-        )
-        criterion = torch.nn.MSELoss()
+		optimizer = torch.optim.Adam(
+			model.parameters(), lr=learning_rate, weight_decay=weight_decay
+		)
+		criterion = torch.nn.MSELoss()
 
-        scheduler = None
-        if scheduler_enabled:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode=scheduler_cfg["mode"],
-                factor=scheduler_cfg["factor"],
-                patience=scheduler_cfg["patience"],
-            )
+		scheduler = None
+		if scheduler_enabled:
+			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+				optimizer,
+				mode=scheduler_cfg["mode"],
+				factor=scheduler_cfg["factor"],
+				patience=scheduler_cfg["patience"],
+			)
 
-        print(
-            f"[Fold {val_idx}] model params={GATModel.count_parameters(model)} "
-            f"| lr={learning_rate:.2e} | dropout={dropout:.2f}"
-        )
+		print(
+			f"[Fold {val_idx}] model params={GATModel.count_parameters(model)} "
+			f"| lr={learning_rate:.2e} | dropout={dropout:.2f} "
+			f"| residual={residual} | norm={normalization}"
+		)
 
-        best_val_mse = float("inf")
-        best_val_rmse = float("inf")
-        best_val_r2 = -float("inf")
-        best_val_rho = -float("inf")
-        best_epoch = 0
-        best_model_weights = None
+		best_val_mse = float("inf")
+		best_val_rmse = float("inf")
+		best_val_r2 = -float("inf")
+		best_val_rho = -float("inf")
+		best_epoch = 0
+		best_model_weights = None
 
-        if early_stop_metric in {"mse", "rmse"}:
-            best_monitor_value = float("inf")
-        else:
-            best_monitor_value = -float("inf")
+		if early_stop_metric in {"mse", "rmse"}:
+			best_monitor_value = float("inf")
+		else:
+			best_monitor_value = -float("inf")
 
-        train_losses = []
-        val_losses = []
-        epochs_wo_improv = 0
+		train_losses = []
+		val_losses = []
+		monitor_values = []
+		lr_history = []
+		epochs_wo_improv = 0
 
-        for epoch in range(1, num_epochs + 1):
-            model.train()
-            train_loss = 0.0
+		for epoch in range(1, num_epochs + 1):
+			model.train()
+			train_loss = 0.0
 
-            for batch in train_loader:
-                batch = batch.to(device)
-                optimizer.zero_grad()
-                out = model(batch)
+			for batch in train_loader:
+				batch = batch.to(device)
+				optimizer.zero_grad()
+				out = model(batch)
 
-                loss = criterion(out.view(-1), batch.y.view(-1))
-                loss.backward()
+				loss = criterion(out.view(-1), batch.y.view(-1))
+				loss.backward()
 
-                if grad_clip_norm and grad_clip_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+				if grad_clip_norm and grad_clip_norm > 0:
+					torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
 
-                optimizer.step()
-                train_loss += loss.item() * batch.num_graphs
+				optimizer.step()
+				train_loss += loss.item() * batch.num_graphs
 
-            train_loss /= len(train_data)
-            val_mse, val_rmse, val_r2, val_rho = evaluate(model, val_loader)
+			train_loss /= len(train_data)
+			val_mse, val_rmse, val_r2, val_rho = evaluate(model, val_loader)
 
-            # current monitor is the valye we compare aginst best value for early stopping and scheduler decisions
-            current_monitor = metric_from_name(
-                early_stop_metric, val_mse, val_rmse, val_r2, val_rho
-            )
+			# current monitor is the valye we compare aginst best value for early stopping and scheduler decisions
+			current_monitor = metric_from_name(
+				early_stop_metric, val_mse, val_rmse, val_r2, val_rho
+			)
 
-            if is_improvement(
-                early_stop_metric, current_monitor, best_monitor_value, early_stop_min_delta
-            ):
-                best_monitor_value = current_monitor
-                best_val_mse = val_mse
-                best_val_rmse = val_rmse
-                best_val_r2 = val_r2
-                best_val_rho = val_rho
-                best_epoch = epoch
-                best_model_weights = copy.deepcopy(model.state_dict())
-                epochs_wo_improv = 0
-                torch.save(
-                    best_model_weights,
-                    output_weight_path.format(fold=val_idx),
-                )
-            else:
-                epochs_wo_improv += 1
+			if is_improvement(
+				early_stop_metric, current_monitor, best_monitor_value, early_stop_min_delta
+			):
+				best_monitor_value = current_monitor
+				best_val_mse = val_mse
+				best_val_rmse = val_rmse
+				best_val_r2 = val_r2
+				best_val_rho = val_rho
+				best_epoch = epoch
+				best_model_weights = copy.deepcopy(model.state_dict())
+				epochs_wo_improv = 0
+				torch.save(
+					best_model_weights,
+					output_weight_path.format(fold=val_idx),
+				)
+			else:
+				epochs_wo_improv += 1
 
-            if scheduler is not None:
-                scheduler_value = metric_from_name(
-                    scheduler_metric, val_mse, val_rmse, val_r2, val_rho
-                )
-                scheduler.step(scheduler_value)
+			if scheduler is not None:
+				scheduler_value = metric_from_name(
+					scheduler_metric, val_mse, val_rmse, val_r2, val_rho
+				)
+				scheduler.step(scheduler_value)
 
-            train_losses.append(train_loss)
-            val_losses.append(val_mse)
+			train_losses.append(train_loss)
+			val_losses.append(val_mse)
+			monitor_values.append(current_monitor)
+			lr_history.append(float(optimizer.param_groups[0]["lr"]))
 
-            if epoch % print_every == 0:
-                print(
-                    f"[Fold {val_idx}][Epoch {epoch:03d}] "
-                    f"train_mse={train_loss:.4f} "
-                    f"val_mse={val_mse:.4f} val_rmse={val_rmse:.4f} "
-                    f"val_r2={val_r2:.4f} val_rho={val_rho:.4f} "
-                    f"lr={optimizer.param_groups[0]['lr']:.2e} "
-                    f"best_val_rmse={best_val_rmse:.4f} "
-                    f"no_improve={epochs_wo_improv}"
-                )
+			if epoch % print_every == 0:
+				print(
+					f"[Fold {val_idx}][Epoch {epoch:03d}] "
+					f"train_mse={train_loss:.4f} "
+					f"val_mse={val_mse:.4f} val_rmse={val_rmse:.4f} "
+					f"val_r2={val_r2:.4f} val_rho={val_rho:.4f} "
+					f"lr={optimizer.param_groups[0]['lr']:.2e} "
+					f"best_val_rmse={best_val_rmse:.4f} "
+					f"no_improve={epochs_wo_improv}"
+				)
 
-            if early_stop_enabled and epochs_wo_improv >= early_stop_patience:
-                print(
-                    f"[Fold {val_idx}] early stopping at epoch {epoch} "
-                    f"(monitor={early_stop_metric}, patience={early_stop_patience}, "
-                    f"min_delta={early_stop_min_delta})"
-                )
-                break
+			if early_stop_enabled and epochs_wo_improv >= early_stop_patience:
+				print(
+					f"[Fold {val_idx}] early stopping at epoch {epoch} "
+					f"(monitor={early_stop_metric}, patience={early_stop_patience}, "
+					f"min_delta={early_stop_min_delta})"
+				)
+				break
 
-        print(
-            f"[Fold {val_idx}] best epoch={best_epoch} | "
-            f"val_rmse={best_val_rmse:.4f} val_r2={best_val_r2:.4f} val_rho={best_val_rho:.4f}"
-        )
+		print(
+			f"[Fold {val_idx}] best epoch={best_epoch} | "
+			f"val_rmse={best_val_rmse:.4f} val_r2={best_val_r2:.4f} val_rho={best_val_rho:.4f}"
+		)
 
-        cv_results.append((best_val_mse, best_val_rmse, best_val_r2, best_val_rho))
+		cv_results.append(
+			{
+				"fold_idx": val_idx,
+				"monitor_metric": early_stop_metric,
+				"monitor_metric_description": metric_description(early_stop_metric),
+				"best_monitor_value": best_monitor_value,
+				"val_loss_mse": best_val_mse,
+				"val_mse": best_val_mse,
+				"val_rmse": best_val_rmse,
+				"val_r2": best_val_r2,
+				"val_rho": best_val_rho,
+			}
+		)
 
-        if best_val_rmse < global_best_val_rmse:
-            global_best_val_rmse = best_val_rmse
-            global_best_weights = copy.deepcopy(best_model_weights)
-            best_fold_idx = val_idx
-            print(f"[Fold {val_idx}] is current global best.")
+		if best_val_rmse < global_best_val_rmse:
+			global_best_val_rmse = best_val_rmse
+			global_best_weights = copy.deepcopy(best_model_weights)
+			best_fold_idx = val_idx
+			print(f"[Fold {val_idx}] is current global best.")
 
-        losses[f"fold_{val_idx}"] = {
-            "train": train_losses,
-            "val": val_losses,
-        }
+		losses[f"fold_{val_idx}"] = {
+			"train": train_losses,
+			"val": val_losses,
+			"monitor": monitor_values,
+			"lr": lr_history,
+		}
 
+	print("\n-------------------- Holdout Evaluation --------------------")
+	print(
+		f"Loading global-best model from fold {best_fold_idx} "
+		f"(val_rmse={global_best_val_rmse:.4f})"
+	)
 
-    print("\n-------------------- Holdout Evaluation --------------------")
-    print(
-        f"Loading global-best model from fold {best_fold_idx} "
-        f"(val_rmse={global_best_val_rmse:.4f})"
-    )
+	best_model = GATModel(
+		node_in_dim=ATOM_FEATURE_DIM,
+		edge_in_dim=EDGE_FEATURE_DIM,
+		hidden_dim=hidden_dim,
+		num_conv_layers=num_conv_layers,
+		heads=heads,
+		ffnn_hidden_layers=ffnn_hidden_layers,
+		residual=residual,
+		normalization=normalization,
+		dropout=dropout,
+	).to(device)
+	best_model.load_state_dict(global_best_weights)
+	# Evaluate the best model on the holdout test set
 
-    best_model = GATModel(
-        node_in_dim=ATOM_FEATURE_DIM,
-        edge_in_dim=EDGE_FEATURE_DIM,
-        hidden_dim=hidden_dim,
-        num_conv_layers=num_conv_layers,
-        heads=heads,
-        ffnn_hidden_layers=ffnn_hidden_layers,
-        dropout=dropout,
-    ).to(device)
-    best_model.load_state_dict(global_best_weights)
-    # Evaluate the best model on the holdout test set
+	test_mse, test_rmse, test_r2, test_rho = evaluate(best_model, test_loader)
+	print(
+		f"Holdout -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, "
+		f"R2: {test_r2:.4f}, Rho: {test_rho:.4f}"
+	)
 
-    test_mse, test_rmse, test_r2, test_rho = evaluate(best_model, test_loader)
-    print(
-        f"Holdout -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, "
-        f"R2: {test_r2:.4f}, Rho: {test_rho:.4f}"
-    )
+	print("\n-------------------- Final CV Summary --------------------")
+	summary_data = []
+	for fold_result in cv_results:
+		summary_data.append(
+			{
+				"Stage": f"Fold_{fold_result['fold_idx']}_Val",
+				"MonitorMetric": fold_result["monitor_metric"],
+				"MonitorDescription": fold_result["monitor_metric_description"],
+				"BestMonitorValue": fold_result["best_monitor_value"],
+				"ValLoss_MSE": fold_result["val_loss_mse"],
+				"MSE": fold_result["val_mse"],
+				"RMSE": fold_result["val_rmse"],
+				"R2": fold_result["val_r2"],
+				"Rho": fold_result["val_rho"],
+			}
+		)
 
-    print("\n-------------------- Final CV Summary --------------------")
-    summary_data = []
-    for i in range(total_folds):
-        v_mse, v_rmse, v_r2, v_rho = cv_results[i]
-        summary_data.append(
-            {
-                "Stage": f"Fold_{i}_Val",
-                "MSE": v_mse,
-                "RMSE": v_rmse,
-                "R2": v_r2,
-                "Rho": v_rho,
-            }
-        )
+	avg_best_monitor = safe_nanmean([res["best_monitor_value"] for res in cv_results])
+	avg_val_mse = safe_nanmean([res["val_mse"] for res in cv_results])
+	avg_val_rmse = safe_nanmean([res["val_rmse"] for res in cv_results])
+	avg_val_r2 = safe_nanmean([res["val_r2"] for res in cv_results])
+	avg_val_rho = safe_nanmean([res["val_rho"] for res in cv_results])
 
-    avg_val_mse = float(np.mean([res[0] for res in cv_results]))
-    avg_val_rmse = float(np.mean([res[1] for res in cv_results]))
-    avg_val_r2 = float(np.mean([res[2] for res in cv_results]))
-    avg_val_rho = float(np.mean([res[3] for res in cv_results]))
+	summary_data.append(
+		{
+			"Stage": "Average_Val",
+			"MonitorMetric": cv_results[0]["monitor_metric"] if cv_results else "",
+			"MonitorDescription": cv_results[0]["monitor_metric_description"] if cv_results else "",
+			"BestMonitorValue": avg_best_monitor,
+			"ValLoss_MSE": avg_val_mse,
+			"MSE": avg_val_mse,
+			"RMSE": avg_val_rmse,
+			"R2": avg_val_r2,
+			"Rho": avg_val_rho,
+		}
+	)
+	summary_data.append(
+		{
+			"Stage": f"Holdout_Test (Model from Fold_{best_fold_idx})",
+			"MonitorMetric": "",
+			"MonitorDescription": "",
+			"BestMonitorValue": "",
+			"ValLoss_MSE": "",
+			"MSE": test_mse,
+			"RMSE": test_rmse,
+			"R2": test_r2,
+			"Rho": test_rho,
+		}
+	)
 
-    summary_data.append(
-        {
-            "Stage": "Average_Val",
-            "MSE": avg_val_mse,
-            "RMSE": avg_val_rmse,
-            "R2": avg_val_r2,
-            "Rho": avg_val_rho,
-        }
-    )
-    summary_data.append(
-        {
-            "Stage": f"Holdout_Test (Model from Fold_{best_fold_idx})",
-            "MSE": test_mse,
-            "RMSE": test_rmse,
-            "R2": test_r2,
-            "Rho": test_rho,
-        }
-    )
+	df_results = pd.DataFrame(summary_data)
+	print(df_results.to_string(index=False))
 
-    df_results = pd.DataFrame(summary_data)
-    print(df_results.to_string(index=False))
+	target_path_obj = Path(target_folder)
+	folder_name = target_path_obj.name if target_folder != "." else "default_experiment"
 
-    target_path_obj = Path(target_folder)
-    folder_name = target_path_obj.name if target_folder != "." else "default_experiment"
+	save_path = target_path_obj / f"MPNN_results_{folder_name}.csv"
+	df_results.to_csv(save_path, index=False)
+	print(f"Saved results to: {save_path.resolve()}")
 
-    save_path = target_path_obj / f"MPNN_results_{folder_name}.csv"
-    df_results.to_csv(save_path, index=False)
-    print(f"Saved results to: {save_path.resolve()}")
+	loss_path = target_path_obj / f"MPNN_losses_{folder_name}.txt"
+	with open(loss_path, "w", encoding="utf-8") as f:
+		for fold, loss_dict in losses.items():
+			df = pd.DataFrame(loss_dict)
+			f.write(f"{fold}:\n")
+			f.write(df.to_string(index=False))
+			f.write("\n\n")
 
-    loss_path = target_path_obj / f"MPNN_losses_{folder_name}.txt"
-    with open(loss_path, "w", encoding="utf-8") as f:
-        for fold, loss_dict in losses.items():
-            df = pd.DataFrame(loss_dict)
-            f.write(f"{fold}:\n")
-            f.write(df.to_string(index=False))
-            f.write("\n\n")
-
-    print(f"Saved learning curves to: {loss_path.resolve()}")
+	print(f"Saved learning curves to: {loss_path.resolve()}")

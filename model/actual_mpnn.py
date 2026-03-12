@@ -58,36 +58,36 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "heldout_test_file": "heldout_testset.csv",
     },
     "data": {
-        "batch_size": 64, # adjust based on GPU....
+        "batch_size": 128, # adjust based on GPU....
         "num_workers": 1,
         "real_target_column": "pIC50",
         "synthetic_target_column": "pred_pIC50",
         "fallback_target_columns": ["target_pIC50", "pred_pIC50", "pIC50"],
     },
     "oversampling": {
-        "enabled": True,
+        "enabled": False,
         "duplicates_per_smiles": 3,
         "max_tries_per_duplicate": 8,
     },
     "model": {
-        "d_h": 256, # hidden dimension for MPNN and FFN layers
-        "depth": 6,
-        "dropout": 0.2,
-        "ffn_hidden_mult": 2, # hidden dim = d_h * ffn_hidden_mult
-        "ffn_n_layers": 3, # number of layers in the FFN
+        "d_h": 192, # hidden dimension for MPNN and FFN layers
+        "depth": 3, # number of message-passing steps in the MPNN
+        "dropout": 0.25,
+        "ffn_hidden_mult": 1, # hidden dim = d_h * ffn_hidden_mult
+        "ffn_n_layers": 2, # number of layers in the FFN
         "batch_norm": True,
-        "use_sum_aggregation": True,
+        "use_sum_aggregation": False, # if false, it uses mean agg in MPNN readout layer. 
     },
     "optimization": {
         "warmup_epochs": 2,
-        "init_lr": None,
-        "max_lr": None,
-        "final_lr": None,
+        "init_lr": 1e-4,
+        "max_lr": 8e-4,
+        "final_lr": 1e-4,
         "reduce_lr_on_plateau": {
             "enabled": True,
             "mode": None,
             "factor": 0.75,
-            "patience": 2,
+            "patience": 3,
             "threshold": 1e-4,
             "threshold_mode": "rel",
             "cooldown": 0,
@@ -96,8 +96,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "training": {
-        "max_epochs": 60,
-        "min_delta": 1e-5,
+        "max_epochs": 50,
+        "min_delta": 1e-4,
         "patience": 6,
         "accelerator": "auto",
         "deterministic": True,
