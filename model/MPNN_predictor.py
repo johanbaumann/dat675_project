@@ -37,14 +37,7 @@ from gat_utils import run_training_pipeline
 # - Added config-driven atom/bond (node/edge) descriptor selection for modular featurization.
 # 2026-03-12 PARAM SWEEP - Anti-Overfitting Config
 # - DIAGNOSIS: Model overfitting severely (val loss progression 1.5 -> 19.9+)
-# - FIX 1: dropout 0.2 -> 0.5 (aggressive regularization)
-# - FIX 2: ffnn_hidden_layers [256,128] -> [64] (simpler, fewer params)
-# - FIX 3: learning_rate 3e-4 -> 1e-4 (slower updates, prevent overshooting)
-# - FIX 4: weight_decay 1e-4 -> 5e-4 (stronger L2 regularization)
-# - FIX 5: grad_clip_norm 10.0 -> 8.0 (tighter gradient clipping)
-# - FIX 6: scheduler DISABLED (was interfering with training)
-# - FIX 7: early_stop patience 10 -> 20 (allow more time to stabilize)
-# - FIX 8: early_stop min_delta 1e-4 -> 0.0 (relax improvement threshold)
+# wer params)
 # Fix: NO DROPOUT IN CONV LAYERS!!!!!
 
 # ==================== configuration ====================
@@ -101,7 +94,7 @@ CONFIG = {
 		"grad_clip_norm": 8.0,
 	},
 	"scheduler": {
-		"enabled": True, # scheduler is 
+		"enabled": True, # Reduce on Plateau. 
 		"mode": "min",
 		"factor": 0.75,
 		"patience": 6,
