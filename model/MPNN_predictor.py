@@ -45,6 +45,7 @@ from gat_utils import run_training_pipeline
 # - FIX 6: scheduler DISABLED (was interfering with training)
 # - FIX 7: early_stop patience 10 -> 20 (allow more time to stabilize)
 # - FIX 8: early_stop min_delta 1e-4 -> 0.0 (relax improvement threshold)
+# Fix: NO DROPOUT IN CONV LAYERS!!!!!
 
 # ==================== configuration ====================
 CONFIG = {
@@ -90,8 +91,8 @@ CONFIG = {
 		"num_conv_layers": 3,
 		"heads": 4,
 		"dropout": 0.2,
-		"residual": False,
-		"normalization": "none",
+		"residual": True,
+		"normalization": "layernorm", # options: "layernorm", "batchnorm1d", "none"
 		"ffnn_hidden_layers": [256],
 	},
 	"optimization": {
@@ -155,12 +156,12 @@ class GATModel(torch.nn.Module):
 		self.residual_projections = torch.nn.ModuleList()
 		conv_in_dim = node_in_dim
 		for _ in range(num_conv_layers):
+			# NOTE: DO NOT APPLY DROPOUT HERE! GATv2Conv already applies dropout to attention coefficients internally.
 			self.convs.append(
 				GATv2Conv(
 					conv_in_dim,
 					hidden_dim,
 					heads=heads,
-					#dropout=dropout, NOTE: NOT INCLUDED IN CONV DROPOUT (handled separately after FFNN layers) due to instability issues when combined with residuals + normalization. Instead, we apply dropout only after FFNN layers, which empirically provides more stable training while still offering regularization benefits.
 					edge_dim=edge_in_dim,
 					concat=False,
 				)
