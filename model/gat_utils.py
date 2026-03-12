@@ -65,6 +65,57 @@ def invert_standardization_tensor(
 	return y_scaled * std + mean
 
 
+def build_target_standardizer(
+	train_targets: np.ndarray,
+	*,
+	epsilon: float = 1e-8,
+) -> dict[str, Any]:
+	mean, std = fit_target_standardizer(train_targets, epsilon=epsilon)
+	return build_target_standardizer_from_stats(mean, std)
+
+
+def build_target_standardizer_from_stats(
+	mean: float,
+	std: float,
+) -> dict[str, Any]:
+	mean_tensor = torch.tensor(mean, dtype=torch.float32, device=device)
+	std_tensor = torch.tensor(std, dtype=torch.float32, device=device)
+	return {
+		"mean": mean,
+		"std": std,
+		"mean_tensor": mean_tensor,
+		"std_tensor": std_tensor,
+	}
+
+
+def standardize_batch_targets(
+	y_true: torch.Tensor,
+	*,
+	target_standardizer: dict[str, Any] | None,
+) -> torch.Tensor:
+	if target_standardizer is None:
+		return y_true
+	return standardize_targets_tensor(
+		y_true,
+		mean=target_standardizer["mean_tensor"],
+		std=target_standardizer["std_tensor"],
+	)
+
+
+def invert_standardized_predictions(
+	y_pred: torch.Tensor,
+	*,
+	target_standardizer: dict[str, Any] | None,
+) -> torch.Tensor:
+	if target_standardizer is None:
+		return y_pred
+	return invert_standardization_tensor(
+		y_pred,
+		mean=target_standardizer["mean_tensor"],
+		std=target_standardizer["std_tensor"],
+	)
+
+
 # ==================== feature spaces ====================
 # Categorical features can be encoded as one_hot (+other) or index (+unknown index)
 # depending on CONFIG["features"]["categorical_encoding_mode"].
@@ -235,35 +286,6 @@ def build_feature_names(
 				edge_feature_names.append("bond_stereo_index")
 
 	return atom_feature_names, edge_feature_names
-	if encoding_mode == "one_hot":
-		atom_feature_names = (
-			ATOM_BASE_FEATURE_NAMES
-			+ [f"hybridization_{name}" for name, _ in HYBRIDIZATION_TYPES]
-			+ ["hybridization_other"]
-			+ [f"chirality_{name}" for name, _ in CHIRAL_TYPES]
-			+ ["chirality_other"]
-		)
-		edge_feature_names = (
-			[f"bond_type_{name}" for name, _ in BOND_TYPE_VALUES]
-			+ ["bond_type_other"]
-			+ ["bond_order", "is_conjugated", "is_in_ring"]
-			+ [f"bond_stereo_{name}" for name, _ in BOND_STEREO_TYPES]
-			+ ["bond_stereo_other"]
-		)
-	else:
-		atom_feature_names = ATOM_BASE_FEATURE_NAMES + [
-			"hybridization_index",
-			"chirality_index",
-		]
-		edge_feature_names = [
-			"bond_type_index",
-			"bond_order",
-			"is_conjugated",
-			"is_in_ring",
-			"bond_stereo_index",
-		]
-
-	return atom_feature_names, edge_feature_names
 
 
 def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -346,10 +368,30 @@ def index_with_unknown(value, allowed_values):
 	return float(len(allowed_values))
 
 
+def _validate_feature_vector_length(
+	feature_values: list[float],
+	*,
+	expected_dim: int,
+	feature_label: str,
+	molecule_smiles: str,
+) -> None:
+	if len(feature_values) != expected_dim:
+		raise ValueError(
+			f"{feature_label} feature length mismatch for SMILES '{molecule_smiles}': "
+			f"expected {expected_dim}, got {len(feature_values)}. "
+			f"Check CONFIG['features'] descriptor settings."
+		)
+
+
 # ==================== featurization ====================
 # Atom features contain physically meaningful numeric values + one-hot categorical tags.
-def get_atom_features(atom: Chem.rdchem.Atom, config: dict[str, Any], encoding_mode: str) -> list:
-	atom_descriptors = config["features"].get("atom_descriptors", DEFAULT_ATOM_DESCRIPTORS)
+def get_atom_features(
+	atom: Chem.rdchem.Atom,
+	config: dict[str, Any],
+	feature_context: dict[str, Any],
+) -> list[float]:
+	atom_descriptors = feature_context["atom_descriptors"]
+	encoding_mode = feature_context["categorical_encoding_mode"]
 	features: list[float] = []
 
 	for desc in atom_descriptors:
@@ -393,11 +435,10 @@ def get_atom_features(atom: Chem.rdchem.Atom, config: dict[str, Any], encoding_m
 def get_bond_features(
 	bond: Chem.rdchem.Bond,
 	config: dict[str, Any],
-	encoding_mode: str,
-) -> list:
-	bond_descriptors = config["features"].get(
-		"bond_descriptors", DEFAULT_BOND_DESCRIPTORS
-	)
+	feature_context: dict[str, Any],
+) -> list[float]:
+	bond_descriptors = feature_context["bond_descriptors"]
+	encoding_mode = feature_context["categorical_encoding_mode"]
 	features: list[float] = []
 
 	for desc in bond_descriptors:
@@ -435,10 +476,16 @@ def smiles_to_graph(
 	if mol is None:
 		return None
 
-	encoding_mode = feature_context["categorical_encoding_mode"]
 	node_features = [
-		get_atom_features(atom, config, encoding_mode) for atom in mol.GetAtoms()
+		get_atom_features(atom, config, feature_context) for atom in mol.GetAtoms()
 	]
+	for atom_feature_values in node_features:
+		_validate_feature_vector_length(
+			atom_feature_values,
+			expected_dim=feature_context["atom_feature_dim"],
+			feature_label="Atom",
+			molecule_smiles=smiles,
+		)
 	x = torch.tensor(node_features, dtype=torch.float)
 
 	edge_indices = []
@@ -446,7 +493,13 @@ def smiles_to_graph(
 	for bond in mol.GetBonds():
 		i = bond.GetBeginAtomIdx()
 		j = bond.GetEndAtomIdx()
-		e_feat = get_bond_features(bond, config, encoding_mode)
+		e_feat = get_bond_features(bond, config, feature_context)
+		_validate_feature_vector_length(
+			e_feat,
+			expected_dim=feature_context["edge_feature_dim"],
+			feature_label="Bond",
+			molecule_smiles=smiles,
+		)
 
 		edge_indices += [[i, j], [j, i]]
 		edge_attrs += [e_feat, e_feat]
@@ -563,8 +616,7 @@ def evaluate(
 	model: torch.nn.Module,
 	loader: DataLoader,
 	*,
-	prediction_mean: torch.Tensor | None = None,
-	prediction_std: torch.Tensor | None = None,
+	target_standardizer: dict[str, Any] | None = None,
 ) -> tuple:
 	model.eval()
 	y_true, y_pred = [], []
@@ -574,15 +626,10 @@ def evaluate(
 			data = data.to(device)
 			out = model(data).view(-1)
 			true = data.y.view(-1)
-
-			# If the model predicts standardized targets, invert back to original
-			# scale before computing metrics.
-			if prediction_mean is not None and prediction_std is not None:
-				out = invert_standardization_tensor(
-					out,
-					mean=prediction_mean,
-					std=prediction_std,
-				)
+			out = invert_standardized_predictions(
+				out,
+				target_standardizer=target_standardizer,
+			)
 
 			y_true.extend(true.detach().cpu().numpy().flatten())
 			y_pred.extend(out.detach().cpu().numpy().flatten())
@@ -773,18 +820,17 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 		val_data = load_dataset(val_path, config, feature_context)
 		print_fold_data_summary(val_idx, train_data, val_data)
 
-		prediction_mean = None
-		prediction_std = None
+		target_standardizer = None
 		train_target_mean = 0.0
 		train_target_std = 1.0
 		if use_target_standardization:
 			train_targets = get_targets_from_graphs(train_data)
-			train_target_mean, train_target_std = fit_target_standardizer(
+			target_standardizer = build_target_standardizer(
 				train_targets,
 				epsilon=target_std_cfg["epsilon"],
 			)
-			prediction_mean = torch.tensor(train_target_mean, device=device)
-			prediction_std = torch.tensor(train_target_std, device=device)
+			train_target_mean = target_standardizer["mean"]
+			train_target_std = target_standardizer["std"]
 			print(
 				f"[Fold {val_idx}] target standardizer: "
 				f"mean={train_target_mean:.4f} std={train_target_std:.4f}"
@@ -847,13 +893,10 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				optimizer.zero_grad()
 				out = model(batch).view(-1)
 
-				y_true = batch.y.view(-1)
-				if use_target_standardization:
-					y_true = standardize_targets_tensor(
-						y_true,
-						mean=prediction_mean,
-						std=prediction_std,
-					)
+				y_true = standardize_batch_targets(
+					batch.y.view(-1),
+					target_standardizer=target_standardizer,
+				)
 				loss = criterion(out, y_true)
 				loss.backward()
 
@@ -867,8 +910,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			val_mse, val_rmse, val_r2, val_rho = evaluate(
 				model,
 				val_loader,
-				prediction_mean=prediction_mean,
-				prediction_std=prediction_std,
+				target_standardizer=target_standardizer,
 			)
 
 			# current monitor is the valye we compare aginst best value for early stopping and scheduler decisions
@@ -963,22 +1005,28 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 		f"Loading global-best model from fold {best_fold_idx} "
 		f"(val_rmse={global_best_val_rmse:.4f})"
 	)
+	if global_best_weights is None:
+		raise RuntimeError("No best model weights were saved during cross-validation.")
 
 	best_model = build_model(model_class, config, feature_context)
 	best_model.load_state_dict(global_best_weights)
 	# Evaluate the best model on the holdout test set
 
-	best_pred_mean = None
-	best_pred_std = None
+	best_target_standardizer = None
 	if use_target_standardization:
-		best_pred_mean = torch.tensor(float(global_best_target_mean), device=device)
-		best_pred_std = torch.tensor(float(global_best_target_std), device=device)
+		if global_best_target_mean is None or global_best_target_std is None:
+			raise RuntimeError(
+				"Target standardization is enabled, but best-fold stats were not captured."
+			)
+		best_target_standardizer = build_target_standardizer_from_stats(
+			float(global_best_target_mean),
+			float(global_best_target_std),
+		)
 
 	test_mse, test_rmse, test_r2, test_rho = evaluate(
 		best_model,
 		test_loader,
-		prediction_mean=best_pred_mean,
-		prediction_std=best_pred_std,
+		target_standardizer=best_target_standardizer,
 	)
 	print(
 		f"Holdout -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, "

@@ -41,7 +41,7 @@ from gat_utils import run_training_pipeline
 # - FIX 2: ffnn_hidden_layers [256,128] -> [64] (simpler, fewer params)
 # - FIX 3: learning_rate 3e-4 -> 1e-4 (slower updates, prevent overshooting)
 # - FIX 4: weight_decay 1e-4 -> 5e-4 (stronger L2 regularization)
-# - FIX 5: grad_clip_norm 10.0 -> 5.0 (tighter gradient clipping)
+# - FIX 5: grad_clip_norm 10.0 -> 8.0 (tighter gradient clipping)
 # - FIX 6: scheduler DISABLED (was interfering with training)
 # - FIX 7: early_stop patience 10 -> 20 (allow more time to stabilize)
 # - FIX 8: early_stop min_delta 1e-4 -> 0.0 (relax improvement threshold)
@@ -98,13 +98,13 @@ CONFIG = {
 	"optimization": {
 		"learning_rate": 1e-3,
 		"weight_decay": 1e-4,
-		"grad_clip_norm": 5.0,
+		"grad_clip_norm": 8.0,
 	},
 	"scheduler": {
-		"enabled": False,
+		"enabled": True, # scheduler is 
 		"mode": "min",
-		"factor": 0.7,
-		"patience": 5,
+		"factor": 0.75,
+		"patience": 6,
 		"monitor_metric": "rmse",
 	},
 	"training": {
