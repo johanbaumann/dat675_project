@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from chemprop.nn.metrics import R2Score, RMSE
 from lightning import pytorch as pl
 from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
+from rdkit import Chem, RDLogger
 from scipy.stats import spearmanr
 from sklearn.metrics import mean_squared_error, r2_score
 
@@ -20,12 +22,12 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ==================== changelog ====================
 # 2026-03-12
 # - Replaced pseudocode with a runnable Chemprop MPNN training pipeline.
-# - Added configurable 5-fold CV with optional synthetic-data augmentation per fold.
-# - Added robust target-column selection for real (pIC50) and synthetic (pred_pIC50) data.
-# - Added best-checkpoint export to .pth, holdout evaluation of the global best fold,
-#   and per-ratio result/loss artifacts.
-# - Kept SimpleMoleculeMolGraphFeaturizer as the graph featurization backend.
-# - Added configurable dataloader num_workers and sklearn/Spearman metric tracking.
+# - Added configurable 5-fold CV, fold summaries, and holdout evaluation.
+# - Added robust target-column selection for real/synthetic CSVs.
+# - Added checkpoint-safe loading for Torch 2.6+ (weights_only behavior).
+# - Added sklearn RMSE/R2/Spearman metric tracking and per-epoch histories.
+# - Added config-driven RDKit randomized-SMILES oversampling for train split.
+# - Reduced script size while keeping output artifacts and fold-level reporting.
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -34,7 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "total_folds": 5,
         "ratio_folders": ["0%", "33%", "67%"],
         "run_all_ratio_folders": False,
-        "target_folder": "0%",  # used when run_all_ratio_folders is False
+        "target_folder": "0%",
         "heldout_test_file": "heldout_testset.csv",
     },
     "data": {
@@ -44,12 +46,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "synthetic_target_column": "pred_pIC50",
         "fallback_target_columns": ["target_pIC50", "pred_pIC50", "pIC50"],
     },
+    "oversampling": {
+        "enabled": False,
+        "duplicates_per_smiles": 2,
+        "max_tries_per_duplicate": 8,
+    },
     "model": {
         "d_h": 256,
         "depth": 6,
         "dropout": 0.2,
-        "ffn_hidden_mult": 2, # multiplier for FFN hidden layer size relative to d_h
-        "ffn_n_layers": 3, # number of layers in the FFN predictor
+        "ffn_hidden_mult": 2,
+        "ffn_n_layers": 3,
         "batch_norm": True,
         "use_sum_aggregation": True,
     },
@@ -67,6 +74,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "deterministic": True,
         "test_each_fold": False,
     },
+    "runtime": {
+        "suppress_python_warnings": True,
+        "suppress_rdkit_warnings": True,
+    },
     "output": {
         "save_loss_curves": True,
     },
@@ -77,7 +88,21 @@ def set_global_seed(seed: int) -> None:
     pl.seed_everything(seed, workers=True)
 
 
-def _metric_to_float(value: Any) -> float | None:
+def configure_runtime(config: dict[str, Any]) -> None:
+    runtime_cfg = config.get("runtime", {})
+    if bool(runtime_cfg.get("suppress_python_warnings", True)):
+        warnings.filterwarnings("ignore", category=RuntimeWarning, module="scipy")
+        warnings.filterwarnings("ignore", category=UserWarning, module="lightning")
+        warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+    if bool(runtime_cfg.get("suppress_rdkit_warnings", True)):
+        try:
+            RDLogger.DisableLog("rdApp.*")
+        except Exception:
+            pass
+
+
+def _to_float(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, torch.Tensor):
@@ -89,29 +114,259 @@ def _metric_to_float(value: Any) -> float | None:
     return None
 
 
-def _extract_metric(
-    metrics: dict[str, Any],
-    preferred_keys: list[str],
-    key_contains_any: list[str],
-) -> float | None:
-    for key in preferred_keys:
+def _safe_nanmean(values: list[float | None]) -> float:
+    numeric = [np.nan if value is None else float(value) for value in values]
+    return float(np.nanmean(numeric))
+
+
+def _extract_metric(metrics: dict[str, Any], preferred: list[str], contains_any: list[str]) -> float | None:
+    for key in preferred:
         if key in metrics:
-            value = _metric_to_float(metrics[key])
+            value = _to_float(metrics[key])
             if value is not None:
                 return value
-
-    for key, raw_value in metrics.items():
-        low_key = str(key).lower()
-        if any(fragment in low_key for fragment in key_contains_any):
-            value = _metric_to_float(raw_value)
+    for key, raw in metrics.items():
+        if any(fragment in str(key).lower() for fragment in contains_any):
+            value = _to_float(raw)
             if value is not None:
                 return value
-
     return None
 
 
+def choose_target_column(df: pd.DataFrame, csv_path: Path, config: dict[str, Any]) -> str:
+    data_cfg = config["data"]
+    is_synthetic = csv_path.name.startswith("synthetic_data_iteration_")
+    if is_synthetic:
+        priorities = [
+            data_cfg["synthetic_target_column"],
+            *data_cfg["fallback_target_columns"],
+            data_cfg["real_target_column"],
+        ]
+    else:
+        priorities = [data_cfg["real_target_column"], *data_cfg["fallback_target_columns"]]
+    for col in priorities:
+        if col in df.columns:
+            return col
+    raise ValueError(f"No supported target column found in {csv_path}. Tried: {priorities}")
+
+
+def _randomized_smiles_variants(smiles: str, duplicates: int, max_tries_per_dup: int) -> list[str]:
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None or duplicates <= 0:
+        return []
+    variants: list[str] = []
+    seen = {smiles}
+    max_tries = max(duplicates * max_tries_per_dup, duplicates)
+    for _ in range(max_tries):
+        if len(variants) >= duplicates:
+            break
+        try:
+            candidate = Chem.MolToSmiles(mol, canonical=False, doRandom=True)
+        except Exception:
+            continue
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            variants.append(candidate)
+    return variants
+
+
+def load_datapoints_from_csvs(
+    csv_paths: list[Path],
+    config: dict[str, Any],
+    augment_train_smiles: bool = False,
+) -> list[MoleculeDatapoint]:
+    over_cfg = config.get("oversampling", {})
+    use_oversampling = bool(over_cfg.get("enabled", False)) and augment_train_smiles
+    duplicates = int(over_cfg.get("duplicates_per_smiles", 0))
+    max_tries_per_dup = int(over_cfg.get("max_tries_per_duplicate", 8))
+
+    datapoints: list[MoleculeDatapoint] = []
+    total_aug_added = 0
+
+    for csv_path in csv_paths:
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Missing expected file: {csv_path}")
+
+        df = pd.read_csv(csv_path)
+        if "smiles" not in df.columns:
+            raise ValueError(f"Missing required 'smiles' column in {csv_path}")
+
+        target_col = choose_target_column(df, csv_path, config)
+        skipped = 0
+        aug_added = 0
+
+        for _, row in df.iterrows():
+            smiles = row["smiles"]
+            target = row[target_col]
+            if pd.isna(smiles) or pd.isna(target):
+                skipped += 1
+                continue
+
+            base_smiles = str(smiles)
+            try:
+                target_value = float(target)
+                datapoints.append(MoleculeDatapoint.from_smi(base_smiles, [target_value]))
+            except Exception:
+                skipped += 1
+                continue
+
+            if use_oversampling and duplicates > 0:
+                for aug_smiles in _randomized_smiles_variants(base_smiles, duplicates, max_tries_per_dup):
+                    try:
+                        datapoints.append(MoleculeDatapoint.from_smi(aug_smiles, [target_value]))
+                        aug_added += 1
+                    except Exception:
+                        continue
+
+        total_aug_added += aug_added
+        print(
+            f"Loaded {csv_path.name}: rows={len(df)} kept={len(df) - skipped} "
+            f"skipped={skipped} target_col={target_col} aug_added={aug_added}"
+        )
+
+    if not datapoints:
+        raise ValueError("No valid molecules were loaded. Check CSV files and target columns.")
+    if use_oversampling and duplicates > 0:
+        print(f"Oversampling summary: total_augmented_smiles_added={total_aug_added}")
+    return datapoints
+
+
+def load_data(
+    train_csv_paths: list[Path],
+    val_csv_path: Path,
+    test_csv_path: Path | None,
+    config: dict[str, Any],
+) -> tuple[MoleculeDataset, MoleculeDataset, MoleculeDataset | None]:
+    train_data = load_datapoints_from_csvs(train_csv_paths, config, augment_train_smiles=True)
+    val_data = load_datapoints_from_csvs([val_csv_path], config, augment_train_smiles=False)
+    test_data = (
+        load_datapoints_from_csvs([test_csv_path], config, augment_train_smiles=False)
+        if test_csv_path is not None
+        else None
+    )
+    featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
+    train_dset = MoleculeDataset(train_data, featurizer=featurizer)
+    val_dset = MoleculeDataset(val_data, featurizer=featurizer)
+    test_dset = MoleculeDataset(test_data, featurizer=featurizer) if test_data is not None else None
+    return train_dset, val_dset, test_dset
+
+
+def build_fold_paths(ratio_dir: Path, val_idx: int, total_folds: int) -> tuple[list[Path], Path]:
+    val_csv = ratio_dir / f"fold_{val_idx}.csv"
+    train_csvs = [ratio_dir / f"fold_{i}.csv" for i in range(total_folds) if i != val_idx]
+    synthetic_csv = ratio_dir / f"synthetic_data_iteration_{val_idx}.csv"
+    if synthetic_csv.exists():
+        train_csvs.append(synthetic_csv)
+        print(f"Fold {val_idx}: synthetic augmentation enabled via {synthetic_csv.name}")
+    else:
+        print(f"Fold {val_idx}: no synthetic file, using only real fold CSVs")
+    return train_csvs, val_csv
+
+
+def _build_loader(dataset: MoleculeDataset, config: dict[str, Any], shuffle: bool):
+    data_cfg = config["data"]
+    return build_dataloader(
+        dataset,
+        batch_size=int(data_cfg["batch_size"]),
+        shuffle=shuffle,
+        num_workers=int(data_cfg.get("num_workers", 0)),
+    )
+
+
+def build_mpnn_model(config: dict[str, Any]) -> models.MPNN:
+    model_cfg, optim_cfg = config["model"], config["optimization"]
+    d_h = int(model_cfg["d_h"])
+    dropout = float(model_cfg["dropout"])
+    message_passing = nn.BondMessagePassing(d_h=d_h, depth=int(model_cfg["depth"]), dropout=dropout)
+    aggregation = nn.SumAggregation() if model_cfg["use_sum_aggregation"] else nn.MeanAggregation()
+    predictor = nn.RegressionFFN(
+        input_dim=d_h,
+        hidden_dim=d_h * int(model_cfg["ffn_hidden_mult"]),
+        n_layers=int(model_cfg["ffn_n_layers"]),
+        dropout=dropout,
+    )
+
+    kwargs: dict[str, Any] = {
+        "message_passing": message_passing,
+        "agg": aggregation,
+        "predictor": predictor,
+        "batch_norm": bool(model_cfg["batch_norm"]),
+        "metrics": [RMSE(), R2Score()],
+        "warmup_epochs": int(optim_cfg["warmup_epochs"]),
+    }
+    for key in ["init_lr", "max_lr", "final_lr"]:
+        value = optim_cfg.get(key)
+        if value is not None:
+            kwargs[key] = float(value)
+    return models.MPNN(**kwargs)
+
+
+def _flatten_prediction_output(pred_output) -> list[float]:
+    if isinstance(pred_output, torch.Tensor):
+        return [float(v) for v in pred_output.detach().cpu().reshape(-1).tolist()]
+    if isinstance(pred_output, (list, tuple)):
+        values: list[float] = []
+        for item in pred_output:
+            values.extend(_flatten_prediction_output(item))
+        return values
+    raise TypeError(f"Unsupported prediction output type: {type(pred_output)}")
+
+
+def _extract_targets_from_dataloader(dataloader) -> list[float]:
+    dataset = getattr(dataloader, "dataset", None)
+    if dataset is None:
+        raise ValueError("Dataloader has no dataset attribute; cannot extract targets.")
+    targets: list[float] = []
+    for datum in dataset:
+        y_value = getattr(datum, "y", None)
+        if y_value is None or len(y_value) == 0:
+            raise ValueError("Encountered datapoint without target 'y'.")
+        targets.append(float(y_value[0]))
+    return targets
+
+
+def _compute_regression_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]:
+    mse = float(mean_squared_error(y_true, y_pred))
+    rmse = float(np.sqrt(mse))
+    if len(y_true) < 2:
+        r2 = float("nan")
+    else:
+        try:
+            r2 = float(r2_score(y_true, y_pred))
+        except ValueError:
+            r2 = float("nan")
+
+    if len(y_true) < 2 or np.std(y_true) == 0.0 or np.std(y_pred) == 0.0:
+        rho = float("nan")
+    else:
+        rho_raw = spearmanr(y_true, y_pred)[0]
+        rho = float(rho_raw) if rho_raw is not None and not np.isnan(rho_raw) else float("nan")
+
+    return {"mse": mse, "rmse": rmse, "r2": r2, "spearman": rho}
+
+
+def _predict_with_lightning_module(pl_module: pl.LightningModule, dataloader) -> list[float]:
+    was_training = pl_module.training
+    predictions: list[float] = []
+    pl_module.eval()
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(dataloader):
+            batch = pl_module.transfer_batch_to_device(batch, pl_module.device, 0)
+            batch_pred = pl_module.predict_step(batch, batch_idx)
+            predictions.extend(_flatten_prediction_output(batch_pred))
+    if was_training:
+        pl_module.train()
+    return predictions
+
+
+def _resolve_single_dataloader(dataloaders):
+    if isinstance(dataloaders, (list, tuple)):
+        return dataloaders[0] if len(dataloaders) > 0 else None
+    return dataloaders
+
+
 class LossHistoryCallback(Callback):
-    """Collect per-epoch train/validation losses from Lightning callback metrics."""
+    """Collect per-epoch train/validation losses and sklearn validation metrics."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -124,25 +379,17 @@ class LossHistoryCallback(Callback):
         self._cached_val_targets: list[float] | None = None
 
     def on_train_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        train_loss = _extract_metric(
-            metrics=trainer.callback_metrics,
-            preferred_keys=["train_loss", "loss"],
-            key_contains_any=["train_loss"],
-        )
-        if train_loss is not None:
-            self.train_losses.append(train_loss)
+        value = _extract_metric(trainer.callback_metrics, ["train_loss", "loss"], ["train_loss"])
+        if value is not None:
+            self.train_losses.append(value)
 
     def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         if trainer.sanity_checking:
             return
 
-        val_loss = _extract_metric(
-            metrics=trainer.callback_metrics,
-            preferred_keys=["val_loss"],
-            key_contains_any=["val_loss"],
-        )
-        if val_loss is not None:
-            self.val_losses.append(val_loss)
+        value = _extract_metric(trainer.callback_metrics, ["val_loss"], ["val_loss"])
+        if value is not None:
+            self.val_losses.append(value)
 
         val_loader = _resolve_single_dataloader(trainer.val_dataloaders)
         if val_loader is None:
@@ -155,251 +402,26 @@ class LossHistoryCallback(Callback):
         if len(y_pred) != len(self._cached_val_targets):
             return
 
-        reg_metrics = _compute_regression_metrics(self._cached_val_targets, y_pred)
-        self.val_mse_history.append(reg_metrics["mse"])
-        self.val_rmse_history.append(reg_metrics["rmse"])
-        self.val_r2_history.append(reg_metrics["r2"])
-        self.val_spearman_history.append(reg_metrics["spearman"])
+        metrics = _compute_regression_metrics(self._cached_val_targets, y_pred)
+        self.val_mse_history.append(metrics["mse"])
+        self.val_rmse_history.append(metrics["rmse"])
+        self.val_r2_history.append(metrics["r2"])
+        self.val_spearman_history.append(metrics["spearman"])
 
 
-def choose_target_column(df: pd.DataFrame, csv_path: Path, config: dict[str, Any]) -> str:
-    is_synthetic = csv_path.name.startswith("synthetic_data_iteration_")
-    data_cfg = config["data"]
-
-    if is_synthetic:
-        priorities = [
-            data_cfg["synthetic_target_column"],
-            *data_cfg["fallback_target_columns"],
-            data_cfg["real_target_column"],
-        ]
-    else:
-        priorities = [
-            data_cfg["real_target_column"],
-            *data_cfg["fallback_target_columns"],
-        ]
-
-    for col in priorities:
-        if col in df.columns:
-            return col
-
-    raise ValueError(
-        f"No supported target column found in {csv_path}. "
-        f"Tried: {priorities}"
-    )
-
-
-def load_datapoints_from_csvs(
-    csv_paths: list[Path],
-    config: dict[str, Any],
-) -> list[MoleculeDatapoint]:
-    datapoints: list[MoleculeDatapoint] = []
-
-    for csv_path in csv_paths:
-        if not csv_path.exists():
-            raise FileNotFoundError(f"Missing expected file: {csv_path}")
-
-        df = pd.read_csv(csv_path)
-        if "smiles" not in df.columns:
-            raise ValueError(f"Missing required 'smiles' column in {csv_path}")
-
-        target_col = choose_target_column(df, csv_path, config)
-        skipped_rows = 0
-
-        for _, row in df.iterrows():
-            smiles = row["smiles"]
-            target = row[target_col]
-
-            if pd.isna(smiles) or pd.isna(target):
-                skipped_rows += 1
-                continue
-
-            try:
-                datapoints.append(MoleculeDatapoint.from_smi(str(smiles), [float(target)]))
-            except Exception:
-                skipped_rows += 1
-
-        print(
-            f"Loaded {csv_path.name}: rows={len(df)} kept={len(df) - skipped_rows} "
-            f"skipped={skipped_rows} target_col={target_col}"
-        )
-
-    if not datapoints:
-        raise ValueError("No valid molecules were loaded. Check CSV files and target columns.")
-
-    return datapoints
-
-
-def load_data(
-    train_csv_paths: list[Path],
-    val_csv_path: Path,
-    test_csv_path: Path | None,
-    config: dict[str, Any],
-) -> tuple[MoleculeDataset, MoleculeDataset, MoleculeDataset | None]:
-    train_data = load_datapoints_from_csvs(train_csv_paths, config)
-    val_data = load_datapoints_from_csvs([val_csv_path], config)
-    test_data = load_datapoints_from_csvs([test_csv_path], config) if test_csv_path is not None else None
-
-    # These datasets apply the same graph featurizer to all splits so train/val/test
-    # use identical atom/bond graph feature construction during batching.
-    featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
-    train_dset = MoleculeDataset(train_data, featurizer=featurizer)
-    val_dset = MoleculeDataset(val_data, featurizer=featurizer)
-    test_dset = MoleculeDataset(test_data, featurizer=featurizer) if test_data is not None else None
-    return train_dset, val_dset, test_dset
-
-
-def build_fold_paths(ratio_dir: Path, val_idx: int, total_folds: int) -> tuple[list[Path], Path]:
-    val_csv = ratio_dir / f"fold_{val_idx}.csv"
-    train_csvs = [ratio_dir / f"fold_{i}.csv" for i in range(total_folds) if i != val_idx]
-
-    synthetic_csv = ratio_dir / f"synthetic_data_iteration_{val_idx}.csv"
-    if synthetic_csv.exists():
-        train_csvs.append(synthetic_csv)
-        print(f"Fold {val_idx}: synthetic augmentation enabled via {synthetic_csv.name}")
-    else:
-        print(f"Fold {val_idx}: no synthetic file, using only real fold CSVs")
-
-    return train_csvs, val_csv
-
-
-def build_mpnn_model(config: dict[str, Any]) -> models.MPNN:
-    model_cfg = config["model"]
-    optim_cfg = config["optimization"]
-
-    d_h = int(model_cfg["d_h"])
-    dropout = float(model_cfg["dropout"])
-    ffn_hidden_dim = d_h * int(model_cfg["ffn_hidden_mult"])
-
-    message_passing = nn.BondMessagePassing(
-        d_h=d_h,
-        depth=int(model_cfg["depth"]),
-        dropout=dropout,
-    )
-    aggregation = nn.SumAggregation() if model_cfg["use_sum_aggregation"] else nn.MeanAggregation()
-    predictor = nn.RegressionFFN(
-        input_dim=d_h,
-        hidden_dim=ffn_hidden_dim,
-        n_layers=int(model_cfg["ffn_n_layers"]),
-        dropout=dropout,
-    )
-
-    mpnn_kwargs: dict[str, Any] = {
-        "message_passing": message_passing,
-        "agg": aggregation,
-        "predictor": predictor,
-        "batch_norm": bool(model_cfg["batch_norm"]),
-        "metrics": [RMSE(), R2Score()],
-        "warmup_epochs": int(optim_cfg["warmup_epochs"]),
-    }
-
-    for lr_key in ["init_lr", "max_lr", "final_lr"]:
-        lr_value = optim_cfg.get(lr_key)
-        if lr_value is not None:
-            mpnn_kwargs[lr_key] = float(lr_value)
-
-    return models.MPNN(**mpnn_kwargs)
-
-
-def _safe_nanmean(values: list[float | None]) -> float:
-    numeric_values = [np.nan if value is None else float(value) for value in values]
-    return float(np.nanmean(numeric_values))
-
-
-def _resolve_single_dataloader(dataloaders):
-    if isinstance(dataloaders, (list, tuple)):
-        if len(dataloaders) == 0:
-            return None
-        return dataloaders[0]
-    return dataloaders
-
-
-def _extract_targets_from_dataloader(dataloader) -> list[float]:
-    dataset = getattr(dataloader, "dataset", None)
-    if dataset is None:
-        raise ValueError("Dataloader has no dataset attribute; cannot extract targets.")
-
-    targets: list[float] = []
-    for datum in dataset:
-        y_value = getattr(datum, "y", None)
-        if y_value is None or len(y_value) == 0:
-            raise ValueError("Encountered datapoint without target 'y'.")
-        targets.append(float(y_value[0]))
-
-    return targets
-
-
-def _flatten_prediction_output(pred_output) -> list[float]:
-    if isinstance(pred_output, torch.Tensor):
-        return [float(x) for x in pred_output.detach().cpu().reshape(-1).tolist()]
-
-    if isinstance(pred_output, (list, tuple)):
-        values: list[float] = []
-        for item in pred_output:
-            values.extend(_flatten_prediction_output(item))
-        return values
-
-    raise TypeError(f"Unsupported prediction output type: {type(pred_output)}")
-
-
-def _compute_regression_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]:
-    mse = float(mean_squared_error(y_true, y_pred))
-    rmse = float(np.sqrt(mse))
-    try:
-        r2 = float(r2_score(y_true, y_pred))
-    except ValueError:
-        r2 = float("nan")
-
-    rho_raw = spearmanr(y_true, y_pred)[0]
-    rho = float(rho_raw) if rho_raw is not None and not np.isnan(rho_raw) else float("nan")
-
-    return {
-        "mse": mse,
-        "rmse": rmse,
-        "r2": r2,
-        "spearman": rho,
-    }
-
-
-def _predict_with_lightning_module(pl_module: pl.LightningModule, dataloader) -> list[float]:
-    was_training = pl_module.training
-    predictions: list[float] = []
-
-    pl_module.eval()
-    with torch.no_grad():
-        for batch_idx, batch in enumerate(dataloader):
-            batch = pl_module.transfer_batch_to_device(batch, pl_module.device, 0)
-            batch_pred = pl_module.predict_step(batch, batch_idx)
-            predictions.extend(_flatten_prediction_output(batch_pred))
-
-    if was_training:
-        pl_module.train()
-
-    return predictions
-
-
-def _evaluate_best_checkpoint(
-    checkpoint_path: str,
-    dataloader,
-    config: dict[str, Any],
-    mode: str,
-) -> dict[str, Any]:
-    model = build_mpnn_model(config)
-
-    # Torch 2.6 defaults torch.load(..., weights_only=True), which can fail for
-    # Lightning checkpoints that include class references in metadata.
-    # We trust checkpoints produced locally by this script, so we explicitly load
-    # with weights_only=False and then run validate/test without ckpt_path restore.
+def _load_state_dict_from_checkpoint(checkpoint_path: str) -> dict[str, Any]:
     try:
         checkpoint_obj = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     except TypeError:
         checkpoint_obj = torch.load(checkpoint_path, map_location="cpu")
+    if isinstance(checkpoint_obj, dict) and "state_dict" in checkpoint_obj:
+        return checkpoint_obj["state_dict"]
+    return checkpoint_obj
 
-    state_dict = (
-        checkpoint_obj["state_dict"]
-        if isinstance(checkpoint_obj, dict) and "state_dict" in checkpoint_obj
-        else checkpoint_obj
-    )
-    model.load_state_dict(state_dict, strict=True)
+
+def _evaluate_best_checkpoint(checkpoint_path: str, dataloader, config: dict[str, Any]) -> dict[str, Any]:
+    model = build_mpnn_model(config)
+    model.load_state_dict(_load_state_dict_from_checkpoint(checkpoint_path), strict=True)
 
     trainer = pl.Trainer(
         accelerator=config["training"]["accelerator"],
@@ -408,20 +430,12 @@ def _evaluate_best_checkpoint(
         deterministic=bool(config["training"]["deterministic"]),
         enable_progress_bar=False,
     )
-
-    if mode not in {"validate", "test"}:
-        raise ValueError(f"Unsupported evaluation mode: {mode}")
-
     pred_batches = trainer.predict(model=model, dataloaders=dataloader)
-    y_pred: list[float] = []
-    for batch_pred in pred_batches:
-        y_pred.extend(_flatten_prediction_output(batch_pred))
-
+    y_pred = [value for batch in pred_batches for value in _flatten_prediction_output(batch)]
     y_true = _extract_targets_from_dataloader(dataloader)
     if len(y_true) != len(y_pred):
         raise RuntimeError(
-            f"Prediction/target length mismatch ({len(y_pred)} vs {len(y_true)}) "
-            f"while evaluating {checkpoint_path}."
+            f"Prediction/target length mismatch ({len(y_pred)} vs {len(y_true)}) while evaluating {checkpoint_path}."
         )
 
     metrics = _compute_regression_metrics(y_true, y_pred)
@@ -439,24 +453,18 @@ def train_chemprop_model_cv_it(
 ) -> dict[str, Any]:
     should_test_each_fold = bool(config["training"]["test_each_fold"])
     effective_test_path = test_csv_path if should_test_each_fold else None
-    train_dset, val_dset, test_dset = load_data(train_csv_paths, val_csv_path, effective_test_path, config)
 
-    batch_size = int(config["data"]["batch_size"])
-    num_workers = int(config["data"].get("num_workers", 0))
-    train_loader = build_dataloader(train_dset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = build_dataloader(val_dset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    test_loader = (
-        build_dataloader(test_dset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        if test_dset is not None
-        else None
-    )
+    train_dset, val_dset, test_dset = load_data(train_csv_paths, val_csv_path, effective_test_path, config)
+    train_loader = _build_loader(train_dset, config, shuffle=True)
+    val_loader = _build_loader(val_dset, config, shuffle=False)
+    test_loader = _build_loader(test_dset, config, shuffle=False) if test_dset is not None else None
 
     model = build_mpnn_model(config)
-    loss_history_callback = LossHistoryCallback()
+    history_cb = LossHistoryCallback()
 
     checkpoint_dir = ratio_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_callback = ModelCheckpoint(
+    checkpoint_cb = ModelCheckpoint(
         dirpath=str(checkpoint_dir),
         filename=f"fold_{val_idx}_best",
         monitor="val_loss",
@@ -470,7 +478,11 @@ def train_chemprop_model_cv_it(
         mode="min",
         verbose=False,
     )
-    logger = CSVLogger(save_dir=str(ratio_dir / "lightning_logs"), name="chemprop_mpnn", version=f"fold_{val_idx}")
+    logger = CSVLogger(
+        save_dir=str(ratio_dir / "lightning_logs"),
+        name="chemprop_mpnn",
+        version=f"fold_{val_idx}",
+    )
 
     trainer = pl.Trainer(
         max_epochs=int(config["training"]["max_epochs"]),
@@ -479,52 +491,39 @@ def train_chemprop_model_cv_it(
         enable_progress_bar=True,
         logger=logger,
         enable_checkpointing=True,
-        callbacks=[early_stop, checkpoint_callback, loss_history_callback],
+        callbacks=[early_stop, checkpoint_cb, history_cb],
     )
-
     trainer.fit(model, train_loader, val_loader)
 
-    best_ckpt_path = checkpoint_callback.best_model_path
+    best_ckpt_path = checkpoint_cb.best_model_path
     if not best_ckpt_path:
         raise RuntimeError(f"No best checkpoint produced for fold {val_idx}.")
 
-    val_metrics = _evaluate_best_checkpoint(best_ckpt_path, val_loader, config, mode="validate")
-    val_mse = float(val_metrics["mse"])
-    val_loss = val_mse
-    val_rmse = float(val_metrics["rmse"])
-    val_r2 = float(val_metrics["r2"])
-    val_spearman = float(val_metrics["spearman"])
-
-    test_metrics: dict[str, Any] | None = None
+    val_metrics = _evaluate_best_checkpoint(best_ckpt_path, val_loader, config)
+    test_metrics = None
     if should_test_each_fold and test_loader is not None:
-        test_metrics = _evaluate_best_checkpoint(best_ckpt_path, test_loader, config, mode="test")
+        test_metrics = _evaluate_best_checkpoint(best_ckpt_path, test_loader, config)
 
-    # Export lightweight state_dict for reuse without Lightning checkpoint metadata.
     best_pth_path = ratio_dir / f"best_model_iteration_{val_idx}.pth"
-    try:
-        checkpoint_obj = torch.load(best_ckpt_path, map_location="cpu", weights_only=False)
-    except TypeError:
-        checkpoint_obj = torch.load(best_ckpt_path, map_location="cpu")
-    state_dict = checkpoint_obj["state_dict"] if isinstance(checkpoint_obj, dict) and "state_dict" in checkpoint_obj else checkpoint_obj
-    torch.save(state_dict, best_pth_path)
+    torch.save(_load_state_dict_from_checkpoint(best_ckpt_path), best_pth_path)
 
     return {
         "fold_idx": val_idx,
         "best_ckpt_path": best_ckpt_path,
         "best_pth_path": str(best_pth_path),
-        "val_mse": val_mse,
-        "val_loss": val_loss,
-        "val_rmse": val_rmse,
-        "val_r2": val_r2,
-        "val_spearman": val_spearman,
+        "val_loss": _to_float(checkpoint_cb.best_model_score),
+        "val_mse": float(val_metrics["mse"]),
+        "val_rmse": float(val_metrics["rmse"]),
+        "val_r2": float(val_metrics["r2"]),
+        "val_spearman": float(val_metrics["spearman"]),
         "val_metrics_sklearn": val_metrics,
         "test_metrics_sklearn": test_metrics,
-        "train_losses": loss_history_callback.train_losses,
-        "val_losses": loss_history_callback.val_losses,
-        "val_mse_history": loss_history_callback.val_mse_history,
-        "val_rmse_history": loss_history_callback.val_rmse_history,
-        "val_r2_history": loss_history_callback.val_r2_history,
-        "val_spearman_history": loss_history_callback.val_spearman_history,
+        "train_losses": history_cb.train_losses,
+        "val_losses": history_cb.val_losses,
+        "val_mse_history": history_cb.val_mse_history,
+        "val_rmse_history": history_cb.val_rmse_history,
+        "val_r2_history": history_cb.val_r2_history,
+        "val_spearman_history": history_cb.val_spearman_history,
     }
 
 
@@ -532,25 +531,18 @@ def _pick_best_fold(fold_results: list[dict[str, Any]]) -> dict[str, Any]:
     with_rmse = [fr for fr in fold_results if fr["val_rmse"] is not None]
     if with_rmse:
         return min(with_rmse, key=lambda fr: fr["val_rmse"])
-
     with_loss = [fr for fr in fold_results if fr["val_loss"] is not None]
     if with_loss:
         return min(with_loss, key=lambda fr: fr["val_loss"])
-
     raise RuntimeError("Unable to pick best fold: no fold has val_rmse or val_loss.")
 
 
-def _write_losses_file(
-    ratio_dir: Path,
-    ratio_name: str,
-    fold_results: list[dict[str, Any]],
-) -> None:
+def _write_losses_file(ratio_dir: Path, ratio_name: str, fold_results: list[dict[str, Any]]) -> None:
     loss_path = ratio_dir / f"MPNN_losses_{ratio_name}.txt"
     with open(loss_path, "w", encoding="utf-8") as f:
         for fold_res in fold_results:
             f.write(f"fold_{fold_res['fold_idx']}\n")
             f.write("epoch,train_loss,val_loss,val_mse,val_rmse,val_r2,val_spearman\n")
-
             max_len = max(
                 len(fold_res["train_losses"]),
                 len(fold_res["val_losses"]),
@@ -565,16 +557,13 @@ def _write_losses_file(
                 val_mse = fold_res["val_mse_history"][epoch] if epoch < len(fold_res["val_mse_history"]) else ""
                 val_rmse = fold_res["val_rmse_history"][epoch] if epoch < len(fold_res["val_rmse_history"]) else ""
                 val_r2 = fold_res["val_r2_history"][epoch] if epoch < len(fold_res["val_r2_history"]) else ""
-                val_spearman = fold_res["val_spearman_history"][epoch] if epoch < len(fold_res["val_spearman_history"]) else ""
-                f.write(f"{epoch + 1},{train_loss},{val_loss},{val_mse},{val_rmse},{val_r2},{val_spearman}\n")
-
+                val_rho = fold_res["val_spearman_history"][epoch] if epoch < len(fold_res["val_spearman_history"]) else ""
+                f.write(f"{epoch + 1},{train_loss},{val_loss},{val_mse},{val_rmse},{val_r2},{val_rho}\n")
             f.write(
                 "final_summary,"
                 f"{''},{fold_res.get('val_loss', '')},{fold_res.get('val_mse', '')},"
-                f"{fold_res.get('val_rmse', '')},{fold_res.get('val_r2', '')},{fold_res.get('val_spearman', '')}\n"
+                f"{fold_res.get('val_rmse', '')},{fold_res.get('val_r2', '')},{fold_res.get('val_spearman', '')}\n\n"
             )
-            f.write("\n")
-
     print(f"Saved losses to: {loss_path}")
 
 
@@ -583,7 +572,6 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
     total_folds = int(exp_cfg["total_folds"])
     ratio_name = ratio_dir.name
     heldout_path = workspace_root / exp_cfg["heldout_test_file"]
-
     if not heldout_path.exists():
         raise FileNotFoundError(f"Heldout test file not found: {heldout_path}")
 
@@ -603,72 +591,54 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
         )
         fold_results.append(fold_result)
         print(
-            f"Fold {val_idx} done | val_loss={fold_result['val_loss']} "
-            f"val_rmse={fold_result['val_rmse']} val_r2={fold_result['val_r2']} "
-            f"val_spearman={fold_result['val_spearman']}"
+            f"Fold {val_idx} done | best_val_loss={fold_result['val_loss']} "
+            f"val_mse={fold_result['val_mse']} val_rmse={fold_result['val_rmse']} "
+            f"val_r2={fold_result['val_r2']} val_spearman={fold_result['val_spearman']}"
         )
 
     best_fold = _pick_best_fold(fold_results)
     print(
         f"\nBest fold for {ratio_name}: fold_{best_fold['fold_idx']} "
-        f"(val_rmse={best_fold['val_rmse']}, val_loss={best_fold['val_loss']})"
+        f"(val_rmse={best_fold['val_rmse']}, best_val_loss={best_fold['val_loss']})"
     )
 
-    # Evaluate only the globally best fold on holdout, matching the original workflow.
-    test_data = load_datapoints_from_csvs([heldout_path], config)
-    test_featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
-    test_dset = MoleculeDataset(test_data, featurizer=test_featurizer)
-    test_loader = build_dataloader(
-        test_dset,
-        batch_size=int(config["data"]["batch_size"]),
-        shuffle=False,
-        num_workers=int(config["data"].get("num_workers", 0)),
-    )
-    holdout_metrics_raw = _evaluate_best_checkpoint(
+    test_data = load_datapoints_from_csvs([heldout_path], config, augment_train_smiles=False)
+    test_dset = MoleculeDataset(test_data, featurizer=featurizers.SimpleMoleculeMolGraphFeaturizer())
+    holdout_metrics = _evaluate_best_checkpoint(
         checkpoint_path=best_fold["best_ckpt_path"],
-        dataloader=test_loader,
+        dataloader=_build_loader(test_dset, config, shuffle=False),
         config=config,
-        mode="test",
     )
 
-    holdout_loss = float(holdout_metrics_raw["mse"])
-    holdout_rmse = float(holdout_metrics_raw["rmse"])
-    holdout_r2 = float(holdout_metrics_raw["r2"])
-    holdout_spearman = float(holdout_metrics_raw["spearman"])
-
-    summary_rows: list[dict[str, Any]] = []
-    for fr in fold_results:
-        summary_rows.append(
-            {
-                "Stage": f"Fold_{fr['fold_idx']}_Val",
-                "Loss": fr["val_loss"],
-                "RMSE": fr["val_rmse"],
-                "R2": fr["val_r2"],
-                "Rho": fr["val_spearman"],
-            }
-        )
-
-    avg_loss = _safe_nanmean([fr["val_loss"] for fr in fold_results])
-    avg_rmse = _safe_nanmean([fr["val_rmse"] for fr in fold_results])
-    avg_r2 = _safe_nanmean([fr["val_r2"] for fr in fold_results])
-    avg_rho = _safe_nanmean([fr["val_spearman"] for fr in fold_results])
-
+    summary_rows: list[dict[str, Any]] = [
+        {
+            "Stage": f"Fold_{fr['fold_idx']}_Val",
+            "ValLoss": fr["val_loss"],
+            "MSE": fr["val_mse"],
+            "RMSE": fr["val_rmse"],
+            "R2": fr["val_r2"],
+            "Rho": fr["val_spearman"],
+        }
+        for fr in fold_results
+    ]
     summary_rows.append(
         {
             "Stage": "Average_Val",
-            "Loss": avg_loss,
-            "RMSE": avg_rmse,
-            "R2": avg_r2,
-            "Rho": avg_rho,
+            "ValLoss": _safe_nanmean([fr["val_loss"] for fr in fold_results]),
+            "MSE": _safe_nanmean([fr["val_mse"] for fr in fold_results]),
+            "RMSE": _safe_nanmean([fr["val_rmse"] for fr in fold_results]),
+            "R2": _safe_nanmean([fr["val_r2"] for fr in fold_results]),
+            "Rho": _safe_nanmean([fr["val_spearman"] for fr in fold_results]),
         }
     )
     summary_rows.append(
         {
             "Stage": f"Holdout_Test (Model from Fold_{best_fold['fold_idx']})",
-            "Loss": holdout_loss,
-            "RMSE": holdout_rmse,
-            "R2": holdout_r2,
-            "Rho": holdout_spearman,
+            "ValLoss": "",
+            "MSE": float(holdout_metrics["mse"]),
+            "RMSE": float(holdout_metrics["rmse"]),
+            "R2": float(holdout_metrics["r2"]),
+            "Rho": float(holdout_metrics["spearman"]),
         }
     )
 
@@ -680,7 +650,7 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
     print(summary_df.to_string(index=False))
     print(f"Saved metrics to: {results_path}")
 
-    if bool(config["output"]["save_loss_curves"]):
+    if bool(config["output"].get("save_loss_curves", True)):
         _write_losses_file(ratio_dir, ratio_name, fold_results)
 
     return summary_df
@@ -688,17 +658,8 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train Chemprop MPNN with CV on ratio folders.")
-    parser.add_argument(
-        "--folder",
-        type=str,
-        default=None,
-        help="Run only one ratio folder (example: 0%, 33%, 67%).",
-    )
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Override config and run all ratio folders.",
-    )
+    parser.add_argument("--folder", type=str, default=None, help="Run one ratio folder (0%, 33%, 67%).")
+    parser.add_argument("--all", action="store_true", help="Override config and run all ratio folders.")
     return parser.parse_args()
 
 
@@ -707,6 +668,7 @@ def main() -> None:
     config = DEFAULT_CONFIG
     workspace_root = Path(__file__).resolve().parent
 
+    configure_runtime(config)
     set_global_seed(int(config["experiment"]["seed"]))
 
     run_all = bool(config["experiment"]["run_all_ratio_folders"])
