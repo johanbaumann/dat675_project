@@ -13,6 +13,8 @@ from chemprop.nn.metrics import R2Score, RMSE
 from lightning import pytorch as pl
 from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
+from scipy.stats import spearmanr
+from sklearn.metrics import mean_squared_error, r2_score
 
 
 # ==================== changelog ====================
@@ -23,6 +25,7 @@ from lightning.pytorch.loggers import CSVLogger
 # - Added best-checkpoint export to .pth, holdout evaluation of the global best fold,
 #   and per-ratio result/loss artifacts.
 # - Kept SimpleMoleculeMolGraphFeaturizer as the graph featurization backend.
+# - Added configurable dataloader num_workers and sklearn/Spearman metric tracking.
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -36,6 +39,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "data": {
         "batch_size": 64,
+        "num_workers": 4,
         "real_target_column": "pIC50",
         "synthetic_target_column": "pred_pIC50",
         "fallback_target_columns": ["target_pIC50", "pred_pIC50", "pIC50"],
@@ -45,7 +49,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "depth": 6,
         "dropout": 0.2,
         "ffn_hidden_mult": 2, # multiplier for FFN hidden layer size relative to d_h
-        "ffn_n_layers": 2, # number of layers in the FFN predictor
+        "ffn_n_layers": 3, # number of layers in the FFN predictor
         "batch_norm": True,
         "use_sum_aggregation": True,
     },
@@ -113,6 +117,11 @@ class LossHistoryCallback(Callback):
         super().__init__()
         self.train_losses: list[float] = []
         self.val_losses: list[float] = []
+        self.val_mse_history: list[float] = []
+        self.val_rmse_history: list[float] = []
+        self.val_r2_history: list[float] = []
+        self.val_spearman_history: list[float] = []
+        self._cached_val_targets: list[float] | None = None
 
     def on_train_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         train_loss = _extract_metric(
@@ -126,6 +135,7 @@ class LossHistoryCallback(Callback):
     def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         if trainer.sanity_checking:
             return
+
         val_loss = _extract_metric(
             metrics=trainer.callback_metrics,
             preferred_keys=["val_loss"],
@@ -133,6 +143,23 @@ class LossHistoryCallback(Callback):
         )
         if val_loss is not None:
             self.val_losses.append(val_loss)
+
+        val_loader = _resolve_single_dataloader(trainer.val_dataloaders)
+        if val_loader is None:
+            return
+
+        if self._cached_val_targets is None:
+            self._cached_val_targets = _extract_targets_from_dataloader(val_loader)
+
+        y_pred = _predict_with_lightning_module(pl_module, val_loader)
+        if len(y_pred) != len(self._cached_val_targets):
+            return
+
+        reg_metrics = _compute_regression_metrics(self._cached_val_targets, y_pred)
+        self.val_mse_history.append(reg_metrics["mse"])
+        self.val_rmse_history.append(reg_metrics["rmse"])
+        self.val_r2_history.append(reg_metrics["r2"])
+        self.val_spearman_history.append(reg_metrics["spearman"])
 
 
 def choose_target_column(df: pd.DataFrame, csv_path: Path, config: dict[str, Any]) -> str:
@@ -273,13 +300,81 @@ def build_mpnn_model(config: dict[str, Any]) -> models.MPNN:
     return models.MPNN(**mpnn_kwargs)
 
 
-def _trainer_metric_dict(metric_output: list[dict[str, Any]]) -> dict[str, Any]:
-    return metric_output[0] if metric_output else {}
-
-
 def _safe_nanmean(values: list[float | None]) -> float:
     numeric_values = [np.nan if value is None else float(value) for value in values]
     return float(np.nanmean(numeric_values))
+
+
+def _resolve_single_dataloader(dataloaders):
+    if isinstance(dataloaders, (list, tuple)):
+        if len(dataloaders) == 0:
+            return None
+        return dataloaders[0]
+    return dataloaders
+
+
+def _extract_targets_from_dataloader(dataloader) -> list[float]:
+    dataset = getattr(dataloader, "dataset", None)
+    if dataset is None:
+        raise ValueError("Dataloader has no dataset attribute; cannot extract targets.")
+
+    targets: list[float] = []
+    for datum in dataset:
+        y_value = getattr(datum, "y", None)
+        if y_value is None or len(y_value) == 0:
+            raise ValueError("Encountered datapoint without target 'y'.")
+        targets.append(float(y_value[0]))
+
+    return targets
+
+
+def _flatten_prediction_output(pred_output) -> list[float]:
+    if isinstance(pred_output, torch.Tensor):
+        return [float(x) for x in pred_output.detach().cpu().reshape(-1).tolist()]
+
+    if isinstance(pred_output, (list, tuple)):
+        values: list[float] = []
+        for item in pred_output:
+            values.extend(_flatten_prediction_output(item))
+        return values
+
+    raise TypeError(f"Unsupported prediction output type: {type(pred_output)}")
+
+
+def _compute_regression_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]:
+    mse = float(mean_squared_error(y_true, y_pred))
+    rmse = float(np.sqrt(mse))
+    try:
+        r2 = float(r2_score(y_true, y_pred))
+    except ValueError:
+        r2 = float("nan")
+
+    rho_raw = spearmanr(y_true, y_pred)[0]
+    rho = float(rho_raw) if rho_raw is not None and not np.isnan(rho_raw) else float("nan")
+
+    return {
+        "mse": mse,
+        "rmse": rmse,
+        "r2": r2,
+        "spearman": rho,
+    }
+
+
+def _predict_with_lightning_module(pl_module: pl.LightningModule, dataloader) -> list[float]:
+    was_training = pl_module.training
+    predictions: list[float] = []
+
+    pl_module.eval()
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(dataloader):
+            batch = pl_module.transfer_batch_to_device(batch, pl_module.device, 0)
+            batch_pred = pl_module.predict_step(batch, batch_idx)
+            predictions.extend(_flatten_prediction_output(batch_pred))
+
+    if was_training:
+        pl_module.train()
+
+    return predictions
 
 
 def _evaluate_best_checkpoint(
@@ -314,14 +409,24 @@ def _evaluate_best_checkpoint(
         enable_progress_bar=False,
     )
 
-    if mode == "validate":
-        metrics = trainer.validate(model=model, dataloaders=dataloader, verbose=False)
-    elif mode == "test":
-        metrics = trainer.test(model=model, dataloaders=dataloader, verbose=False)
-    else:
+    if mode not in {"validate", "test"}:
         raise ValueError(f"Unsupported evaluation mode: {mode}")
 
-    return _trainer_metric_dict(metrics)
+    pred_batches = trainer.predict(model=model, dataloaders=dataloader)
+    y_pred: list[float] = []
+    for batch_pred in pred_batches:
+        y_pred.extend(_flatten_prediction_output(batch_pred))
+
+    y_true = _extract_targets_from_dataloader(dataloader)
+    if len(y_true) != len(y_pred):
+        raise RuntimeError(
+            f"Prediction/target length mismatch ({len(y_pred)} vs {len(y_true)}) "
+            f"while evaluating {checkpoint_path}."
+        )
+
+    metrics = _compute_regression_metrics(y_true, y_pred)
+    metrics["n_samples"] = float(len(y_true))
+    return metrics
 
 
 def train_chemprop_model_cv_it(
@@ -337,9 +442,14 @@ def train_chemprop_model_cv_it(
     train_dset, val_dset, test_dset = load_data(train_csv_paths, val_csv_path, effective_test_path, config)
 
     batch_size = int(config["data"]["batch_size"])
-    train_loader = build_dataloader(train_dset, batch_size=batch_size, shuffle=True)
-    val_loader = build_dataloader(val_dset, batch_size=batch_size, shuffle=False)
-    test_loader = build_dataloader(test_dset, batch_size=batch_size, shuffle=False) if test_dset is not None else None
+    num_workers = int(config["data"].get("num_workers", 0))
+    train_loader = build_dataloader(train_dset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = build_dataloader(val_dset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    test_loader = (
+        build_dataloader(test_dset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        if test_dset is not None
+        else None
+    )
 
     model = build_mpnn_model(config)
     loss_history_callback = LossHistoryCallback()
@@ -378,14 +488,16 @@ def train_chemprop_model_cv_it(
     if not best_ckpt_path:
         raise RuntimeError(f"No best checkpoint produced for fold {val_idx}.")
 
-    val_metrics_raw = _evaluate_best_checkpoint(best_ckpt_path, val_loader, config, mode="validate")
-    val_loss = _extract_metric(val_metrics_raw, ["val_loss"], ["val_loss"])
-    val_rmse = _extract_metric(val_metrics_raw, ["val_rmse"], ["rmse", "val/rmse"])
-    val_r2 = _extract_metric(val_metrics_raw, ["val_r2"], ["r2", "val/r2"])
+    val_metrics = _evaluate_best_checkpoint(best_ckpt_path, val_loader, config, mode="validate")
+    val_mse = float(val_metrics["mse"])
+    val_loss = val_mse
+    val_rmse = float(val_metrics["rmse"])
+    val_r2 = float(val_metrics["r2"])
+    val_spearman = float(val_metrics["spearman"])
 
-    test_metrics_raw: dict[str, Any] | None = None
+    test_metrics: dict[str, Any] | None = None
     if should_test_each_fold and test_loader is not None:
-        test_metrics_raw = _evaluate_best_checkpoint(best_ckpt_path, test_loader, config, mode="test")
+        test_metrics = _evaluate_best_checkpoint(best_ckpt_path, test_loader, config, mode="test")
 
     # Export lightweight state_dict for reuse without Lightning checkpoint metadata.
     best_pth_path = ratio_dir / f"best_model_iteration_{val_idx}.pth"
@@ -400,13 +512,19 @@ def train_chemprop_model_cv_it(
         "fold_idx": val_idx,
         "best_ckpt_path": best_ckpt_path,
         "best_pth_path": str(best_pth_path),
+        "val_mse": val_mse,
         "val_loss": val_loss,
         "val_rmse": val_rmse,
         "val_r2": val_r2,
-        "val_metrics_raw": {k: _metric_to_float(v) for k, v in val_metrics_raw.items()},
-        "test_metrics_raw": {k: _metric_to_float(v) for k, v in test_metrics_raw.items()} if test_metrics_raw else None,
+        "val_spearman": val_spearman,
+        "val_metrics_sklearn": val_metrics,
+        "test_metrics_sklearn": test_metrics,
         "train_losses": loss_history_callback.train_losses,
         "val_losses": loss_history_callback.val_losses,
+        "val_mse_history": loss_history_callback.val_mse_history,
+        "val_rmse_history": loss_history_callback.val_rmse_history,
+        "val_r2_history": loss_history_callback.val_r2_history,
+        "val_spearman_history": loss_history_callback.val_spearman_history,
     }
 
 
@@ -431,13 +549,30 @@ def _write_losses_file(
     with open(loss_path, "w", encoding="utf-8") as f:
         for fold_res in fold_results:
             f.write(f"fold_{fold_res['fold_idx']}\n")
-            f.write("epoch,train_loss,val_loss\n")
+            f.write("epoch,train_loss,val_loss,val_mse,val_rmse,val_r2,val_spearman\n")
 
-            max_len = max(len(fold_res["train_losses"]), len(fold_res["val_losses"]))
+            max_len = max(
+                len(fold_res["train_losses"]),
+                len(fold_res["val_losses"]),
+                len(fold_res.get("val_mse_history", [])),
+                len(fold_res.get("val_rmse_history", [])),
+                len(fold_res.get("val_r2_history", [])),
+                len(fold_res.get("val_spearman_history", [])),
+            )
             for epoch in range(max_len):
                 train_loss = fold_res["train_losses"][epoch] if epoch < len(fold_res["train_losses"]) else ""
                 val_loss = fold_res["val_losses"][epoch] if epoch < len(fold_res["val_losses"]) else ""
-                f.write(f"{epoch + 1},{train_loss},{val_loss}\n")
+                val_mse = fold_res["val_mse_history"][epoch] if epoch < len(fold_res["val_mse_history"]) else ""
+                val_rmse = fold_res["val_rmse_history"][epoch] if epoch < len(fold_res["val_rmse_history"]) else ""
+                val_r2 = fold_res["val_r2_history"][epoch] if epoch < len(fold_res["val_r2_history"]) else ""
+                val_spearman = fold_res["val_spearman_history"][epoch] if epoch < len(fold_res["val_spearman_history"]) else ""
+                f.write(f"{epoch + 1},{train_loss},{val_loss},{val_mse},{val_rmse},{val_r2},{val_spearman}\n")
+
+            f.write(
+                "final_summary,"
+                f"{''},{fold_res.get('val_loss', '')},{fold_res.get('val_mse', '')},"
+                f"{fold_res.get('val_rmse', '')},{fold_res.get('val_r2', '')},{fold_res.get('val_spearman', '')}\n"
+            )
             f.write("\n")
 
     print(f"Saved losses to: {loss_path}")
@@ -469,7 +604,8 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
         fold_results.append(fold_result)
         print(
             f"Fold {val_idx} done | val_loss={fold_result['val_loss']} "
-            f"val_rmse={fold_result['val_rmse']} val_r2={fold_result['val_r2']}"
+            f"val_rmse={fold_result['val_rmse']} val_r2={fold_result['val_r2']} "
+            f"val_spearman={fold_result['val_spearman']}"
         )
 
     best_fold = _pick_best_fold(fold_results)
@@ -482,7 +618,12 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
     test_data = load_datapoints_from_csvs([heldout_path], config)
     test_featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
     test_dset = MoleculeDataset(test_data, featurizer=test_featurizer)
-    test_loader = build_dataloader(test_dset, batch_size=int(config["data"]["batch_size"]), shuffle=False)
+    test_loader = build_dataloader(
+        test_dset,
+        batch_size=int(config["data"]["batch_size"]),
+        shuffle=False,
+        num_workers=int(config["data"].get("num_workers", 0)),
+    )
     holdout_metrics_raw = _evaluate_best_checkpoint(
         checkpoint_path=best_fold["best_ckpt_path"],
         dataloader=test_loader,
@@ -490,13 +631,10 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
         mode="test",
     )
 
-    holdout_rmse = _extract_metric(holdout_metrics_raw, ["test_rmse"], ["rmse", "test/rmse"])
-    holdout_r2 = _extract_metric(holdout_metrics_raw, ["test_r2"], ["r2", "test/r2"])
-    holdout_loss = _extract_metric(
-        holdout_metrics_raw,
-        ["test_loss", "test_mse"],
-        ["test_loss", "/loss", "_loss", "test/mse", "_mse"],
-    )
+    holdout_loss = float(holdout_metrics_raw["mse"])
+    holdout_rmse = float(holdout_metrics_raw["rmse"])
+    holdout_r2 = float(holdout_metrics_raw["r2"])
+    holdout_spearman = float(holdout_metrics_raw["spearman"])
 
     summary_rows: list[dict[str, Any]] = []
     for fr in fold_results:
@@ -506,12 +644,14 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
                 "Loss": fr["val_loss"],
                 "RMSE": fr["val_rmse"],
                 "R2": fr["val_r2"],
+                "Rho": fr["val_spearman"],
             }
         )
 
     avg_loss = _safe_nanmean([fr["val_loss"] for fr in fold_results])
     avg_rmse = _safe_nanmean([fr["val_rmse"] for fr in fold_results])
     avg_r2 = _safe_nanmean([fr["val_r2"] for fr in fold_results])
+    avg_rho = _safe_nanmean([fr["val_spearman"] for fr in fold_results])
 
     summary_rows.append(
         {
@@ -519,6 +659,7 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
             "Loss": avg_loss,
             "RMSE": avg_rmse,
             "R2": avg_r2,
+            "Rho": avg_rho,
         }
     )
     summary_rows.append(
@@ -527,6 +668,7 @@ def run_allcv_iterations(config: dict[str, Any], ratio_dir: Path, workspace_root
             "Loss": holdout_loss,
             "RMSE": holdout_rmse,
             "R2": holdout_r2,
+            "Rho": holdout_spearman,
         }
     )
 
