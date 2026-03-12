@@ -15,6 +15,56 @@ from torch_geometric.loader import DataLoader
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+# ==================== target scaling ====================
+# Optional per-fold target standardization. If enabled, we fit mean/std on the
+# training fold only, train the model to predict standardized targets, and invert
+# predictions back to the original target scale for metrics and reporting.
+
+
+def _get_target_standardization_config(config: dict[str, Any]) -> dict[str, Any]:
+	target_cfg = config.get("training", {}).get("target_standardization", {})
+	if not isinstance(target_cfg, dict):
+		target_cfg = {}
+	return {
+		"enabled": bool(target_cfg.get("enabled", False)),
+		"epsilon": float(target_cfg.get("epsilon", 1e-8)),
+	}
+
+
+def fit_target_standardizer(
+	train_targets: np.ndarray,
+	*,
+	epsilon: float = 1e-8,
+) -> tuple[float, float]:
+	"""Fit (mean, std) on the training fold targets.
+
+	Uses population std (ddof=0) and guards against near-zero std.
+	"""
+	mean = float(np.mean(train_targets))
+	std = float(np.std(train_targets))
+	if not np.isfinite(std) or std < epsilon:
+		std = 1.0
+	return mean, std
+
+
+def standardize_targets_tensor(
+	y: torch.Tensor,
+	*,
+	mean: torch.Tensor,
+	std: torch.Tensor,
+) -> torch.Tensor:
+	return (y - mean) / std
+
+
+def invert_standardization_tensor(
+	y_scaled: torch.Tensor,
+	*,
+	mean: torch.Tensor,
+	std: torch.Tensor,
+) -> torch.Tensor:
+	return y_scaled * std + mean
+
+
 # ==================== feature spaces ====================
 # Categorical features can be encoded as one_hot (+other) or index (+unknown index)
 # depending on CONFIG["features"]["categorical_encoding_mode"].
@@ -61,6 +111,39 @@ ATOM_BASE_FEATURE_NAMES = [
 	"is_in_ring",
 ]
 
+# Descriptor keys for config-driven feature selection.
+ALLOWED_ATOM_DESCRIPTORS = set(
+	ATOM_BASE_FEATURE_NAMES + ["hybridization", "chirality"]
+)
+ALLOWED_BOND_DESCRIPTORS = {
+	"bond_type",
+	"bond_order",
+	"is_conjugated",
+	"is_in_ring",
+	"bond_stereo",
+}
+
+DEFAULT_ATOM_DESCRIPTORS = [
+	"atomic_num",
+	"degree",
+	"total_num_hs",
+	"formal_charge",
+	"implicit_valence",
+	"mass_scaled",
+	"is_aromatic",
+	"is_in_ring",
+	"hybridization",
+	"chirality",
+]
+
+DEFAULT_BOND_DESCRIPTORS = [
+	"bond_type",
+	"bond_order",
+	"is_conjugated",
+	"is_in_ring",
+	"bond_stereo",
+]
+
 HYBRIDIZATION_VALUES = [v for _, v in HYBRIDIZATION_TYPES]
 CHIRAL_VALUES = [v for _, v in CHIRAL_TYPES]
 BOND_TYPE_CATEGORY_VALUES = [v for _, v in BOND_TYPE_VALUES]
@@ -74,7 +157,84 @@ def set_seed(seed: int) -> None:
 		torch.cuda.manual_seed_all(seed)
 
 
-def build_feature_names(encoding_mode: str):
+def _normalize_descriptor_list(value, *, allowed: set[str], default: list[str], label: str) -> list[str]:
+	if value is None:
+		value = default
+	if isinstance(value, dict):
+		# Allow {name: bool} for convenience.
+		value = [k for k, v in value.items() if bool(v)]
+	if not isinstance(value, list) or any(not isinstance(x, str) for x in value):
+		raise ValueError(f"CONFIG['features']['{label}'] must be a list[str] or dict[str, bool].")
+	value = [str(x) for x in value]
+	unknown = sorted(set(value) - allowed)
+	if unknown:
+		raise ValueError(
+			f"Unknown {label} entries: {unknown}. Allowed: {sorted(allowed)}"
+		)
+	# Preserve order but drop duplicates.
+	seen = set()
+	ordered = []
+	for name in value:
+		if name not in seen:
+			seen.add(name)
+			ordered.append(name)
+	if len(ordered) == 0:
+		raise ValueError(f"CONFIG['features']['{label}'] must enable at least one descriptor.")
+	return ordered
+
+
+def build_feature_names(
+	encoding_mode: str,
+	*,
+	atom_descriptors: list[str],
+	bond_descriptors: list[str],
+):
+	atom_feature_names: list[str] = []
+	edge_feature_names: list[str] = []
+
+	# Atom (node) descriptors
+	for desc in atom_descriptors:
+		if desc in ATOM_BASE_FEATURE_NAMES:
+			atom_feature_names.append(desc)
+		elif desc == "hybridization":
+			if encoding_mode == "one_hot":
+				atom_feature_names += [
+					f"hybridization_{name}" for name, _ in HYBRIDIZATION_TYPES
+				] + ["hybridization_other"]
+			else:
+				atom_feature_names.append("hybridization_index")
+		elif desc == "chirality":
+			if encoding_mode == "one_hot":
+				atom_feature_names += [
+					f"chirality_{name}" for name, _ in CHIRAL_TYPES
+				] + ["chirality_other"]
+			else:
+				atom_feature_names.append("chirality_index")
+
+	# Bond (edge) descriptors
+	for desc in bond_descriptors:
+		if desc == "bond_type":
+			if encoding_mode == "one_hot":
+				edge_feature_names += [
+					f"bond_type_{name}" for name, _ in BOND_TYPE_VALUES
+				] + ["bond_type_other"]
+			else:
+				edge_feature_names.append("bond_type_index")
+		elif desc == "bond_order":
+			edge_feature_names.append("bond_order")
+		elif desc == "is_conjugated":
+			edge_feature_names.append("is_conjugated")
+		elif desc == "is_in_ring":
+			edge_feature_names.append("is_in_ring")
+		elif desc == "bond_stereo":
+			if encoding_mode == "one_hot":
+				edge_feature_names += [
+					f"bond_stereo_{name}" for name, _ in BOND_STEREO_TYPES
+				] + ["bond_stereo_other"]
+			else:
+				edge_feature_names.append("bond_stereo_index")
+
+	return atom_feature_names, edge_feature_names
 	if encoding_mode == "one_hot":
 		atom_feature_names = (
 			ATOM_BASE_FEATURE_NAMES
@@ -115,12 +275,31 @@ def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
 			"CONFIG['features']['categorical_encoding_mode'] must be 'one_hot' or 'index'."
 		)
 
-	atom_feature_names, edge_feature_names = build_feature_names(encoding_mode)
+	atom_descriptors = _normalize_descriptor_list(
+		config["features"].get("atom_descriptors"),
+		allowed=ALLOWED_ATOM_DESCRIPTORS,
+		default=DEFAULT_ATOM_DESCRIPTORS,
+		label="atom_descriptors",
+	)
+	bond_descriptors = _normalize_descriptor_list(
+		config["features"].get("bond_descriptors"),
+		allowed=ALLOWED_BOND_DESCRIPTORS,
+		default=DEFAULT_BOND_DESCRIPTORS,
+		label="bond_descriptors",
+	)
+
+	atom_feature_names, edge_feature_names = build_feature_names(
+		encoding_mode,
+		atom_descriptors=atom_descriptors,
+		bond_descriptors=bond_descriptors,
+	)
 	atom_feature_dim = len(atom_feature_names)
 	edge_feature_dim = len(edge_feature_names)
 
 	config["features"]["atom_feature_dim"] = atom_feature_dim
 	config["features"]["edge_feature_dim"] = edge_feature_dim
+	config["features"]["atom_descriptors"] = atom_descriptors
+	config["features"]["bond_descriptors"] = bond_descriptors
 
 	return {
 		"categorical_encoding_mode": encoding_mode,
@@ -128,6 +307,8 @@ def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
 		"edge_feature_names": edge_feature_names,
 		"atom_feature_dim": atom_feature_dim,
 		"edge_feature_dim": edge_feature_dim,
+		"atom_descriptors": atom_descriptors,
+		"bond_descriptors": bond_descriptors,
 	}
 
 
@@ -140,6 +321,8 @@ def print_feature_summary(config: dict[str, Any], feature_context: dict[str, Any
 	)
 	print(f"  Atom feature dim: {feature_context['atom_feature_dim']}")
 	print(f"  Edge feature dim: {feature_context['edge_feature_dim']}")
+	print(f"  Atom descriptors: {feature_context['atom_descriptors']}")
+	print(f"  Bond descriptors: {feature_context['bond_descriptors']}")
 	print(f"  Atom features: {feature_context['atom_feature_names']}")
 	print(f"  Edge features: {feature_context['edge_feature_names']}")
 	print(f"  Residual connections: {config['model'].get('residual', True)}")
@@ -166,50 +349,80 @@ def index_with_unknown(value, allowed_values):
 # ==================== featurization ====================
 # Atom features contain physically meaningful numeric values + one-hot categorical tags.
 def get_atom_features(atom: Chem.rdchem.Atom, config: dict[str, Any], encoding_mode: str) -> list:
-	base_features = [
-		float(atom.GetAtomicNum()),
-		float(atom.GetDegree()),
-		float(atom.GetTotalNumHs()),
-		float(atom.GetFormalCharge()),
-		float(atom.GetValence(Chem.ValenceType.IMPLICIT)),
-		float(atom.GetMass()) / config["features"]["scale_atomic_mass_by"],
-		float(atom.GetIsAromatic()),
-		float(atom.IsInRing()),
-	]
+	atom_descriptors = config["features"].get("atom_descriptors", DEFAULT_ATOM_DESCRIPTORS)
+	features: list[float] = []
 
-	if encoding_mode == "one_hot":
-		return (
-			base_features
-			+ one_hot_with_unknown(atom.GetHybridization(), HYBRIDIZATION_VALUES)
-			+ one_hot_with_unknown(atom.GetChiralTag(), CHIRAL_VALUES)
-		)
+	for desc in atom_descriptors:
+		if desc == "atomic_num":
+			features.append(float(atom.GetAtomicNum()))
+		elif desc == "degree":
+			features.append(float(atom.GetDegree()))
+		elif desc == "total_num_hs":
+			features.append(float(atom.GetTotalNumHs()))
+		elif desc == "formal_charge":
+			features.append(float(atom.GetFormalCharge()))
+		elif desc == "implicit_valence":
+			features.append(float(atom.GetValence(Chem.ValenceType.IMPLICIT)))
+		elif desc == "mass_scaled":
+			features.append(
+				float(atom.GetMass()) / config["features"]["scale_atomic_mass_by"]
+			)
+		elif desc == "is_aromatic":
+			features.append(float(atom.GetIsAromatic()))
+		elif desc == "is_in_ring":
+			features.append(float(atom.IsInRing()))
+		elif desc == "hybridization":
+			if encoding_mode == "one_hot":
+				features += one_hot_with_unknown(
+					atom.GetHybridization(), HYBRIDIZATION_VALUES
+				)
+			else:
+				features.append(
+					index_with_unknown(atom.GetHybridization(), HYBRIDIZATION_VALUES)
+				)
+		elif desc == "chirality":
+			if encoding_mode == "one_hot":
+				features += one_hot_with_unknown(atom.GetChiralTag(), CHIRAL_VALUES)
+			else:
+				features.append(index_with_unknown(atom.GetChiralTag(), CHIRAL_VALUES))
 
-	return base_features + [
-		index_with_unknown(atom.GetHybridization(), HYBRIDIZATION_VALUES),
-		index_with_unknown(atom.GetChiralTag(), CHIRAL_VALUES),
-	]
+	return features
 
 
 # Bond features also use one-hot categorical fields (+unknown) for stability.
-def get_bond_features(bond: Chem.rdchem.Bond, encoding_mode: str) -> list:
-	if encoding_mode == "one_hot":
-		return (
-			one_hot_with_unknown(bond.GetBondType(), BOND_TYPE_CATEGORY_VALUES)
-			+ [
-				float(bond.GetBondTypeAsDouble()),
-				float(bond.GetIsConjugated()),
-				float(bond.IsInRing()),
-			]
-			+ one_hot_with_unknown(bond.GetStereo(), BOND_STEREO_VALUES)
-		)
+def get_bond_features(
+	bond: Chem.rdchem.Bond,
+	config: dict[str, Any],
+	encoding_mode: str,
+) -> list:
+	bond_descriptors = config["features"].get(
+		"bond_descriptors", DEFAULT_BOND_DESCRIPTORS
+	)
+	features: list[float] = []
 
-	return [
-		index_with_unknown(bond.GetBondType(), BOND_TYPE_CATEGORY_VALUES),
-		float(bond.GetBondTypeAsDouble()),
-		float(bond.GetIsConjugated()),
-		float(bond.IsInRing()),
-		index_with_unknown(bond.GetStereo(), BOND_STEREO_VALUES),
-	]
+	for desc in bond_descriptors:
+		if desc == "bond_type":
+			if encoding_mode == "one_hot":
+				features += one_hot_with_unknown(
+					bond.GetBondType(), BOND_TYPE_CATEGORY_VALUES
+				)
+			else:
+				features.append(
+					index_with_unknown(bond.GetBondType(), BOND_TYPE_CATEGORY_VALUES)
+				)
+		elif desc == "bond_order":
+			features.append(float(bond.GetBondTypeAsDouble()))
+		elif desc == "is_conjugated":
+			features.append(float(bond.GetIsConjugated()))
+		elif desc == "is_in_ring":
+			features.append(float(bond.IsInRing()))
+		elif desc == "bond_stereo":
+			if encoding_mode == "one_hot":
+				features += one_hot_with_unknown(bond.GetStereo(), BOND_STEREO_VALUES)
+			else:
+				features.append(index_with_unknown(bond.GetStereo(), BOND_STEREO_VALUES))
+
+	return features
 
 
 def smiles_to_graph(
@@ -233,7 +446,7 @@ def smiles_to_graph(
 	for bond in mol.GetBonds():
 		i = bond.GetBeginAtomIdx()
 		j = bond.GetEndAtomIdx()
-		e_feat = get_bond_features(bond, encoding_mode)
+		e_feat = get_bond_features(bond, config, encoding_mode)
 
 		edge_indices += [[i, j], [j, i]]
 		edge_attrs += [e_feat, e_feat]
@@ -346,16 +559,33 @@ def print_fold_data_summary(val_idx: int, train_data, val_data) -> None:
 
 
 # ==================== training helpers ====================
-def evaluate(model: torch.nn.Module, loader: DataLoader) -> tuple:
+def evaluate(
+	model: torch.nn.Module,
+	loader: DataLoader,
+	*,
+	prediction_mean: torch.Tensor | None = None,
+	prediction_std: torch.Tensor | None = None,
+) -> tuple:
 	model.eval()
 	y_true, y_pred = [], []
 
 	with torch.no_grad():
 		for data in loader:
 			data = data.to(device)
-			out = model(data)
-			y_true.extend(data.y.cpu().numpy().flatten())
-			y_pred.extend(out.cpu().numpy().flatten())
+			out = model(data).view(-1)
+			true = data.y.view(-1)
+
+			# If the model predicts standardized targets, invert back to original
+			# scale before computing metrics.
+			if prediction_mean is not None and prediction_std is not None:
+				out = invert_standardization_tensor(
+					out,
+					mean=prediction_mean,
+					std=prediction_std,
+				)
+
+			y_true.extend(true.detach().cpu().numpy().flatten())
+			y_pred.extend(out.detach().cpu().numpy().flatten())
 
 	mse = mean_squared_error(y_true, y_pred)
 	rmse = float(np.sqrt(mse))
@@ -489,6 +719,16 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	feature_context = prepare_feature_config(config)
 	print_feature_summary(config, feature_context)
 
+	target_std_cfg = _get_target_standardization_config(config)
+	use_target_standardization = target_std_cfg["enabled"]
+	if use_target_standardization:
+		print(
+			"\nTarget standardization: ENABLED (per fold) "
+			f"| epsilon={target_std_cfg['epsilon']:.1e}"
+		)
+	else:
+		print("\nTarget standardization: DISABLED")
+
 	target_folder = config["experiment"]["target_folder"]
 	actual_test_file = config["experiment"]["actual_test_file"]
 	total_folds = config["experiment"]["total_folds"]
@@ -518,6 +758,8 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	global_best_val_rmse = float("inf")
 	global_best_weights = None
 	best_fold_idx = -1
+	global_best_target_mean = None
+	global_best_target_std = None
 	cv_results = []
 
 	losses = {f"fold_{i}": {} for i in range(total_folds)}
@@ -530,6 +772,23 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 		train_data = load_dataset(train_paths, config, feature_context)
 		val_data = load_dataset(val_path, config, feature_context)
 		print_fold_data_summary(val_idx, train_data, val_data)
+
+		prediction_mean = None
+		prediction_std = None
+		train_target_mean = 0.0
+		train_target_std = 1.0
+		if use_target_standardization:
+			train_targets = get_targets_from_graphs(train_data)
+			train_target_mean, train_target_std = fit_target_standardizer(
+				train_targets,
+				epsilon=target_std_cfg["epsilon"],
+			)
+			prediction_mean = torch.tensor(train_target_mean, device=device)
+			prediction_std = torch.tensor(train_target_std, device=device)
+			print(
+				f"[Fold {val_idx}] target standardizer: "
+				f"mean={train_target_mean:.4f} std={train_target_std:.4f}"
+			)
 
 		train_loader = DataLoader(
 			train_data,
@@ -586,9 +845,16 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			for batch in train_loader:
 				batch = batch.to(device)
 				optimizer.zero_grad()
-				out = model(batch)
+				out = model(batch).view(-1)
 
-				loss = criterion(out.view(-1), batch.y.view(-1))
+				y_true = batch.y.view(-1)
+				if use_target_standardization:
+					y_true = standardize_targets_tensor(
+						y_true,
+						mean=prediction_mean,
+						std=prediction_std,
+					)
+				loss = criterion(out, y_true)
 				loss.backward()
 
 				if grad_clip_norm and grad_clip_norm > 0:
@@ -598,7 +864,12 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				train_loss += loss.item() * batch.num_graphs
 
 			train_loss /= len(train_data)
-			val_mse, val_rmse, val_r2, val_rho = evaluate(model, val_loader)
+			val_mse, val_rmse, val_r2, val_rho = evaluate(
+				model,
+				val_loader,
+				prediction_mean=prediction_mean,
+				prediction_std=prediction_std,
+			)
 
 			# current monitor is the valye we compare aginst best value for early stopping and scheduler decisions
 			current_monitor = metric_from_name(
@@ -637,7 +908,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			if epoch % print_every == 0:
 				print(
 					f"[Fold {val_idx}][Epoch {epoch:03d}] "
-					f"train_mse={train_loss:.4f} "
+					f"train_mse={'(scaled) ' if use_target_standardization else ''}{train_loss:.4f} "
 					f"val_mse={val_mse:.4f} val_rmse={val_rmse:.4f} "
 					f"val_r2={val_r2:.4f} val_rho={val_rho:.4f} "
 					f"lr={optimizer.param_groups[0]['lr']:.2e} "
@@ -676,6 +947,8 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			global_best_val_rmse = best_val_rmse
 			global_best_weights = copy.deepcopy(best_model_weights)
 			best_fold_idx = val_idx
+			global_best_target_mean = train_target_mean
+			global_best_target_std = train_target_std
 			print(f"[Fold {val_idx}] is current global best.")
 
 		losses[f"fold_{val_idx}"] = {
@@ -695,7 +968,18 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	best_model.load_state_dict(global_best_weights)
 	# Evaluate the best model on the holdout test set
 
-	test_mse, test_rmse, test_r2, test_rho = evaluate(best_model, test_loader)
+	best_pred_mean = None
+	best_pred_std = None
+	if use_target_standardization:
+		best_pred_mean = torch.tensor(float(global_best_target_mean), device=device)
+		best_pred_std = torch.tensor(float(global_best_target_std), device=device)
+
+	test_mse, test_rmse, test_r2, test_rho = evaluate(
+		best_model,
+		test_loader,
+		prediction_mean=best_pred_mean,
+		prediction_std=best_pred_std,
+	)
 	print(
 		f"Holdout -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, "
 		f"R2: {test_r2:.4f}, Rho: {test_rho:.4f}"
