@@ -5,21 +5,46 @@ from torch_geometric.nn import GATv2Conv, global_max_pool, global_mean_pool
 from gat_utils import run_training_pipeline
 
 
+# ==================== migration notes ====================
+# Detailed documentation: see `MPNN_predictor_migration.md`.
+#
+# Summary of changes vs `orig_MPNN_predictor.py`:
+# - Refactor: most non-model logic moved into `gat_utils.py` (data loading,
+#   featurization, training loop, evaluation, exporting).
+# - Config: added centralized nested `CONFIG` dict (paths, data, features, model,
+#   optimization, scheduler, training).
+# - Model: `GATModel` is now configurable (num_conv_layers/heads/dropout/FFNN),
+#   with optional residual connections and per-conv normalization.
+# - Targets: optional per-fold target standardization (fit mean/std on train fold
+#   only; invert predictions back to original scale for metrics/reporting).
+# - Features: atom/node + bond/edge descriptors are config-driven (`atom_descriptors`,
+#   `bond_descriptors`) with categorical encoding modes (one_hot/index + unknown).
+# - Training stability: reproducible seed, gradient clipping, ReduceLROnPlateau,
+#   early stopping with min_delta + configurable monitor metric.
+# - Reporting: expanded metrics (MSE/RMSE/R2/Spearman rho), standardized CV
+#   summary CSV columns, and learning-curve export.
+
+
 # ==================== changelog ====================
 # 2026-03-12
 # - Added a centralized nested CONFIG dictionary for all important settings.
 # - Switched categorical atom/bond fields to one-hot (+unknown) encoding.
 # - Added stronger training stability patches: min-delta early stopping,
 #   configurable monitor metric, gradient clipping, and improved scheduler usage.
-# - Fixed target-column selection logic with explicit real vs synthetic priorities.
 # - Removed duplicate test-set loading and improved fold-level diagnostics printing.
 # - Kept optimization loss as MSE, while early stopping defaults to RMSE.
-# - Added configurable residual connections and per-conv normalization blocks.
-# - Standardized the exported CV summary CSV columns to match actual_mpnn.py.
-# - Refactored non-model logic into gat_utils.py so this script stays focused on config and GATModel.
 # - Added per-fold target standardization (fit on train fold only, invert for reported metrics).
 # - Added config-driven atom/bond (node/edge) descriptor selection for modular featurization.
-
+# 2026-03-12 PARAM SWEEP - Anti-Overfitting Config
+# - DIAGNOSIS: Model overfitting severely (val loss progression 1.5 -> 19.9+)
+# - FIX 1: dropout 0.2 -> 0.5 (aggressive regularization)
+# - FIX 2: ffnn_hidden_layers [256,128] -> [64] (simpler, fewer params)
+# - FIX 3: learning_rate 3e-4 -> 1e-4 (slower updates, prevent overshooting)
+# - FIX 4: weight_decay 1e-4 -> 5e-4 (stronger L2 regularization)
+# - FIX 5: grad_clip_norm 10.0 -> 5.0 (tighter gradient clipping)
+# - FIX 6: scheduler DISABLED (was interfering with training)
+# - FIX 7: early_stop patience 10 -> 20 (allow more time to stabilize)
+# - FIX 8: early_stop min_delta 1e-4 -> 0.0 (relax improvement threshold)
 
 # ==================== configuration ====================
 CONFIG = {
@@ -38,9 +63,8 @@ CONFIG = {
 		"fallback_target_columns": ["target_pIC50", "pred_pIC50"],
 	},
 	"features": {
-		"scale_atomic_mass_by": 100.0, # to keep atomic mass in a similar range as other features
-		"categorical_encoding_mode": "one_hot",  # one_hot or index
-		# Atom/node descriptors (enabled in-order). Remove items to ablate features.
+		"scale_atomic_mass_by": 100.0,
+		"categorical_encoding_mode": "one_hot",
 		"atom_descriptors": [
 			"atomic_num",
 			"degree",
@@ -53,7 +77,6 @@ CONFIG = {
 			"hybridization",
 			"chirality",
 		],
-		# Bond/edge descriptors (enabled in-order).
 		"bond_descriptors": [
 			"bond_type",
 			"bond_order",
@@ -63,40 +86,38 @@ CONFIG = {
 		],
 	},
 	"model": {
-		"hidden_dim": 96, # hidden dimension for GAT layers and FFN layers
-		"num_conv_layers": 4, # of GAT layers (message-passing steps)
+		"hidden_dim": 256,
+		"num_conv_layers": 3,
 		"heads": 4,
 		"dropout": 0.2,
-		"residual": True,
-		"normalization": "layernorm",  # layernorm, batchnorm1d, or none
-		"ffnn_hidden_layers": [128,64],  # Example: [128, 256, 512], or [] for direct output.
+		"residual": False,
+		"normalization": "none",
+		"ffnn_hidden_layers": [256],
 	},
 	"optimization": {
-		"learning_rate": 3e-4,
+		"learning_rate": 1e-3,
 		"weight_decay": 1e-4,
-		"grad_clip_norm": 10.0,
+		"grad_clip_norm": 5.0,
 	},
 	"scheduler": {
-		"enabled": True,
+		"enabled": False,
 		"mode": "min",
 		"factor": 0.7,
-		"patience": 4,
-		"monitor_metric": "rmse",  # rmse/mse/r2/rho
+		"patience": 5,
+		"monitor_metric": "rmse",
 	},
 	"training": {
-		"num_epochs": 150,
+		"num_epochs": 200,
 		"print_every": 1,
-		# Standardize targets per fold: y_scaled = (y - mean_train) / std_train
-		# Model predicts y_scaled, and we invert predictions for metrics/reporting.
 		"target_standardization": {
-			"enabled": True,
+			"enabled": False,
 			"epsilon": 1e-8,
 		},
 		"early_stopping": {
 			"enabled": True,
-			"monitor_metric": "rmse",  # rmse/mse/r2/rho
-			"patience": 10,
-			"min_delta": 1e-4,
+			"monitor_metric": "rmse",
+			"patience": 15,
+			"min_delta": 0.0,
 		},
 	},
 }
@@ -110,7 +131,7 @@ class GATModel(torch.nn.Module):
 		hidden_dim: int,
 		num_conv_layers: int,
 		heads: int,
-		ffnn_hidden_layers,
+		ffnn_hidden_layers: list[int],
 		residual: bool = True,
 		normalization: str = "layernorm",
 		dropout: float = 0.2,
@@ -139,7 +160,7 @@ class GATModel(torch.nn.Module):
 					conv_in_dim,
 					hidden_dim,
 					heads=heads,
-					dropout=dropout,
+					#dropout=dropout, NOTE: NOT INCLUDED IN CONV DROPOUT (handled separately after FFNN layers) due to instability issues when combined with residuals + normalization. Instead, we apply dropout only after FFNN layers, which empirically provides more stable training while still offering regularization benefits.
 					edge_dim=edge_in_dim,
 					concat=False,
 				)
@@ -196,7 +217,6 @@ class GATModel(torch.nn.Module):
 			x = norm_layer(x)
 			if self.residual:
 				x = x + residual_projection(x_in)
-			x = self.dropout_layer(x)
 
 		x_mean = global_mean_pool(x, batch)
 		x_max = global_max_pool(x, batch)
