@@ -47,16 +47,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fallback_target_columns": ["target_pIC50", "pred_pIC50", "pIC50"],
     },
     "oversampling": {
-        "enabled": False,
-        "duplicates_per_smiles": 2,
+        "enabled": True,
+        "duplicates_per_smiles": 3,
         "max_tries_per_duplicate": 8,
     },
     "model": {
-        "d_h": 256,
+        "d_h": 256, # hidden dimension for MPNN and FFN layers
         "depth": 6,
         "dropout": 0.2,
-        "ffn_hidden_mult": 2,
-        "ffn_n_layers": 2,
+        "ffn_hidden_mult": 2, # hidden dim = d_h * ffn_hidden_mult
+        "ffn_n_layers": 3, # number of layers in the FFN
         "batch_norm": True,
         "use_sum_aggregation": True,
     },
@@ -182,8 +182,13 @@ def choose_target_column(df: pd.DataFrame, csv_path: Path, config: dict[str, Any
             return col
     raise ValueError(f"No supported target column found in {csv_path}. Tried: {priorities}")
 
-
 def _randomized_smiles_variants(smiles: str, duplicates: int, max_tries_per_dup: int) -> list[str]:
+    """
+    The purpose of this function is to generate randomized SMILES variants for a given input SMILES string.
+    It uses RDKit's ability to produce non-canonical SMILES by randomizing the atom order. 
+    This can help using data augmentation. 
+    
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None or duplicates <= 0:
         return []
@@ -310,15 +315,27 @@ def build_mpnn_model(config: dict[str, Any]) -> models.MPNN:
     model_cfg, optim_cfg = config["model"], config["optimization"]
     d_h = int(model_cfg["d_h"])
     dropout = float(model_cfg["dropout"])
+
+    """
+    Builds an chemprop MPNN, model based on provided config.
+
+    Bondmessage passing is used as the message passing mechanism, with configurable depth and dropout.
+    Sum aggregation is used by default. 
+    
+    
+    """
+
+
+
     message_passing = nn.BondMessagePassing(d_h=d_h, depth=int(model_cfg["depth"]), dropout=dropout)
     aggregation = nn.SumAggregation() if model_cfg["use_sum_aggregation"] else nn.MeanAggregation()
-    predictor = nn.RegressionFFN(
-        input_dim=d_h,
-        hidden_dim=d_h * int(model_cfg["ffn_hidden_mult"]),
-        n_layers=int(model_cfg["ffn_n_layers"]),
-        dropout=dropout,
-    )
+    predictor = nn.RegressionFFN(input_dim=d_h, hidden_dim=d_h * int(model_cfg["ffn_hidden_mult"]),n_layers=int(model_cfg["ffn_n_layers"]), dropout=dropout)
 
+    # Kwars used to int the MPNN. 
+    # it includes the:
+    # Message passing modules
+    # Aggregation mechanism
+    # Predictor architecture (Regression FFNN in this case)
     kwargs: dict[str, Any] = {
         "message_passing": message_passing,
         "agg": aggregation,
@@ -527,11 +544,8 @@ def train_chemprop_model_cv_it(
         mode=monitor_mode,
         verbose=False,
     )
-    logger = CSVLogger(
-        save_dir=str(ratio_dir / "lightning_logs"),
-        name="chemprop_mpnn",
-        version=f"fold_{val_idx}",
-    )
+
+    logger = CSVLogger(save_dir=str(ratio_dir / "lightning_logs"), name="chemprop_mpnn", version=f"fold_{val_idx}" )
 
     trainer = pl.Trainer(
         max_epochs=int(config["training"]["max_epochs"]),
