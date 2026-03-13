@@ -81,11 +81,11 @@ CONFIG = {
 	"model": {
 		"hidden_dim": 256,
 		"num_conv_layers": 3,
-		"heads": 4,
+		"heads": 8,
 		"dropout": 0.2,
 		"residual": True,
 		"normalization": "layernorm", # options: "layernorm", "batchnorm1d", "none"
-		"ffnn_hidden_layers": [256, 128], # orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
+		"ffnn_hidden_layers": [256], # orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
 	},
 	"optimization": {
 		"learning_rate": 1e-3,
