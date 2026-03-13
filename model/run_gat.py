@@ -39,7 +39,7 @@ from torch_geometric.loader import DataLoader
 # Import the canonical CONFIG and GATModel from the training entry point.
 # The module-level code in MPNN_predictor only defines CONFIG + GATModel;
 # training is guarded by `if __name__ == "__main__"`, so this import is safe.
-from MPNN_predictor import CONFIG, GATModel
+from gat_predictor import CONFIG, GATModel
 from gat_utils import (
     evaluate,
     get_fold_checkpoint_path,

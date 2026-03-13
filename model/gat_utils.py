@@ -518,31 +518,88 @@ def smiles_to_graph(
 
 
 # ==================== data loading ====================
-def get_fold_files(target_dir: str, val_idx: int, total_folds: int = 5):
+def get_synthetic_cv_config(config: dict[str, Any]) -> dict[str, bool]:
+	synthetic_cfg = config.get("data", {}).get("synthetic_cv", {})
+	if not isinstance(synthetic_cfg, dict):
+		synthetic_cfg = {}
+	keep_percentile = float(synthetic_cfg.get("keep_percentile", 1.0))
+	if keep_percentile <= 0.0 or keep_percentile > 1.0:
+		raise ValueError(
+			"CONFIG['data']['synthetic_cv']['keep_percentile'] must be in (0, 1]."
+		)
+	label_source = str(synthetic_cfg.get("label_source", "pred")).lower().strip()
+	if label_source not in {"pred", "target"}:
+		raise ValueError(
+			"CONFIG['data']['synthetic_cv']['label_source'] must be 'pred' or 'target'."
+		)
+	return {
+		"include_in_training": bool(synthetic_cfg.get("include_in_training", True)),
+		"include_in_validation": bool(synthetic_cfg.get("include_in_validation", False)),
+		"keep_percentile": keep_percentile,
+		"label_source": label_source,
+	}
+
+
+def get_fold_files(
+	target_dir: str,
+	val_idx: int,
+	config: dict[str, Any],
+	total_folds: int = 5,
+):
 	dir_path = Path(target_dir)
 	val_file = dir_path / f"fold_{val_idx}.csv"
 
-	train_files = [dir_path / f"fold_{i}.csv" for i in range(total_folds) if i != val_idx]
+	policy = get_synthetic_cv_config(config)
+	train_fold_indices = [i for i in range(total_folds) if i != val_idx]
 
-	synthetic_file = dir_path / f"synthetic_data_iteration_{val_idx}.csv"
-	if synthetic_file.exists():
-		train_files.append(synthetic_file)
-		print(f"  Added synthetic file: {synthetic_file.name}")
+	train_files = [dir_path / f"fold_{i}.csv" for i in train_fold_indices]
+	val_files = [val_file]
+
+	if policy["include_in_training"]:
+		train_synthetic_file = dir_path / f"synthetic_data_iteration_{val_idx}.csv"
+		if train_synthetic_file.exists():
+			train_files.append(train_synthetic_file)
+			print(
+				"  Added training synthetic file for this CV iteration: "
+				f"{train_synthetic_file.name}"
+			)
+		else:
+			print("  No matching synthetic file found for this CV iteration.")
 	else:
-		print("  No synthetic file for this fold.")
+		print("  Synthetic data excluded from training by config.")
 
-	return train_files, val_file
+	if policy["include_in_validation"]:
+		val_synthetic_file = dir_path / f"synthetic_data_iteration_{val_idx}.csv"
+		if val_synthetic_file.exists():
+			val_files.append(val_synthetic_file)
+			print(f"  Added validation synthetic file: {val_synthetic_file.name}")
+		else:
+			print("  Validation synthetic file not found for this fold.")
+	else:
+		print("  Synthetic data excluded from validation by config.")
+
+	return train_files, val_files
 
 
 def choose_target_column(df: pd.DataFrame, file_path: Path, config: dict[str, Any]) -> str:
 	is_synthetic = file_path.name.startswith("synthetic_data_iteration_")
 
 	if is_synthetic:
-		preferred = [
-			config["data"]["synthetic_target_column"],
-			*config["data"]["fallback_target_columns"],
-			config["data"]["real_target_column"],
-		]
+		synth_policy = get_synthetic_cv_config(config)
+		label_source = synth_policy["label_source"]
+		if label_source == "pred":
+			preferred = [
+				config["data"]["synthetic_target_column"],
+				*config["data"]["fallback_target_columns"],
+				config["data"]["real_target_column"],
+			]
+		else:
+			preferred = [
+				"target_pIC50",
+				config["data"]["real_target_column"],
+				*config["data"]["fallback_target_columns"],
+				config["data"]["synthetic_target_column"],
+			]
 	else:
 		preferred = [
 			config["data"]["real_target_column"],
@@ -558,6 +615,62 @@ def choose_target_column(df: pd.DataFrame, file_path: Path, config: dict[str, An
 	)
 
 
+def _resolve_synthetic_filter_column(config: dict[str, Any]) -> str:
+	synth_policy = get_synthetic_cv_config(config)
+	if synth_policy["label_source"] == "pred":
+		return config["data"]["synthetic_target_column"]
+	return "target_pIC50"
+
+
+def _filter_synthetic_rows(df: pd.DataFrame, path_obj: Path, config: dict[str, Any]) -> pd.DataFrame:
+	synth_policy = get_synthetic_cv_config(config)
+	keep_percentile = float(synth_policy["keep_percentile"])
+	if keep_percentile >= 1.0:
+		return df
+
+	filter_col = _resolve_synthetic_filter_column(config)
+	if filter_col not in df.columns:
+		raise ValueError(
+			f"Synthetic filtering column '{filter_col}' is missing in {path_obj}."
+		)
+
+	series = pd.to_numeric(df[filter_col], errors="coerce")
+	valid_mask = series.notna()
+	valid_series = series[valid_mask]
+	if valid_series.empty:
+		raise ValueError(
+			f"No numeric values available in synthetic filter column '{filter_col}' for {path_obj}."
+		)
+
+	tail = (1.0 - keep_percentile) / 2.0
+	lower = float(valid_series.quantile(tail))
+	upper = float(valid_series.quantile(1.0 - tail))
+
+	keep_mask = valid_mask & series.ge(lower) & series.le(upper)
+	filtered = df.loc[keep_mask].copy()
+
+	kept_count = int(len(filtered))
+	total_count = int(len(df))
+	if kept_count == 0:
+		raise ValueError(
+			f"Synthetic percentile filtering removed all rows in {path_obj}. "
+			f"keep_percentile={keep_percentile}"
+		)
+
+	kept_values = pd.to_numeric(filtered[filter_col], errors="coerce").dropna()
+	kept_mean = float(kept_values.mean()) if not kept_values.empty else float("nan")
+	kept_std = float(kept_values.std(ddof=0)) if not kept_values.empty else float("nan")
+
+	print(
+		f"  Synthetic filter [{path_obj.name}] by '{filter_col}': "
+		f"kept {kept_count}/{total_count} rows "
+		f"({kept_count / max(total_count, 1):.1%}) | "
+		f"mean={kept_mean:.4f} std={kept_std:.4f}"
+	)
+
+	return filtered
+
+
 def load_dataset(file_paths, config: dict[str, Any], feature_context: dict[str, Any]):
 	if not isinstance(file_paths, list):
 		file_paths = [file_paths]
@@ -568,6 +681,10 @@ def load_dataset(file_paths, config: dict[str, Any], feature_context: dict[str, 
 		df = pd.read_csv(path_obj)
 		if "smiles" not in df.columns:
 			raise ValueError(f"Missing required 'smiles' column in {path_obj}")
+
+		is_synthetic = path_obj.name.startswith("synthetic_data_iteration_")
+		if is_synthetic:
+			df = _filter_synthetic_rows(df, path_obj, config)
 
 		target_col = choose_target_column(df, path_obj, config)
 
@@ -866,9 +983,14 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	for val_idx in range(total_folds):
 		print(f"\n-------------------- Fold {val_idx} (validation) --------------------")
 
-		train_paths, val_path = get_fold_files(target_folder, val_idx, total_folds=total_folds)
+		train_paths, val_paths = get_fold_files(
+			target_folder,
+			val_idx,
+			config,
+			total_folds=total_folds,
+		)
 		train_data = load_dataset(train_paths, config, feature_context)
-		val_data = load_dataset(val_path, config, feature_context)
+		val_data = load_dataset(val_paths, config, feature_context)
 		print_fold_data_summary(val_idx, train_data, val_data)
 
 		target_standardizer = None
