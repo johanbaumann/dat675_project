@@ -761,6 +761,55 @@ def write_losses_file(loss_path: Path, losses: dict[str, dict[str, list[float]]]
 			handle.write("\n\n")
 
 
+# ==================== checkpoint helpers ====================
+def get_fold_checkpoint_path(target_folder: str, fold_idx: int) -> Path:
+	"""Canonical path for a per-fold best-model checkpoint.
+
+	Checkpoints live inside the dataset folder so each dataset mix keeps
+	its own set of saved weights and they never overwrite each other.
+	"""
+	return Path(target_folder) / "checkpoints" / f"best_model_fold_{fold_idx}.pth"
+
+
+def load_fold_checkpoint(
+	checkpoint_path: Path,
+	config: dict[str, Any],
+	model_class,
+	feature_context: dict[str, Any],
+) -> tuple:
+	"""Load a fold checkpoint and return (model, target_standardizer | None).
+
+	Handles both the current rich format::
+
+		{"state_dict": ..., "fold": int, "target_mean": float,
+		 "target_std": float, "val_rmse": float}
+
+	and the legacy bare state_dict format for backward compatibility.
+	"""
+	ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
+
+	if isinstance(ckpt, dict) and "state_dict" in ckpt:
+		state_dict = ckpt["state_dict"]
+		target_mean = float(ckpt.get("target_mean", 0.0))
+		target_std = float(ckpt.get("target_std", 1.0))
+	else:
+		# Legacy format: checkpoint is a plain state_dict (OrderedDict).
+		state_dict = ckpt
+		target_mean = 0.0
+		target_std = 1.0
+
+	model = build_model(model_class, config, feature_context)
+	model.load_state_dict(state_dict)
+	model.eval()
+
+	use_std = _get_target_standardization_config(config)["enabled"]
+	target_standardizer = None
+	if use_std:
+		target_standardizer = build_target_standardizer_from_stats(target_mean, target_std)
+
+	return model, target_standardizer
+
+
 def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	set_seed(config["experiment"]["seed"])
 	feature_context = prepare_feature_config(config)
@@ -779,7 +828,6 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	target_folder = config["experiment"]["target_folder"]
 	actual_test_file = config["experiment"]["actual_test_file"]
 	total_folds = config["experiment"]["total_folds"]
-	output_weight_path = config["experiment"]["weight_save_path"]
 	batch_size = config["data"]["batch_size"]
 	num_epochs = config["training"]["num_epochs"]
 	print_every = config["training"]["print_every"]
@@ -810,6 +858,9 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	cv_results = []
 
 	losses = {f"fold_{i}": {} for i in range(total_folds)}
+
+	ckpt_dir = Path(target_folder) / "checkpoints"
+	ckpt_dir.mkdir(parents=True, exist_ok=True)
 
 	print("\n==================== 5-Fold Cross-Validation ====================")
 	for val_idx in range(total_folds):
@@ -930,8 +981,14 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				best_model_weights = copy.deepcopy(model.state_dict())
 				epochs_wo_improv = 0
 				torch.save(
-					best_model_weights,
-					output_weight_path.format(fold=val_idx),
+					{
+						"state_dict": best_model_weights,
+						"fold": val_idx,
+						"target_mean": train_target_mean,
+						"target_std": train_target_std,
+						"val_rmse": val_rmse,
+					},
+					get_fold_checkpoint_path(target_folder, val_idx),
 				)
 			else:
 				epochs_wo_improv += 1

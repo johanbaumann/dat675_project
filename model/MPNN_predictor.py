@@ -45,7 +45,6 @@ CONFIG = {
 	"experiment": {
 		"target_folder": "./0%",  # Change to ./33% or ./67% for other experiments.
 		"actual_test_file": "heldout_testset.csv",
-		"weight_save_path": "best_model_iteration_{fold}.pth",
 		"total_folds": 5,
 		"seed": 42,
 	},
@@ -86,7 +85,7 @@ CONFIG = {
 		"dropout": 0.2,
 		"residual": True,
 		"normalization": "layernorm", # options: "layernorm", "batchnorm1d", "none"
-		"ffnn_hidden_layers": [256],
+		"ffnn_hidden_layers": [256, 128], # orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
 	},
 	"optimization": {
 		"learning_rate": 1e-3,
