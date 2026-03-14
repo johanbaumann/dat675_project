@@ -15,6 +15,24 @@ from .target_scaling import invert_standardized_predictions
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+METRIC_DESCRIPTIONS = {
+	"mse": "Validation mean squared error; lower is better.",
+	"rmse": "Validation root mean squared error; lower is better.",
+	"mae": "Validation mean absolute error; lower is better.",
+	"r2": "Validation R2 score; higher is better.",
+	"rho": "Validation Spearman rank correlation; higher is better.",
+	"pearson": "Validation Pearson correlation coefficient; higher is better.",
+}
+
+MINIMIZE_METRICS = {"mse", "rmse", "mae"}
+
+
+def _as_float_scalar(value: Any) -> float:
+	arr = np.asarray(value, dtype=np.float64).reshape(-1)
+	if arr.size == 0:
+		return float("nan")
+	return float(arr[0])
+
 
 # ==================== inference helpers ====================
 def predict(
@@ -60,8 +78,14 @@ def evaluate(
 	rmse = float(np.sqrt(mse))
 	mae = float(mean_absolute_error(y_true, y_pred))
 	r2 = r2_score(y_true, y_pred)
-	rho = float(spearmanr(y_true, y_pred)[0])
-	pearson = float(pearsonr(y_true, y_pred)[0]) if len(y_true) > 1 else float("nan")
+	rho_result = spearmanr(y_true, y_pred)
+	rho = _as_float_scalar(getattr(rho_result, "statistic", rho_result[0]))
+	pearson_result = pearsonr(y_true, y_pred) if len(y_true) > 1 else None
+	pearson = (
+		_as_float_scalar(getattr(pearson_result, "statistic", pearson_result[0]))
+		if pearson_result is not None
+		else float("nan")
+	)
 	# Return order: (mse, rmse, mae, r2, rho, pearson)
 	return mse, rmse, mae, r2, rho, pearson
 
@@ -99,6 +123,7 @@ def metric_from_name(
 
 
 
+	metric_name = str(metric_name).lower().strip()
 	values = {
 		"mse": mse,
 		"rmse": rmse,
@@ -115,26 +140,24 @@ def metric_from_name(
 
 
 def metric_description(metric_name: str) -> str:
-	descriptions = {
-		"mse": "Validation mean squared error; lower is better.",
-		"rmse": "Validation root mean squared error; lower is better.",
-		"mae": "Validation mean absolute error; lower is better.",
-		"r2": "Validation R2 score; higher is better.",
-		"rho": "Validation Spearman rank correlation; higher is better.",
-		"pearson": "Validation Pearson correlation coefficient; higher is better.",
-	}
-	if metric_name not in descriptions:
+	metric_name = str(metric_name).lower().strip()
+	if metric_name not in METRIC_DESCRIPTIONS:
 		raise ValueError(
-			f"Unsupported metric '{metric_name}'. Use one of: {list(descriptions.keys())}"
+			f"Unsupported metric '{metric_name}'. Use one of: {list(METRIC_DESCRIPTIONS.keys())}"
 		)
-	return descriptions[metric_name]
+	return METRIC_DESCRIPTIONS[metric_name]
 
 
-def is_improvement(metric_name: str, current: float, best: float, min_delta: float) -> bool:
+def is_improvement(
+	metric_name: str,
+	current: float,
+	best: float,
+	minimum_improvement: float,
+) -> bool:
 	# Lower is better for mse/rmse/mae. Higher is better for r2/rho/pearson.
-	if metric_name in {"mse", "rmse", "mae"}:
-		return current < (best - min_delta)
-	return current > (best + min_delta)
+	if str(metric_name).lower().strip() in MINIMIZE_METRICS:
+		return current < (best - minimum_improvement)
+	return current > (best + minimum_improvement)
 
 
 def build_model(model_class, config: dict[str, Any], feature_context: dict[str, Any]):

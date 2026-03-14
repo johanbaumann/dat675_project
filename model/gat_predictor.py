@@ -6,7 +6,7 @@ from gat_utils import run_training_pipeline
 
 
 # ==================== migration notes ====================
-# Detailed documentation: see 'MPNN_predictor_migration.md'.
+# 
 #
 # Summary of changes vs 'orig_MPNN_predictor.py':
 # - Refactor: most non-model logic moved into the 'gat_utils/' package (data loading,
@@ -20,7 +20,8 @@ from gat_utils import run_training_pipeline
 # - Features: atom/node + bond/edge descriptors are config-driven ('atom_descriptors',
 #   'bond_descriptors') with categorical encoding modes (one_hot/index + unknown).
 # - Training stability: reproducible seed, gradient clipping, ReduceLROnPlateau,
-#   early stopping with min_delta + configurable monitor metric.
+#   early stopping with separate min_delta and minimum_improvement thresholds
+#   plus a configurable monitor metric.
 # - Reporting: expanded metrics (MSE/RMSE/MAE/R2/Spearman rho/Pearson), standardized
 #   CV summary CSV columns, and learning-curve export.
 
@@ -95,10 +96,15 @@ from gat_utils import run_training_pipeline
 #   inside each dataset's checkpoints/ folder, alongside the usual best_model_fold_<k>.pth.
 # - run_gat.py now supports a nested per-dataset/per-fold checkpoint selection map,
 #   so holdout evaluation can use any saved checkpoint file rather than only the best fold snapshot.
+# 2026-03-14 (refactored so code is cleaner)
+# 2026-03-14 (early stopping threshold naming pass)
+# - Clarified early-stopping threshold semantics with two explicit fields:
+#   min_delta controls best-checkpoint updates and minimum_improvement controls
+#   patience reset behavior.
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": "./33%",  # Change to ./0% or ./33% or ./67% for other experiments.
+		"target_folder": "./67%",  # Change to ./0% or ./33% or ./67% for other experiments.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -107,12 +113,12 @@ CONFIG = {
 		"batch_size": 64,
 		"shuffle_train": True,
 		"real_target_column": "pIC50",
-		"synthetic_target_column": "target_pIC50",
+		"synthetic_target_column": "pred_pIC50",
 		"fallback_target_columns": ["target_pIC50", "pred_pIC50"],
 		"synthetic_cv": {
 			# Training uses the synthetic file matching the CV iteration index.
 			# Even if this is turned off, synthetic data can be used for pre-training
-			"include_in_training": True,
+			"include_in_training": False,
 			# Options: "matching_fold", "all", "none".
 			"train_selection": "matching_fold",
 			# Default keeps synthetic data out of validation.
@@ -125,7 +131,7 @@ CONFIG = {
 			"validation_selection": "single_next_non_train",
 			# Keep the central fraction of synthetic rows by value (1.0 = keep all).
 			# Example: 0.95 keeps the middle 95% and removes 2.5% from each tail.
-			"keep_percentile": 0.65,
+			"keep_percentile": 0.75,
 			# Uniform random row subsample after percentile filtering.
 			# Useful for reducing pseudo-label noise volume while keeping diversity.
 			# Set to None to disable row subsampling entirely.
@@ -136,7 +142,7 @@ CONFIG = {
 			"max_train_synth_to_real_ratio": None,
 			# Which synthetic pIC50 column to use both for filtering and training labels.
 			# Options: "pred" (pred_pIC50) or "target" (target_pIC50).
-			"label_source": "target",
+			"label_source": "pred",
 		},
 	},
 	"features": {
@@ -185,7 +191,7 @@ CONFIG = {
 	"model": {
 		"hidden_dim": 256,
 		"num_conv_layers": 3,
-		"heads": 4, # orig 4
+		"heads": 8, # orig 4
 		"dropout": 0.2,
 		"residual": True,
 		"normalization": "layernorm", # options: "layernorm", "batchnorm1d", "none"
@@ -213,7 +219,7 @@ CONFIG = {
 		# then Stage 2 finetunes on the fold training set.
 		"synthetic_pretraining": {
 			"enabled": True,
-			"epochs": 25,
+			"epochs": 35,
 			"learning_rate": 8e-4,
 			"weight_decay": 1e-4,
 			"grad_clip_norm": 10.0,
@@ -233,14 +239,17 @@ CONFIG = {
 		# Metric options: "mse", "rmse", "mae", "r2", "rho", "pearson".
 		# The pipeline minimizes mse/rmse/mae and automatically maximizes r2/rho/pearson.
 			"monitor_metric": "rmse",
-			"patience": 15,
+			"patience": 10,
+			# Minimum metric improvement required to save a new best checkpoint.
 			"min_delta": 0.0,
+			# Minimum metric improvement required to reset early-stopping patience.
+			"minimum_improvement": 0.05,
 		},
 		"checkpointing": {
 			# Save an extra checkpoint every N epochs using the pattern:
 			# model_<dataset>_cv_iteration_<fold>_epoch_<epoch>.pth
 			# Set to 0 to disable periodic checkpoint saving.
-			"save_every_n_epochs": 1,
+			"save_every_n_epochs": 5,
 		},
 	},
 }

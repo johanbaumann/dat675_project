@@ -7,28 +7,22 @@ from typing import Any
 import torch
 from torch_geometric.loader import DataLoader
 
-from .checkpoints import (
-	get_epoch_checkpoint_path,
-	get_fold_checkpoint_path,
-	save_fold_checkpoint,
+from .config_helpers import (
+	get_checkpointing_config,
+	get_early_stopping_config,
+	get_experiment_runtime_config,
+	get_optimization_config,
+	get_scheduler_config,
+	is_minimize_metric,
 )
-from .data_loading import (
-	cap_synthetic_train_ratio,
-	get_fold_files,
-	get_synthetic_cv_config,
-	get_synthetic_pretraining_config,
-	get_synthetic_pretraining_files,
-	get_targets_from_graphs,
-	load_dataset,
-	print_fold_data_summary,
-)
+from .data_loading import get_synthetic_pretraining_config, get_targets_from_graphs, load_dataset
 from .features import (
 	apply_feature_scalers,
-	fit_feature_scalers,
 	prepare_feature_config,
 	print_feature_summary,
 	set_seed,
 )
+from .fold_orchestration import run_cross_validation
 from .target_scaling import (
 	build_target_standardizer,
 	build_target_standardizer_from_stats,
@@ -39,9 +33,6 @@ from .training_helpers import (
 	build_model,
 	build_summary_dataframe,
 	evaluate,
-	is_improvement,
-	metric_description,
-	metric_from_name,
 	write_losses_file,
 )
 
@@ -56,10 +47,6 @@ def _resolve_optional(
 	if value is None:
 		return fallback
 	return value
-
-
-def _is_minimize_metric(metric_name: str) -> bool:
-	return metric_name in {"mse", "rmse", "mae"}
 
 
 def run_synthetic_pretraining_stage(
@@ -162,35 +149,42 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	else:
 		print("\nTarget standardization: DISABLED")
 
-	target_folder = config["experiment"]["target_folder"]
-	actual_test_file = config["experiment"]["actual_test_file"]
-	total_folds = config["experiment"]["total_folds"]
-	batch_size = config["data"]["batch_size"]
-	num_epochs = config["training"]["num_epochs"]
-	print_every = config["training"]["print_every"]
-	checkpoint_cfg = config["training"].get("checkpointing", {})
-	save_every_n_epochs = int(checkpoint_cfg.get("save_every_n_epochs", 0) or 0)
-	if save_every_n_epochs < 0:
-		raise ValueError(
-			"CONFIG['training']['checkpointing']['save_every_n_epochs'] must be >= 0."
-		)
+	runtime_cfg = get_experiment_runtime_config(config)
+	target_folder = runtime_cfg["target_folder"]
+	actual_test_file = runtime_cfg["actual_test_file"]
+	total_folds = runtime_cfg["total_folds"]
+	batch_size = runtime_cfg["batch_size"]
+	num_epochs = runtime_cfg["num_epochs"]
+	print_every = runtime_cfg["print_every"]
 
-	learning_rate = config["optimization"]["learning_rate"]
-	weight_decay = config["optimization"]["weight_decay"]
-	grad_clip_norm = config["optimization"]["grad_clip_norm"]
+	checkpoint_cfg = get_checkpointing_config(config)
+	save_every_n_epochs = checkpoint_cfg["save_every_n_epochs"]
 
-	early_stop_cfg = config["training"]["early_stopping"]
+	optimization_cfg = get_optimization_config(config)
+	learning_rate = optimization_cfg["learning_rate"]
+	weight_decay = optimization_cfg["weight_decay"]
+	grad_clip_norm = optimization_cfg["grad_clip_norm"]
+
+	early_stop_cfg = get_early_stopping_config(config)
 	early_stop_enabled = early_stop_cfg["enabled"]
 	early_stop_metric = early_stop_cfg["monitor_metric"]
 	early_stop_patience = early_stop_cfg["patience"]
 	early_stop_min_delta = early_stop_cfg["min_delta"]
+	early_stop_minimum_improvement = early_stop_cfg["minimum_improvement"]
+	print(
+		"Early stopping: "
+		f"{'ENABLED' if early_stop_enabled else 'DISABLED'} "
+		f"| monitor={early_stop_metric} | patience={early_stop_patience} "
+		f"| checkpoint_min_delta={early_stop_min_delta} "
+		f"| minimum_improvement={early_stop_minimum_improvement}"
+	)
 
-	scheduler_cfg = config["scheduler"]
+	scheduler_cfg = get_scheduler_config(config)
 	scheduler_enabled = scheduler_cfg["enabled"]
 	scheduler_metric = scheduler_cfg["monitor_metric"]
 	scheduler_mode = scheduler_cfg["mode"]
 	if scheduler_enabled:
-		expected_scheduler_mode = "min" if _is_minimize_metric(scheduler_metric) else "max"
+		expected_scheduler_mode = "min" if is_minimize_metric(scheduler_metric) else "max"
 		if scheduler_mode != expected_scheduler_mode:
 			print(
 				"[WARN] scheduler.mode does not match scheduler.monitor_metric "
@@ -207,329 +201,46 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			"Check smiles parsing and target column configuration."
 		)
 
-	if _is_minimize_metric(early_stop_metric):
-		global_best_monitor_value = float("inf")
-	else:
-		global_best_monitor_value = -float("inf")
-	global_best_val_rmse = float("inf")
-	global_best_weights = None
-	best_fold_idx = -1
-	global_best_target_mean = None
-	global_best_target_std = None
-	global_best_feature_scalers = None
-	cv_results = []
-
-	losses = {f"fold_{i}": {} for i in range(total_folds)}
-
 	ckpt_dir = Path(target_folder) / "checkpoints"
 	ckpt_dir.mkdir(parents=True, exist_ok=True)
 	dataset_label = Path(target_folder).name if target_folder != "." else "default_experiment"
+	cv_output = run_cross_validation(
+		config=config,
+		feature_context=feature_context,
+		target_folder=target_folder,
+		total_folds=total_folds,
+		batch_size=batch_size,
+		num_epochs=num_epochs,
+		print_every=print_every,
+		learning_rate=learning_rate,
+		weight_decay=weight_decay,
+		grad_clip_norm=grad_clip_norm,
+		early_stop_cfg=early_stop_cfg,
+		scheduler_cfg={
+			"enabled": scheduler_enabled,
+			"monitor_metric": scheduler_metric,
+			"mode": scheduler_mode,
+			"factor": scheduler_cfg["factor"],
+			"patience": scheduler_cfg["patience"],
+		},
+		save_every_n_epochs=save_every_n_epochs,
+		target_std_cfg=target_std_cfg,
+		use_target_standardization=use_target_standardization,
+		dataset_label=dataset_label,
+		run_synthetic_pretraining_stage=run_synthetic_pretraining_stage,
+		build_model=build_model,
+		model_class=model_class,
+	)
 
-	print("\n==================== 5-Fold Cross-Validation ====================")
-	for val_idx in range(total_folds):
-		print(f"\n-------------------- Fold {val_idx} (validation) --------------------")
-
-		train_paths, val_paths = get_fold_files(
-			target_folder,
-			val_idx,
-			config,
-			total_folds=total_folds,
-		)
-		train_data = load_dataset(train_paths, config, feature_context)
-		val_data = load_dataset(val_paths, config, feature_context)
-
-		pretrain_synth_paths = get_synthetic_pretraining_files(
-			target_folder,
-			val_idx,
-			config,
-		)
-		pretrain_synth_data = []
-		if pretrain_synth_paths:
-			pretrain_synth_data = load_dataset(pretrain_synth_paths, config, feature_context)
-
-		model = build_model(model_class, config, feature_context)
-
-		synth_policy = get_synthetic_cv_config(config)
-		finetune_train_data = cap_synthetic_train_ratio(
-			train_data,
-			max_ratio=synth_policy["max_train_synth_to_real_ratio"],
-			seed=config["experiment"]["seed"],
-			fold_idx=val_idx,
-		)
-		if len(finetune_train_data) == 0:
-			raise RuntimeError(
-				f"Fold {val_idx} has 0 training graphs after preprocessing/filtering."
-			)
-		if len(val_data) == 0:
-			raise RuntimeError(
-				f"Fold {val_idx} has 0 validation graphs after preprocessing/filtering."
-			)
-
-		feature_scalers = fit_feature_scalers(
-			finetune_train_data,
-			feature_context=feature_context,
-			config=config,
-		)
-		apply_feature_scalers(finetune_train_data, feature_scalers=feature_scalers)
-		apply_feature_scalers(val_data, feature_scalers=feature_scalers)
-		apply_feature_scalers(pretrain_synth_data, feature_scalers=feature_scalers)
-
-		run_synthetic_pretraining_stage(
-			model,
-			pretrain_synth_data,
-			config=config,
-			fold_idx=val_idx,
-			target_std_cfg=target_std_cfg,
-		)
-
-		print_fold_data_summary(val_idx, finetune_train_data, val_data)
-
-		target_standardizer = None
-		train_target_mean = 0.0
-		train_target_std = 1.0
-		if use_target_standardization:
-			train_targets = get_targets_from_graphs(finetune_train_data)
-			target_standardizer = build_target_standardizer(
-				train_targets,
-				epsilon=target_std_cfg["epsilon"],
-			)
-			train_target_mean = target_standardizer["mean"]
-			train_target_std = target_standardizer["std"]
-			print(
-				f"[Fold {val_idx}] target standardizer: "
-				f"mean={train_target_mean:.4f} std={train_target_std:.4f}"
-			)
-
-		train_loader = DataLoader(
-			finetune_train_data,
-			batch_size=batch_size,
-			shuffle=config["data"]["shuffle_train"],
-		)
-		val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
-
-		optimizer = torch.optim.Adam(
-			model.parameters(), lr=learning_rate, weight_decay=weight_decay
-		)
-		criterion = torch.nn.MSELoss() # always use MSELoss for training, even if monitoring a different metric
-
-		scheduler = None
-		if scheduler_enabled:
-			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-				optimizer,
-				mode=scheduler_mode,
-				factor=scheduler_cfg["factor"],
-				patience=scheduler_cfg["patience"],
-			)
-
-		print(
-			f"[Fold {val_idx}] model params={model_class.count_parameters(model)} "
-			f"| lr={learning_rate:.2e} | dropout={config['model']['dropout']:.2f} "
-			f"| residual={config['model'].get('residual', True)} "
-			f"| norm={str(config['model'].get('normalization', 'layernorm')).lower()}"
-		)
-
-		best_val_mse = float("inf")
-		best_val_rmse = float("inf")
-		best_val_mae = float("inf")
-		best_val_r2 = -float("inf")
-		best_val_rho = -float("inf")
-		best_val_pearson = -float("inf")
-		best_epoch = 0
-		best_model_weights = None
-
-		if _is_minimize_metric(early_stop_metric):
-			best_monitor_value = float("inf")
-		else:
-			best_monitor_value = -float("inf")
-
-		train_losses = []
-		val_losses = []
-		monitor_values = []
-		lr_history = []
-		epochs_wo_improv = 0
-
-		for epoch in range(1, num_epochs + 1):
-			model.train()
-			train_loss = 0.0
-
-			for batch in train_loader:
-				batch = batch.to(device)
-				optimizer.zero_grad()
-				out = model(batch).view(-1)
-
-				y_true = standardize_batch_targets(
-					batch.y.view(-1),
-					target_standardizer=target_standardizer,
-				)
-				loss = criterion(out, y_true)
-				loss.backward()
-
-				if grad_clip_norm and grad_clip_norm > 0:
-					torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
-
-				optimizer.step()
-				train_loss += loss.item() * batch.num_graphs
-
-			train_loss /= len(finetune_train_data)
-			val_mse, val_rmse, val_mae, val_r2, val_rho, val_pearson = evaluate(
-				model,
-				val_loader,
-				target_standardizer=target_standardizer,
-			)
-
-			# current monitor is the valye we compare aginst best value for early stopping and scheduler decisions
-			current_monitor = metric_from_name(
-				early_stop_metric, val_mse, val_rmse, val_mae, val_r2, val_rho, val_pearson
-			)
-
-            # depends upon what metric we are monitoring, so need a function for it....
-			if is_improvement(
-				early_stop_metric, current_monitor, best_monitor_value, early_stop_min_delta
-			):
-				best_monitor_value = current_monitor
-				best_val_mse = val_mse
-				best_val_rmse = val_rmse
-				best_val_mae = val_mae
-				best_val_r2 = val_r2
-				best_val_rho = val_rho
-				best_val_pearson = val_pearson
-				best_epoch = epoch
-				best_model_weights = copy.deepcopy(model.state_dict())
-				epochs_wo_improv = 0
-				save_fold_checkpoint(
-					{
-						"state_dict": best_model_weights,
-						"checkpoint_kind": "best",
-						"dataset_label": dataset_label,
-						"fold": val_idx,
-						"epoch": epoch,
-						"monitor_metric": early_stop_metric,
-						"monitor_value": current_monitor,
-						"target_standardization_enabled": bool(target_standardizer is not None),
-						"target_mean": train_target_mean,
-						"target_std": train_target_std,
-						"feature_scaling_mode": config.get("features", {}).get("feature_scaling", {}).get("mode", "none"),
-						"feature_scaling_fit_on": config.get("features", {}).get("feature_scaling", {}).get("fit_on", "real_plus_synthetic"),
-						"val_rmse": val_rmse,
-						"val_mae": val_mae,
-						"val_pearson": val_pearson,
-					},
-					get_fold_checkpoint_path(target_folder, val_idx),
-				)
-			else:
-				epochs_wo_improv += 1
-
-			should_save_epoch_checkpoint = (
-				save_every_n_epochs > 0
-				and (epoch % save_every_n_epochs == 0 or epoch == num_epochs)
-			)
-			if should_save_epoch_checkpoint:
-				save_fold_checkpoint(
-					{
-						"state_dict": copy.deepcopy(model.state_dict()),
-						"checkpoint_kind": "epoch",
-						"dataset_label": dataset_label,
-						"fold": val_idx,
-						"epoch": epoch,
-						"monitor_metric": early_stop_metric,
-						"monitor_value": current_monitor,
-						"target_standardization_enabled": bool(target_standardizer is not None),
-						"target_mean": train_target_mean,
-						"target_std": train_target_std,
-						"feature_scaling_mode": config.get("features", {}).get("feature_scaling", {}).get("mode", "none"),
-						"feature_scaling_fit_on": config.get("features", {}).get("feature_scaling", {}).get("fit_on", "real_plus_synthetic"),
-						"val_mse": val_mse,
-						"val_rmse": val_rmse,
-						"val_mae": val_mae,
-						"val_r2": val_r2,
-						"val_rho": val_rho,
-						"val_pearson": val_pearson,
-					},
-					get_epoch_checkpoint_path(target_folder, val_idx, epoch),
-				)
-
-			if scheduler is not None:
-				scheduler_value = metric_from_name(
-					scheduler_metric, val_mse, val_rmse, val_mae, val_r2, val_rho, val_pearson
-				)
-				scheduler.step(scheduler_value)
-
-			train_losses.append(train_loss)
-			val_losses.append(val_mse)
-			monitor_values.append(current_monitor)
-			lr_history.append(float(optimizer.param_groups[0]["lr"]))
-
-			if epoch % print_every == 0:
-				print(
-					f"[Fold {val_idx}][Epoch {epoch:03d}] "
-					f"train_mse={'(scaled) ' if use_target_standardization else ''}{train_loss:.4f} "
-					f"val_mse={val_mse:.4f} val_rmse={val_rmse:.4f} val_mae={val_mae:.4f} "
-					f"val_r2={val_r2:.4f} val_rho={val_rho:.4f} val_pearson={val_pearson:.4f} "
-					f"lr={optimizer.param_groups[0]['lr']:.2e} "
-					f"best_val_rmse={best_val_rmse:.4f} "
-					f"no_improve={epochs_wo_improv}"
-				)
-
-			if early_stop_enabled and epochs_wo_improv >= early_stop_patience:
-				print(
-					f"[Fold {val_idx}] early stopping at epoch {epoch} "
-					f"(monitor={early_stop_metric}, patience={early_stop_patience}, "
-					f"min_delta={early_stop_min_delta})"
-				)
-				break
-
-		print(
-			f"[Fold {val_idx}] best epoch={best_epoch} | "
-			f"val_rmse={best_val_rmse:.4f} val_mae={best_val_mae:.4f} "
-			f"val_r2={best_val_r2:.4f} "
-			f"val_rho={best_val_rho:.4f} val_pearson={best_val_pearson:.4f}"
-		)
-		if best_model_weights is None:
-			raise RuntimeError(
-				f"Fold {val_idx} did not produce any best checkpoint updates. "
-				"This usually means monitor metrics were NaN/invalid for all epochs."
-			)
-
-		cv_results.append(
-			{
-				"fold_idx": val_idx,
-				"monitor_metric": early_stop_metric,
-				"monitor_metric_description": metric_description(early_stop_metric),
-				"best_monitor_value": best_monitor_value,
-				"val_loss_mse": best_val_mse,
-				"val_mse": best_val_mse,
-				"val_rmse": best_val_rmse,
-				"val_mae": best_val_mae,
-				"val_r2": best_val_r2,
-				"val_rho": best_val_rho,
-				"val_pearson": best_val_pearson,
-			}
-		)
-
-		if is_improvement(
-			early_stop_metric,
-			best_monitor_value,
-			global_best_monitor_value,
-			0.0,
-		):
-			global_best_monitor_value = best_monitor_value
-			global_best_val_rmse = best_val_rmse
-			global_best_weights = copy.deepcopy(best_model_weights)
-			best_fold_idx = val_idx
-			global_best_target_mean = train_target_mean
-			global_best_target_std = train_target_std
-			global_best_feature_scalers = copy.deepcopy(feature_scalers)
-			print(
-				f"[Fold {val_idx}] is current global best "
-				f"(monitor={early_stop_metric} value={best_monitor_value:.6f})."
-			)
-
-		losses[f"fold_{val_idx}"] = {
-			"train": train_losses,
-			"val": val_losses,
-			"monitor": monitor_values,
-			"lr": lr_history,
-		}
+	cv_results = cv_output["cv_results"]
+	losses = cv_output["losses"]
+	global_best_monitor_value = cv_output["global_best_monitor_value"]
+	global_best_val_rmse = cv_output["global_best_val_rmse"]
+	global_best_weights = cv_output["global_best_weights"]
+	best_fold_idx = cv_output["best_fold_idx"]
+	global_best_target_mean = cv_output["global_best_target_mean"]
+	global_best_target_std = cv_output["global_best_target_std"]
+	global_best_feature_scalers = cv_output["global_best_feature_scalers"]
 
 	print("\n-------------------- Holdout Evaluation --------------------")
 	print(

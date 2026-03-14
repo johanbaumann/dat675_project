@@ -9,38 +9,35 @@ import pandas as pd
 from sklearn.metrics import mean_squared_error
 from torch_geometric.data import Data
 
+from .config_helpers import as_dict, parse_float_in_range, parse_optional_positive_float
 from .features import smiles_to_graph
 
 
 # ==================== data loading ====================
 def get_synthetic_cv_config(config: dict[str, Any]) -> dict[str, Any]:
-	synthetic_cfg = config.get("data", {}).get("synthetic_cv", {})
-	if not isinstance(synthetic_cfg, dict):
-		synthetic_cfg = {}
-	keep_percentile = float(synthetic_cfg.get("keep_percentile", 1.0))
-	if keep_percentile <= 0.0 or keep_percentile > 1.0:
-		raise ValueError(
-			"CONFIG['data']['synthetic_cv']['keep_percentile'] must be in (0, 1]."
-		)
+	synthetic_cfg = as_dict(as_dict(config.get("data", {})).get("synthetic_cv", {}))
+	keep_percentile = parse_float_in_range(
+		synthetic_cfg.get("keep_percentile", 1.0),
+		name="CONFIG['data']['synthetic_cv']['keep_percentile']",
+		min_exclusive=0.0,
+		max_inclusive=1.0,
+	)
 	row_keep_raw = synthetic_cfg.get("row_keep_fraction", 1.0)
-	row_keep_fraction = None
-	if row_keep_raw is not None:
-		row_keep_fraction = float(row_keep_raw)
-		if row_keep_fraction <= 0.0 or row_keep_fraction > 1.0:
-			raise ValueError(
-				"CONFIG['data']['synthetic_cv']['row_keep_fraction'] must be in (0, 1] "
-				"or None."
-			)
+	row_keep_fraction = (
+		None
+		if row_keep_raw is None
+		else parse_float_in_range(
+			row_keep_raw,
+			name="CONFIG['data']['synthetic_cv']['row_keep_fraction']",
+			min_exclusive=0.0,
+			max_inclusive=1.0,
+		)
+	)
 
-	ratio_raw = synthetic_cfg.get("max_train_synth_to_real_ratio", None)
-	max_train_synth_to_real_ratio = None
-	if ratio_raw is not None:
-		max_train_synth_to_real_ratio = float(ratio_raw)
-		if max_train_synth_to_real_ratio <= 0.0:
-			raise ValueError(
-				"CONFIG['data']['synthetic_cv']['max_train_synth_to_real_ratio'] "
-				"must be > 0 when provided."
-			)
+	max_train_synth_to_real_ratio = parse_optional_positive_float(
+		synthetic_cfg.get("max_train_synth_to_real_ratio", None),
+		name="CONFIG['data']['synthetic_cv']['max_train_synth_to_real_ratio']",
+	)
 
 	label_source = str(synthetic_cfg.get("label_source", "pred")).lower().strip()
 	if label_source not in {"pred", "target"}:
@@ -80,9 +77,7 @@ def get_synthetic_cv_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_synthetic_pretraining_config(config: dict[str, Any]) -> dict[str, Any]:
-	pre_cfg = config.get("training", {}).get("synthetic_pretraining", {})
-	if not isinstance(pre_cfg, dict):
-		pre_cfg = {}
+	pre_cfg = as_dict(as_dict(config.get("training", {})).get("synthetic_pretraining", {}))
 	epochs = int(pre_cfg.get("epochs", 0))
 	if epochs < 0:
 		raise ValueError("CONFIG['training']['synthetic_pretraining']['epochs'] must be >= 0.")

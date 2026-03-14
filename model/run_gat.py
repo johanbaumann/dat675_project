@@ -68,6 +68,30 @@ OUTPUT_PRED_CSV = WORKSPACE_ROOT / "GAT_predictions_heldout_set.csv"
 #   "model_0_percent_cv_iteration_0_epoch_25.pth"
 # - a relative path from the workspace root
 # - an absolute path
+#CHECKPOINT_SELECTIONS: dict[str, dict[int, int | str | None]] = {
+#    "0%": {
+#        0: 32,
+#        1: 30,
+#        2: 25,
+#        3: 30,
+#        4: 20,
+#    },
+#    "33%": {
+#        0: 25,
+#        1: 35,
+#        2: 21,
+#        3: 22,
+#        4: 15,
+#    },
+#    "67%": {
+#        0: 19,
+#        1: 16,
+#        2: 28,
+#        3: 30,
+#        4: 20,
+#    },
+#}
+
 CHECKPOINT_SELECTIONS: dict[str, dict[int, int | str | None]] = {
     "0%": {
         0: None,
@@ -77,7 +101,7 @@ CHECKPOINT_SELECTIONS: dict[str, dict[int, int | str | None]] = {
         4: None,
     },
     "33%": {
-        0: 22,
+        0: None,
         1: None,
         2: None,
         3: None,
@@ -91,7 +115,6 @@ CHECKPOINT_SELECTIONS: dict[str, dict[int, int | str | None]] = {
         4: None,
     },
 }
-
 
 # ==================== helpers ====================
 

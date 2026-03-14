@@ -8,6 +8,8 @@ from rdkit import Chem
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch_geometric.data import Data
 
+from .config_helpers import as_dict
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -122,9 +124,7 @@ def set_seed(seed: int) -> None:
 
 
 def get_feature_scaling_config(config: dict[str, Any]) -> dict[str, Any]:
-	scaling_cfg = config.get("features", {}).get("feature_scaling", {})
-	if not isinstance(scaling_cfg, dict):
-		scaling_cfg = {}
+	scaling_cfg = as_dict(as_dict(config.get("features", {})).get("feature_scaling", {}))
 
 	mode = str(scaling_cfg.get("mode", "none")).lower().strip()
 	if mode not in {"none", "standard", "minmax"}:
