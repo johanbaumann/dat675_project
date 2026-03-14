@@ -22,7 +22,8 @@ Output
 ------
     MPNN_results_heldout_set.csv  (in the same folder as this script)
 
-    Columns: Dataset | Fold | Val_RMSE | Holdout_MSE | Holdout_RMSE | Holdout_R2 | Holdout_Rho
+    Columns: Dataset | Fold | Val_RMSE | Val_Pearson | Holdout_MSE | Holdout_RMSE |
+             Holdout_R2 | Holdout_Rho | Holdout_Pearson
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from gat_utils import (
     load_fold_checkpoint,
     prepare_feature_config,
 )
+from gat_utils.data_loading import get_fold_files
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
 DATASETS = ["0%", "33%", "67%"]
@@ -95,29 +97,55 @@ def evaluate_dataset(
             ckpt_path, config, GATModel, feature_context
         )
 
-        # Read stored val_rmse from the checkpoint for reporting.
+        # Read stored validation metrics from the checkpoint for reporting.
         raw_ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-        val_rmse_stored = float(raw_ckpt.get("val_rmse", float("nan"))) if isinstance(raw_ckpt, dict) else float("nan")
+        val_rmse = float(raw_ckpt.get("val_rmse", float("nan"))) if isinstance(raw_ckpt, dict) else float("nan")
+        val_pearson = float(raw_ckpt.get("val_pearson", float("nan"))) if isinstance(raw_ckpt, dict) else float("nan")
 
-        mse, rmse, r2, rho = evaluate(
+        # Older checkpoints do not store Pearson, so recompute validation metrics
+        # from the same fold split used during training when needed.
+        if torch.isnan(torch.tensor(val_rmse)) or torch.isnan(torch.tensor(val_pearson)):
+            _, val_paths = get_fold_files(
+                config["experiment"]["target_folder"],
+                fold_idx,
+                config,
+                total_folds=total_folds,
+            )
+            val_data = load_dataset(val_paths, config, feature_context)
+            val_loader = DataLoader(
+                val_data,
+                batch_size=config["data"]["batch_size"],
+                shuffle=False,
+            )
+            _, val_rmse, _, _, val_pearson = evaluate(
+                model,
+                val_loader,
+                target_standardizer=target_standardizer,
+            )
+
+        mse, rmse, r2, rho, pearson = evaluate(
             model, test_loader, target_standardizer=target_standardizer
         )
 
         print(
             f"  [{dataset_label}][Fold {fold_idx}]  "
-            f"val_rmse(stored)={val_rmse_stored:.4f}  "
-            f"holdout -> MSE={mse:.4f}  RMSE={rmse:.4f}  R2={r2:.4f}  Rho={rho:.4f}"
+            f"val_rmse={val_rmse:.4f}  "
+            f"val_pearson={val_pearson:.4f}  "
+            f"holdout -> MSE={mse:.4f}  RMSE={rmse:.4f}  R2={r2:.4f}  "
+            f"Rho={rho:.4f}  Pearson={pearson:.4f}"
         )
 
         results.append(
             {
                 "Dataset": dataset_label,
                 "Fold": fold_idx,
-                "Val_RMSE": val_rmse_stored,
+                "Val_RMSE": val_rmse,
+                "Val_Pearson": val_pearson,
                 "Holdout_MSE": mse,
                 "Holdout_RMSE": rmse,
                 "Holdout_R2": r2,
                 "Holdout_Rho": rho,
+                "Holdout_Pearson": pearson,
             }
         )
 

@@ -9,7 +9,7 @@ from gat_utils import run_training_pipeline
 # Detailed documentation: see 'MPNN_predictor_migration.md'.
 #
 # Summary of changes vs 'orig_MPNN_predictor.py':
-# - Refactor: most non-model logic moved into 'gat_utils.py' (data loading,
+# - Refactor: most non-model logic moved into the 'gat_utils/' package (data loading,
 #   featurization, training loop, evaluation, exporting).
 # - Config: added centralized nested 'CONFIG' dict (paths, data, features, model,
 #   optimization, scheduler, training).
@@ -21,8 +21,8 @@ from gat_utils import run_training_pipeline
 #   'bond_descriptors') with categorical encoding modes (one_hot/index + unknown).
 # - Training stability: reproducible seed, gradient clipping, ReduceLROnPlateau,
 #   early stopping with min_delta + configurable monitor metric.
-# - Reporting: expanded metrics (MSE/RMSE/R2/Spearman rho), standardized CV
-#   summary CSV columns, and learning-curve export.
+# - Reporting: expanded metrics (MSE/RMSE/R2/Spearman rho/Pearson), standardized
+#   CV summary CSV columns, and learning-curve export.
 
 
 # ==================== changelog ====================
@@ -44,11 +44,11 @@ from gat_utils import run_training_pipeline
 #   fully configurable via atom_descriptors / bond_descriptors) or "chemprop_simple"
 #   (uses chemprop's SimpleMoleculeMolGraphFeaturizer as a drop-in alternative;
 #   atom_descriptors / bond_descriptors are ignored in this mode).
-
+# problems with Label shift phenomenon in synthetic data, so added "use_target_standardization" option to
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": "./0%",  # Change to ./0% or ./33% or ./67% for other experiments.
+		"target_folder": "./67%",  # Change to ./0% or ./33% or ./67% for other experiments.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -123,8 +123,8 @@ CONFIG = {
 	},
 	"model": {
 		"hidden_dim": 256,
-		"num_conv_layers": 3,
-		"heads": 4,
+		"num_conv_layers": 4,
+		"heads": 8,
 		"dropout": 0.2,
 		"residual": True,
 		"normalization": "layernorm", # options: "layernorm", "batchnorm1d", "none"
@@ -140,6 +140,9 @@ CONFIG = {
 		"mode": "min",
 		"factor": 0.75,
 		"patience": 3,
+		# Metric options shared with early stopping: "mse", "rmse", "r2",
+		# "rho" (Spearman rank correlation), or "pearson".
+		# The pipeline minimizes mse/rmse and automatically maximizes r2/rho/pearson.
 		"monitor_metric": "rmse",
 	},
 	"training": {
@@ -157,6 +160,7 @@ CONFIG = {
 			"shuffle": True, #
 			"min_synthetic_graphs": 64, # Ensure at least one batch for pretraining, even if synthetic data is very limited after filtering.
 			# Usually False for pseudo labels; turn on only if target scale drift is large.
+			# target standardization is when we fit mean/std on the training fold targets and standardize targets for training, then invert predictions back to original scale for metrics and reporting. 
 			"use_target_standardization": False,
 		},
 		"target_standardization": {
@@ -165,6 +169,8 @@ CONFIG = {
 		},
 		"early_stopping": {
 			"enabled": True,
+			# Metric options: "mse", "rmse", "r2", "rho", "pearson".
+			# The pipeline minimizes mse/rmse and automatically maximizes r2/rho/pearson.
 			"monitor_metric": "rmse",
 			"patience": 15,
 			"min_delta": 0.0,
