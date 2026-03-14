@@ -134,21 +134,14 @@ def run_synthetic_pretraining_stage(
 			)
 
 
-def run_training_pipeline(config: dict[str, Any], model_class) -> None:
-	set_seed(config["experiment"]["seed"])
-	feature_context = prepare_feature_config(config)
-	print_feature_summary(config, feature_context)
-
-	target_std_cfg = get_target_standardization_config(config)
-	use_target_standardization = target_std_cfg["enabled"]
-	if use_target_standardization:
-		print(
-			"\nTarget standardization: ENABLED (per fold) "
-			f"| epsilon={target_std_cfg['epsilon']:.1e}"
-		)
-	else:
-		print("\nTarget standardization: DISABLED")
-
+def _run_single_dataset_training(
+	config: dict[str, Any],
+	model_class,
+	*,
+	feature_context: dict[str, Any],
+	target_std_cfg: dict[str, Any],
+	use_target_standardization: bool,
+) -> None:
 	runtime_cfg = get_experiment_runtime_config(config)
 	target_folder = runtime_cfg["target_folder"]
 	actual_test_file = runtime_cfg["actual_test_file"]
@@ -304,3 +297,51 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	loss_path = target_path_obj / f"MPNN_losses_{folder_name}.txt"
 	write_losses_file(loss_path, losses)
 	print(f"Saved learning curves to: {loss_path.resolve()}")
+
+
+def run_training_pipeline(config: dict[str, Any], model_class) -> None:
+	runtime_cfg = get_experiment_runtime_config(config)
+	target_folders = runtime_cfg["target_folders"]
+
+	if len(target_folders) > 1:
+		print(
+			"\nRunning multi-dataset training pipeline for folders: "
+			+ ", ".join(target_folders)
+		)
+
+	for run_idx, target_folder in enumerate(target_folders, start=1):
+		dataset_config = copy.deepcopy(config)
+		dataset_config["experiment"]["target_folder"] = target_folder
+
+		set_seed(dataset_config["experiment"]["seed"])
+		feature_context = prepare_feature_config(dataset_config)
+		print_feature_summary(dataset_config, feature_context)
+
+		target_std_cfg = get_target_standardization_config(dataset_config)
+		use_target_standardization = target_std_cfg["enabled"]
+		if use_target_standardization:
+			print(
+				"\nTarget standardization: ENABLED (per fold) "
+				f"| epsilon={target_std_cfg['epsilon']:.1e}"
+			)
+		else:
+			print("\nTarget standardization: DISABLED")
+
+		if len(target_folders) > 1:
+			print(
+				"\n============================================================"
+			)
+			print(
+				f"Dataset run {run_idx}/{len(target_folders)} | target_folder={target_folder}"
+			)
+			print(
+				"============================================================"
+			)
+
+		_run_single_dataset_training(
+			dataset_config,
+			model_class,
+			feature_context=feature_context,
+			target_std_cfg=target_std_cfg,
+			use_target_standardization=use_target_standardization,
+		)

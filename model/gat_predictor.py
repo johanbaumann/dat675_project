@@ -104,7 +104,7 @@ from gat_utils import run_training_pipeline
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": "./67%",  # Change to ./0% or ./33% or ./67% for other experiments.
+		"target_folder": ["./0%", "./33%", "./67%"],  # Can be a single path string or a list of dataset folders.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -220,7 +220,7 @@ CONFIG = {
 		"synthetic_pretraining": {
 			"enabled": True,
 			"epochs": 35,
-			"learning_rate": 4e-4,
+			"learning_rate": 4e-4, # was 4e-4
 			"weight_decay": 1e-4,
 			"grad_clip_norm": 10.0,
 			"batch_size": 64,
