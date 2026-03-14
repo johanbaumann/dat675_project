@@ -6,19 +6,19 @@ from gat_utils import run_training_pipeline
 
 
 # ==================== migration notes ====================
-# Detailed documentation: see `MPNN_predictor_migration.md`.
+# Detailed documentation: see 'MPNN_predictor_migration.md'.
 #
-# Summary of changes vs `orig_MPNN_predictor.py`:
-# - Refactor: most non-model logic moved into `gat_utils.py` (data loading,
+# Summary of changes vs 'orig_MPNN_predictor.py':
+# - Refactor: most non-model logic moved into 'gat_utils.py' (data loading,
 #   featurization, training loop, evaluation, exporting).
-# - Config: added centralized nested `CONFIG` dict (paths, data, features, model,
+# - Config: added centralized nested 'CONFIG' dict (paths, data, features, model,
 #   optimization, scheduler, training).
-# - Model: `GATModel` is now configurable (num_conv_layers/heads/dropout/FFNN),
+# - Model: 'GATModel' is now configurable (num_conv_layers/heads/dropout/FFNN),
 #   with optional residual connections and per-conv normalization.
 # - Targets: optional per-fold target standardization (fit mean/std on train fold
 #   only; invert predictions back to original scale for metrics/reporting).
-# - Features: atom/node + bond/edge descriptors are config-driven (`atom_descriptors`,
-#   `bond_descriptors`) with categorical encoding modes (one_hot/index + unknown).
+# - Features: atom/node + bond/edge descriptors are config-driven ('atom_descriptors',
+#   'bond_descriptors') with categorical encoding modes (one_hot/index + unknown).
 # - Training stability: reproducible seed, gradient clipping, ReduceLROnPlateau,
 #   early stopping with min_delta + configurable monitor metric.
 # - Reporting: expanded metrics (MSE/RMSE/R2/Spearman rho), standardized CV
@@ -39,11 +39,16 @@ from gat_utils import run_training_pipeline
 # - DIAGNOSIS: Model overfitting severely (val loss progression 1.5 -> 19.9+)
 # wer params)
 # Fix: NO DROPOUT IN CONV LAYERS!!!!!
+# 2026-03-14
+# - Added "featurizer" option to CONFIG["features"]: "custom" (default, RDKit-based,
+#   fully configurable via atom_descriptors / bond_descriptors) or "chemprop_simple"
+#   (uses chemprop's SimpleMoleculeMolGraphFeaturizer as a drop-in alternative;
+#   atom_descriptors / bond_descriptors are ignored in this mode).
 
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": "./67%",  # Change to ./0% or ./33% or ./67% for other experiments.
+		"target_folder": "./0%",  # Change to ./0% or ./33% or ./67% for other experiments.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -52,12 +57,12 @@ CONFIG = {
 		"batch_size": 64,
 		"shuffle_train": True,
 		"real_target_column": "pIC50",
-		"synthetic_target_column": "pred_pIC50",
+		"synthetic_target_column": "target_pIC50",
 		"fallback_target_columns": ["target_pIC50", "pred_pIC50"],
 		"synthetic_cv": {
 			# Training uses the synthetic file matching the CV iteration index.
 			# Even if this is turned off, synthetic data can be used for pre-training
-			"include_in_training": False,
+			"include_in_training": True,
 			# Options: "matching_fold", "all", "none".
 			"train_selection": "matching_fold",
 			# Default keeps synthetic data out of validation.
@@ -70,7 +75,7 @@ CONFIG = {
 			"validation_selection": "single_next_non_train",
 			# Keep the central fraction of synthetic rows by value (1.0 = keep all).
 			# Example: 0.95 keeps the middle 95% and removes 2.5% from each tail.
-			"keep_percentile": 0.75,
+			"keep_percentile": 0.5,
 			# Uniform random row subsample after percentile filtering.
 			# Useful for reducing pseudo-label noise volume while keeping diversity.
 			# Set to None to disable row subsampling entirely.
@@ -78,15 +83,24 @@ CONFIG = {
 			# Optional cap for synthetic-to-real ratio in finetuning train folds.
 			# Example: 1.0 keeps at most as many synthetic graphs as real graphs.
 			# Set to None to disable ratio capping.
-			"max_train_synth_to_real_ratio": 1.0,
+			"max_train_synth_to_real_ratio": None,
 			# Which synthetic pIC50 column to use both for filtering and training labels.
 			# Options: "pred" (pred_pIC50) or "target" (target_pIC50).
-			"label_source": "pred",
+			"label_source": "target",
 		},
 	},
 	"features": {
 		"scale_atomic_mass_by": 100.0,
-		"categorical_encoding_mode": "one_hot",
+		"categorical_encoding_mode": "one_hot", # options: "one_hot", "index", "index_with_unknown"
+		# Which molecule-to-graph featurizer to use.
+		# Options:
+		#   "custom"          - custom RDKit featurizer driven by atom_descriptors and
+		#                       bond_descriptors below; fully configurable.
+		#   "chemprop_simple" - chemprop's SimpleMoleculeMolGraphFeaturizer (fixed
+		#                       ~72-dim atom features, ~14-dim bond features). The
+		#                       atom_descriptors and bond_descriptors settings below
+		#                       are ignored in this mode.
+		"featurizer": "custom",
 		"atom_descriptors": [
 			"atomic_num",
 			"degree",
@@ -110,11 +124,11 @@ CONFIG = {
 	"model": {
 		"hidden_dim": 256,
 		"num_conv_layers": 3,
-		"heads": 8,
+		"heads": 4,
 		"dropout": 0.2,
 		"residual": True,
 		"normalization": "layernorm", # options: "layernorm", "batchnorm1d", "none"
-		"ffnn_hidden_layers": [256], # orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
+		"ffnn_hidden_layers": [256], # and was [256,512], [256,128,64] orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
 	},
 	"optimization": {
 		"learning_rate": 1e-3,

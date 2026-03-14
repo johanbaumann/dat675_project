@@ -290,6 +290,27 @@ def build_feature_names(
 
 
 def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
+	featurizer = str(config["features"].get("featurizer", "custom")).lower().strip()
+	if featurizer not in {"custom", "chemprop_simple"}:
+		raise ValueError(
+			"CONFIG['features']['featurizer'] must be 'custom' or 'chemprop_simple'."
+		)
+
+	if featurizer == "chemprop_simple":
+		node_dim, edge_dim = _probe_chemprop_dims()
+		config["features"]["atom_feature_dim"] = node_dim
+		config["features"]["edge_feature_dim"] = edge_dim
+		return {
+			"featurizer": "chemprop_simple",
+			"categorical_encoding_mode": "n/a",
+			"atom_feature_names": [],
+			"edge_feature_names": [],
+			"atom_feature_dim": node_dim,
+			"edge_feature_dim": edge_dim,
+			"atom_descriptors": [],
+			"bond_descriptors": [],
+		}
+
 	encoding_mode = str(
 		config["features"].get("categorical_encoding_mode", "one_hot")
 	).lower()
@@ -325,6 +346,7 @@ def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
 	config["features"]["bond_descriptors"] = bond_descriptors
 
 	return {
+		"featurizer": "custom",
 		"categorical_encoding_mode": encoding_mode,
 		"atom_feature_names": atom_feature_names,
 		"edge_feature_names": edge_feature_names,
@@ -338,16 +360,19 @@ def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
 def print_feature_summary(config: dict[str, Any], feature_context: dict[str, Any]) -> None:
 	print(f"Current device: {device}")
 	print("\nFeature summary:")
-	print(
-		f"  Categorical encoding mode: "
-		f"{feature_context['categorical_encoding_mode']}"
-	)
+	featurizer = feature_context.get("featurizer", "custom")
+	print(f"  Featurizer: {featurizer}")
 	print(f"  Atom feature dim: {feature_context['atom_feature_dim']}")
 	print(f"  Edge feature dim: {feature_context['edge_feature_dim']}")
-	print(f"  Atom descriptors: {feature_context['atom_descriptors']}")
-	print(f"  Bond descriptors: {feature_context['bond_descriptors']}")
-	print(f"  Atom features: {feature_context['atom_feature_names']}")
-	print(f"  Edge features: {feature_context['edge_feature_names']}")
+	if featurizer == "custom":
+		print(
+			f"  Categorical encoding mode: "
+			f"{feature_context['categorical_encoding_mode']}"
+		)
+		print(f"  Atom descriptors: {feature_context['atom_descriptors']}")
+		print(f"  Bond descriptors: {feature_context['bond_descriptors']}")
+		print(f"  Atom features: {feature_context['atom_feature_names']}")
+		print(f"  Edge features: {feature_context['edge_feature_names']}")
 	print(f"  Residual connections: {config['model'].get('residual', True)}")
 	print(
 		f"  Conv normalization: "
@@ -382,6 +407,50 @@ def _validate_feature_vector_length(
 			f"expected {expected_dim}, got {len(feature_values)}. "
 			f"Check CONFIG['features'] descriptor settings."
 		)
+
+
+# ==================== chemprop featurizer (optional alternative) ====================
+_chemprop_featurizer_instance = None
+
+
+def _get_chemprop_featurizer():
+	global _chemprop_featurizer_instance
+	if _chemprop_featurizer_instance is None:
+		from chemprop import featurizers as _chemprop_featurizers
+		_chemprop_featurizer_instance = _chemprop_featurizers.SimpleMoleculeMolGraphFeaturizer()
+	return _chemprop_featurizer_instance
+
+
+def _probe_chemprop_dims() -> tuple[int, int]:
+	"""Return (atom_feature_dim, edge_feature_dim) for chemprop's SimpleMoleculeMolGraphFeaturizer."""
+	test_mol = Chem.MolFromSmiles("CC")  # two atoms, one bond -> two directed edges
+	mol_graph = _get_chemprop_featurizer()(test_mol)
+	return int(mol_graph.V.shape[1]), int(mol_graph.E.shape[1])
+
+
+def _smiles_to_graph_chemprop(
+	smiles: str,
+	target: float,
+	feature_context: dict[str, Any],
+) -> Data | None:
+	"""Convert SMILES to a PyG Data object using chemprop's SimpleMoleculeMolGraphFeaturizer."""
+	mol = Chem.MolFromSmiles(smiles)
+	if mol is None:
+		return None
+	mol_graph = _get_chemprop_featurizer()(mol)
+	x = torch.tensor(mol_graph.V, dtype=torch.float)
+	edge_dim = feature_context["edge_feature_dim"]
+	if mol_graph.E.shape[0] > 0:
+		ei = torch.tensor(mol_graph.edge_index, dtype=torch.long)
+		# chemprop stores edge_index as [2, num_edges]; guard against [num_edges, 2] in older versions.
+		if ei.shape[0] != 2:
+			ei = ei.T.contiguous()
+		edge_attr = torch.tensor(mol_graph.E, dtype=torch.float)
+	else:
+		ei = torch.empty((2, 0), dtype=torch.long)
+		edge_attr = torch.empty((0, edge_dim), dtype=torch.float)
+	y = torch.tensor([[float(target)]], dtype=torch.float)
+	return Data(x=x, edge_index=ei, edge_attr=edge_attr, y=y)
 
 
 # ==================== featurization ====================
@@ -473,6 +542,8 @@ def smiles_to_graph(
 	config: dict[str, Any],
 	feature_context: dict[str, Any],
 ) -> Data | None:
+	if feature_context.get("featurizer") == "chemprop_simple":
+		return _smiles_to_graph_chemprop(smiles, target, feature_context)
 	mol = Chem.MolFromSmiles(smiles)
 	if mol is None:
 		return None
@@ -1040,14 +1111,14 @@ def run_synthetic_pretraining_stage(
 		for batch in synth_loader:
 			batch = batch.to(device)
 			optimizer.zero_grad()
-			out = model(batch).view(-1) # (batch_size,)
+			out = model(batch).view(-1)
 			y_true = standardize_batch_targets(
 				batch.y.view(-1),
 				target_standardizer=target_standardizer,
 			)
-			loss = criterion(out, y_true) # MSE loss on standardized targets
-			loss.backward() # Backpropagate gradients
-			if grad_clip_norm and float(grad_clip_norm) > 0: # Gradient clipping for stability
+			loss = criterion(out, y_true)
+			loss.backward()
+			if grad_clip_norm and float(grad_clip_norm) > 0:
 				torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
 			optimizer.step()
 			epoch_loss += loss.item() * batch.num_graphs
