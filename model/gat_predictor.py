@@ -56,12 +56,29 @@ CONFIG = {
 		"fallback_target_columns": ["target_pIC50", "pred_pIC50"],
 		"synthetic_cv": {
 			# Training uses the synthetic file matching the CV iteration index.
-			"include_in_training": True,
+			# Even if this is turned off, synthetic data can be used for pre-training
+			"include_in_training": False,
+			# Options: "matching_fold", "all", "none".
+			"train_selection": "matching_fold",
 			# Default keeps synthetic data out of validation.
 			"include_in_validation": False,
+			# Leakage-safe validation strategy:
+			# - "all_except_train_and_fold": use all synthetic iterations except
+			#   the current fold iteration and any synthetic iterations used in training.
+			# - "single_next_non_train": use one deterministic non-overlapping iteration.
+			# - "none": do not add synthetic rows to validation.
+			"validation_selection": "single_next_non_train",
 			# Keep the central fraction of synthetic rows by value (1.0 = keep all).
 			# Example: 0.95 keeps the middle 95% and removes 2.5% from each tail.
 			"keep_percentile": 0.75,
+			# Uniform random row subsample after percentile filtering.
+			# Useful for reducing pseudo-label noise volume while keeping diversity.
+			# Set to None to disable row subsampling entirely.
+			"row_keep_fraction": 1.0,
+			# Optional cap for synthetic-to-real ratio in finetuning train folds.
+			# Example: 1.0 keeps at most as many synthetic graphs as real graphs.
+			# Set to None to disable ratio capping.
+			"max_train_synth_to_real_ratio": 1.0,
 			# Which synthetic pIC50 column to use both for filtering and training labels.
 			# Options: "pred" (pred_pIC50) or "target" (target_pIC50).
 			"label_source": "pred",
@@ -114,6 +131,20 @@ CONFIG = {
 	"training": {
 		"num_epochs": 200,
 		"print_every": 1,
+		# Stage 1 in two-stage training: synthetic-only pretraining per fold,
+		# then Stage 2 finetunes on the fold training set.
+		"synthetic_pretraining": {
+			"enabled": True,
+			"epochs": 25,
+			"learning_rate": 8e-4,
+			"weight_decay": 1e-4,
+			"grad_clip_norm": 8.0,
+			"batch_size": 64,
+			"shuffle": True, #
+			"min_synthetic_graphs": 64, # Ensure at least one batch for pretraining, even if synthetic data is very limited after filtering.
+			# Usually False for pseudo labels; turn on only if target scale drift is large.
+			"use_target_standardization": False,
+		},
 		"target_standardization": {
 			"enabled": False,
 			"epsilon": 1e-8,
