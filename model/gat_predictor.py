@@ -198,9 +198,9 @@ CONFIG = {
 		"ffnn_hidden_layers": [256], # and was [256,512], [256,128,64] orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
 	},
 	"optimization": {
-		"learning_rate": 1e-3,
+		"learning_rate": 1e-3, # orig 5e-4, but increased to 1e-3 after removing conv dropout and adding an extra FFNN layer; the model can now handle a higher learning rate without diverging and it trains faster.
 		"weight_decay": 1e-4,
-		"grad_clip_norm": 8.0,
+		"grad_clip_norm": 10.0,
 	},
 	"scheduler": {
 		"enabled": True, # Reduce on Plateau. 
@@ -220,7 +220,7 @@ CONFIG = {
 		"synthetic_pretraining": {
 			"enabled": True,
 			"epochs": 35,
-			"learning_rate": 8e-4,
+			"learning_rate": 4e-4,
 			"weight_decay": 1e-4,
 			"grad_clip_norm": 10.0,
 			"batch_size": 64,
