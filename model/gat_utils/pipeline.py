@@ -18,7 +18,13 @@ from .data_loading import (
 	load_dataset,
 	print_fold_data_summary,
 )
-from .features import prepare_feature_config, print_feature_summary, set_seed
+from .features import (
+	apply_feature_scalers,
+	fit_feature_scalers,
+	prepare_feature_config,
+	print_feature_summary,
+	set_seed,
+)
 from .target_scaling import (
 	build_target_standardizer,
 	build_target_standardizer_from_stats,
@@ -184,13 +190,12 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			scheduler_mode = expected_scheduler_mode
 
 	print(f"\nLoading holdout test set: {actual_test_file}")
-	test_data = load_dataset(actual_test_file, config, feature_context)
-	if len(test_data) == 0:
+	raw_test_data = load_dataset(actual_test_file, config, feature_context)
+	if len(raw_test_data) == 0:
 		raise RuntimeError(
 			"Holdout test set produced 0 valid graphs. "
 			"Check smiles parsing and target column configuration."
 		)
-	test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
 	if _is_minimize_metric(early_stop_metric):
 		global_best_monitor_value = float("inf")
@@ -201,6 +206,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	best_fold_idx = -1
 	global_best_target_mean = None
 	global_best_target_std = None
+	global_best_feature_scalers = None
 	cv_results = []
 
 	losses = {f"fold_{i}": {} for i in range(total_folds)}
@@ -232,14 +238,6 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 
 		model = build_model(model_class, config, feature_context)
 
-		run_synthetic_pretraining_stage(
-			model,
-			pretrain_synth_data,
-			config=config,
-			fold_idx=val_idx,
-			target_std_cfg=target_std_cfg,
-		)
-
 		synth_policy = get_synthetic_cv_config(config)
 		finetune_train_data = cap_synthetic_train_ratio(
 			train_data,
@@ -255,6 +253,23 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			raise RuntimeError(
 				f"Fold {val_idx} has 0 validation graphs after preprocessing/filtering."
 			)
+
+		feature_scalers = fit_feature_scalers(
+			finetune_train_data,
+			feature_context=feature_context,
+			config=config,
+		)
+		apply_feature_scalers(finetune_train_data, feature_scalers=feature_scalers)
+		apply_feature_scalers(val_data, feature_scalers=feature_scalers)
+		apply_feature_scalers(pretrain_synth_data, feature_scalers=feature_scalers)
+
+		run_synthetic_pretraining_stage(
+			model,
+			pretrain_synth_data,
+			config=config,
+			fold_idx=val_idx,
+			target_std_cfg=target_std_cfg,
+		)
 
 		print_fold_data_summary(val_idx, finetune_train_data, val_data)
 
@@ -455,6 +470,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			best_fold_idx = val_idx
 			global_best_target_mean = train_target_mean
 			global_best_target_std = train_target_std
+			global_best_feature_scalers = copy.deepcopy(feature_scalers)
 			print(
 				f"[Fold {val_idx}] is current global best "
 				f"(monitor={early_stop_metric} value={best_monitor_value:.6f})."
@@ -478,7 +494,12 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 
 	best_model = build_model(model_class, config, feature_context)
 	best_model.load_state_dict(global_best_weights)
-	# Evaluate the best model on the holdout test set
+	# Evaluate the best model on the holdout test set.
+	# Feature scaling is fold-specific, so holdout features must be transformed
+	# using the same scaler fitted on the selected best fold train split.
+	test_data = copy.deepcopy(raw_test_data)
+	apply_feature_scalers(test_data, feature_scalers=global_best_feature_scalers)
+	test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
 	best_target_standardizer = None
 	if use_target_standardization:

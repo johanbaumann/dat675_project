@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import torch
 from rdkit import Chem
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch_geometric.data import Data
 
 
@@ -95,6 +96,19 @@ CHIRAL_VALUES = [v for _, v in CHIRAL_TYPES]
 BOND_TYPE_CATEGORY_VALUES = [v for _, v in BOND_TYPE_VALUES]
 BOND_STEREO_VALUES = [v for _, v in BOND_STEREO_TYPES]
 
+# Only continuous descriptor columns are scaled by sklearn-based feature scaling.
+SCALABLE_ATOM_FEATURE_NAMES = {
+	"atomic_num",
+	"degree",
+	"total_num_hs",
+	"formal_charge",
+	"implicit_valence",
+	"mass_scaled",
+}
+SCALABLE_EDGE_FEATURE_NAMES = {
+	"bond_order",
+}
+
 
 # ==================== chemprop featurizer (optional alternative) ====================
 _chemprop_featurizer_instance = None
@@ -105,6 +119,185 @@ def set_seed(seed: int) -> None:
 	torch.manual_seed(seed)
 	if torch.cuda.is_available():
 		torch.cuda.manual_seed_all(seed)
+
+
+def get_feature_scaling_config(config: dict[str, Any]) -> dict[str, Any]:
+	scaling_cfg = config.get("features", {}).get("feature_scaling", {})
+	if not isinstance(scaling_cfg, dict):
+		scaling_cfg = {}
+
+	mode = str(scaling_cfg.get("mode", "none")).lower().strip()
+	if mode not in {"none", "standard", "minmax"}:
+		raise ValueError(
+			"CONFIG['features']['feature_scaling']['mode'] must be one of "
+			"{'none', 'standard', 'minmax'}."
+		)
+
+	fit_on = str(scaling_cfg.get("fit_on", "real_plus_synthetic")).lower().strip()
+	if fit_on not in {"real_plus_synthetic", "real_only"}:
+		raise ValueError(
+			"CONFIG['features']['feature_scaling']['fit_on'] must be one of "
+			"{'real_plus_synthetic', 'real_only'}."
+		)
+	return {
+		"mode": mode,
+		"fit_on": fit_on,
+		"enabled": mode != "none",
+	}
+
+
+def _build_sklearn_scaler(mode: str):
+	if mode == "standard":
+		return StandardScaler()
+	if mode == "minmax":
+		return MinMaxScaler()
+	raise ValueError(f"Unsupported feature scaler mode: {mode}")
+
+
+def _collect_feature_matrix(
+	data_list: list[Data],
+	*,
+	attr_name: str,
+	column_indices: list[int],
+) -> np.ndarray | None:
+	if not column_indices:
+		return None
+
+	blocks = []
+	for graph in data_list:
+		tensor = getattr(graph, attr_name)
+		if tensor is None or tensor.numel() == 0 or tensor.shape[0] == 0:
+			continue
+		arr = tensor.detach().cpu().numpy()
+		blocks.append(arr[:, column_indices])
+
+	if not blocks:
+		return None
+	return np.concatenate(blocks, axis=0)
+
+
+def _transform_graph_columns(
+	graph: Data,
+	*,
+	attr_name: str,
+	column_indices: list[int],
+	scaler,
+) -> None:
+	if scaler is None or not column_indices:
+		return
+	if not hasattr(graph, attr_name):
+		return
+
+	tensor = getattr(graph, attr_name)
+	if tensor is None or tensor.numel() == 0 or tensor.shape[0] == 0:
+		return
+
+	arr = tensor.detach().cpu().numpy()
+	arr[:, column_indices] = scaler.transform(arr[:, column_indices])
+	setattr(graph, attr_name, torch.tensor(arr, dtype=torch.float32))
+
+
+def _resolve_scalable_indices(feature_names: list[str], scalable_names: set[str]) -> list[int]:
+	return [idx for idx, name in enumerate(feature_names) if name in scalable_names]
+
+
+def fit_feature_scalers(
+	train_data: list[Data],
+	*,
+	feature_context: dict[str, Any],
+	config: dict[str, Any],
+) -> dict[str, Any] | None:
+	scaling_cfg = get_feature_scaling_config(config)
+	if not scaling_cfg["enabled"]:
+		return None
+	if feature_context.get("featurizer") != "custom":
+		print("[Feature scaling] skipped: sklearn scaling is only supported for featurizer='custom'.")
+		return None
+
+	mode = scaling_cfg["mode"]
+	fit_on = scaling_cfg["fit_on"]
+	scaler_fit_data = train_data
+	if fit_on == "real_only":
+		real_train_data = [g for g in train_data if not bool(getattr(g, "is_synthetic", False))]
+		if real_train_data:
+			scaler_fit_data = real_train_data
+		else:
+			print(
+				"[Feature scaling] fit_on='real_only' requested but no real rows were found; "
+				"falling back to real_plus_synthetic for scaler fitting."
+			)
+			scaler_fit_data = train_data
+
+	node_feature_names = feature_context.get("atom_feature_names", [])
+	edge_feature_names = feature_context.get("edge_feature_names", [])
+	node_indices = _resolve_scalable_indices(node_feature_names, SCALABLE_ATOM_FEATURE_NAMES)
+	edge_indices = _resolve_scalable_indices(edge_feature_names, SCALABLE_EDGE_FEATURE_NAMES)
+
+	node_scaler = None
+	node_matrix = _collect_feature_matrix(
+		scaler_fit_data,
+		attr_name="x",
+		column_indices=node_indices,
+	)
+	if node_matrix is not None and node_matrix.shape[0] > 0:
+		node_scaler = _build_sklearn_scaler(mode)
+		node_scaler.fit(node_matrix)
+
+	edge_scaler = None
+	edge_matrix = _collect_feature_matrix(
+		scaler_fit_data,
+		attr_name="edge_attr",
+		column_indices=edge_indices,
+	)
+	if edge_matrix is not None and edge_matrix.shape[0] > 0:
+		edge_scaler = _build_sklearn_scaler(mode)
+		edge_scaler.fit(edge_matrix)
+
+	if node_scaler is None and edge_scaler is None:
+		print("[Feature scaling] no eligible continuous feature columns found; skipping scaling.")
+		return None
+
+	print(
+		f"[Feature scaling] mode={mode} fit_on={fit_on} | "
+		f"node_cols={len(node_indices)} edge_cols={len(edge_indices)}"
+	)
+	return {
+		"mode": mode,
+		"fit_on": fit_on,
+		"node_indices": node_indices,
+		"edge_indices": edge_indices,
+		"node_scaler": node_scaler,
+		"edge_scaler": edge_scaler,
+	}
+
+
+def apply_feature_scalers(
+	data_list: list[Data],
+	*,
+	feature_scalers: dict[str, Any] | None,
+) -> list[Data]:
+	if feature_scalers is None:
+		return data_list
+
+	node_indices = feature_scalers.get("node_indices", [])
+	edge_indices = feature_scalers.get("edge_indices", [])
+	node_scaler = feature_scalers.get("node_scaler")
+	edge_scaler = feature_scalers.get("edge_scaler")
+
+	for graph in data_list:
+		_transform_graph_columns(
+			graph,
+			attr_name="x",
+			column_indices=node_indices,
+			scaler=node_scaler,
+		)
+		_transform_graph_columns(
+			graph,
+			attr_name="edge_attr",
+			column_indices=edge_indices,
+			scaler=edge_scaler,
+		)
+	return data_list
 
 
 def _normalize_descriptor_list(value, *, allowed: set[str], default: list[str], label: str) -> list[str]:
@@ -196,11 +389,15 @@ def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
 
 	if featurizer == "chemprop_simple":
 		node_dim, edge_dim = _probe_chemprop_dims()
+		scaling_cfg = get_feature_scaling_config(config)
+		if scaling_cfg["enabled"]:
+			print("[Feature scaling] ignored for featurizer='chemprop_simple'; using mode='none'.")
 		config["features"]["atom_feature_dim"] = node_dim
 		config["features"]["edge_feature_dim"] = edge_dim
 		return {
 			"featurizer": "chemprop_simple",
 			"categorical_encoding_mode": "n/a",
+			"feature_scaling_mode": "none",
 			"atom_feature_names": [],
 			"edge_feature_names": [],
 			"atom_feature_dim": node_dim,
@@ -246,9 +443,11 @@ def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
 	config["features"]["atom_descriptors"] = atom_descriptors
 	config["features"]["bond_descriptors"] = bond_descriptors
 
+	scaling_cfg = get_feature_scaling_config(config)
 	return {
 		"featurizer": "custom",
 		"categorical_encoding_mode": encoding_mode,
+		"feature_scaling_mode": scaling_cfg["mode"],
 		"atom_feature_names": atom_feature_names,
 		"edge_feature_names": edge_feature_names,
 		"atom_feature_dim": atom_feature_dim,
@@ -270,6 +469,7 @@ def print_feature_summary(config: dict[str, Any], feature_context: dict[str, Any
 			f"  Categorical encoding mode: "
 			f"{feature_context['categorical_encoding_mode']}"
 		)
+		print(f"  Feature scaling mode: {feature_context.get('feature_scaling_mode', 'none')}")
 		print(f"  Atom descriptors: {feature_context['atom_descriptors']}")
 		print(f"  Bond descriptors: {feature_context['bond_descriptors']}")
 		print(f"  Atom features: {feature_context['atom_feature_names']}")

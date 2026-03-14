@@ -81,6 +81,13 @@ from gat_utils import run_training_pipeline
 #   filtering/SMILES parsing to fail fast with actionable messages.
 # - Added backward-compatible support for categorical_encoding_mode=
 #   "index_with_unknown" (normalized internally to "index").
+# 2026-03-14 (feature scaling pass)
+# - Added sklearn-based feature scaling modes under CONFIG['features']['feature_scaling']:
+#   "none" (default), "standard", or "minmax".
+# - Feature scaling is fit on each fold's finetune training data only and applied
+#   consistently to train/val/holdout and run_gat.py evaluation paths.
+# - When "none" is selected, only handcrafted descriptor-level scaling is used
+#   (e.g., scale_atomic_mass_by), matching previous behavior.
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
@@ -128,6 +135,17 @@ CONFIG = {
 	"features": {
 		"scale_atomic_mass_by": 100.0,
 		"categorical_encoding_mode": "one_hot", # options: "one_hot", "index", "index_with_unknown"
+		"feature_scaling": {
+			# options: "none", "standard", "minmax"
+			# - "none": keep handcrafted descriptor-level scaling only
+			# - "standard": sklearn StandardScaler on continuous custom descriptors
+			# - "minmax": sklearn MinMaxScaler on continuous custom descriptors
+			# fit_on options:
+			# - "real_plus_synthetic": fit scaler on all rows in fold train set
+			# - "real_only": fit scaler using only original (non-synthetic) rows
+			"mode": "standard",
+			"fit_on": "real_plus_synthetic",
+		},
 		# Which molecule-to-graph featurizer to use.
 		# Options:
 		#   "custom"          - custom RDKit featurizer driven by atom_descriptors and
