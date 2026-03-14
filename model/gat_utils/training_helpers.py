@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.stats import pearsonr, spearmanr
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from torch_geometric.loader import DataLoader
 
 from .target_scaling import invert_standardized_predictions
@@ -16,15 +16,21 @@ from .target_scaling import invert_standardized_predictions
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# ==================== training helpers ====================
-def evaluate(
+# ==================== inference helpers ====================
+def predict(
 	model: torch.nn.Module,
 	loader: DataLoader,
 	*,
 	target_standardizer: dict[str, Any] | None = None,
-) -> tuple:
+) -> tuple[list[float], list[float]]:
+	"""Run inference and return (y_true, y_pred) as lists of floats.
+
+	Predictions are de-standardized when a target_standardizer is provided.
+	The list order matches the DataLoader iteration order — use shuffle=False for
+	eval/test loaders to keep order stable across calls.
+	"""
 	model.eval()
-	y_true, y_pred = [], []
+	y_true_out, y_pred_out = [], []
 
 	with torch.no_grad():
 		for data in loader:
@@ -35,28 +41,43 @@ def evaluate(
 				out,
 				target_standardizer=target_standardizer,
 			)
+			y_true_out.extend(true.detach().cpu().numpy().flatten())
+			y_pred_out.extend(out.detach().cpu().numpy().flatten())
 
-			y_true.extend(true.detach().cpu().numpy().flatten())
-			y_pred.extend(out.detach().cpu().numpy().flatten())
+	return y_true_out, y_pred_out
+
+
+# ==================== training helpers ====================
+def evaluate(
+	model: torch.nn.Module,
+	loader: DataLoader,
+	*,
+	target_standardizer: dict[str, Any] | None = None,
+) -> tuple:
+	y_true, y_pred = predict(model, loader, target_standardizer=target_standardizer)
 
 	mse = mean_squared_error(y_true, y_pred)
 	rmse = float(np.sqrt(mse))
+	mae = float(mean_absolute_error(y_true, y_pred))
 	r2 = r2_score(y_true, y_pred)
 	rho = float(spearmanr(y_true, y_pred)[0])
 	pearson = float(pearsonr(y_true, y_pred)[0]) if len(y_true) > 1 else float("nan")
-	return mse, rmse, r2, rho, pearson
+	# Return order: (mse, rmse, mae, r2, rho, pearson)
+	return mse, rmse, mae, r2, rho, pearson
 
 
 def metric_from_name(
 	metric_name: str,
 	mse: float,
 	rmse: float,
+	mae: float,
 	r2: float,
 	rho: float,
 	pearson: float,
 ) -> float:
-    """
+	"""
 	MSE = mean squared error (lower is better)
+	MAE = mean absolute error (lower is better)
 	RMSE = root mean squared error (lower is better)
     R2 = R2 score (higher is better) Coeficent of determination 
     Rho = Spearman rank correlation (higher is better)
@@ -65,6 +86,7 @@ def metric_from_name(
 	
 	
 	MSE = 1/N * sum((y_true - y_pred)^2)
+	MAE = 1/N * sum(|y_true - y_pred|)
     RMSE = sqrt(MSE)
     R2 = 1 - (sum((y_true - y_pred)^2) / sum((y_true - mean(y_true))^2))
     Rho = spearmanr(y_true, y_pred)[0]
@@ -80,6 +102,7 @@ def metric_from_name(
 	values = {
 		"mse": mse,
 		"rmse": rmse,
+		"mae": mae,
 		"r2": r2,
 		"rho": rho,
 		"pearson": pearson,
@@ -95,6 +118,7 @@ def metric_description(metric_name: str) -> str:
 	descriptions = {
 		"mse": "Validation mean squared error; lower is better.",
 		"rmse": "Validation root mean squared error; lower is better.",
+		"mae": "Validation mean absolute error; lower is better.",
 		"r2": "Validation R2 score; higher is better.",
 		"rho": "Validation Spearman rank correlation; higher is better.",
 		"pearson": "Validation Pearson correlation coefficient; higher is better.",
@@ -107,8 +131,8 @@ def metric_description(metric_name: str) -> str:
 
 
 def is_improvement(metric_name: str, current: float, best: float, min_delta: float) -> bool:
-	# Lower is better for mse/rmse. Higher is better for r2/rho/pearson.
-	if metric_name in {"mse", "rmse"}:
+	# Lower is better for mse/rmse/mae. Higher is better for r2/rho/pearson.
+	if metric_name in {"mse", "rmse", "mae"}:
 		return current < (best - min_delta)
 	return current > (best + min_delta)
 
@@ -136,6 +160,7 @@ def build_summary_dataframe(
 	best_fold_idx: int,
 	test_mse: float,
 	test_rmse: float,
+	test_mae: float,
 	test_r2: float,
 	test_rho: float,
 	test_pearson: float,
@@ -151,6 +176,7 @@ def build_summary_dataframe(
 				"ValLoss_MSE": fold_result["val_loss_mse"],
 				"MSE": fold_result["val_mse"],
 				"RMSE": fold_result["val_rmse"],
+				"MAE": fold_result["val_mae"],
 				"R2": fold_result["val_r2"],
 				"Rho": fold_result["val_rho"],
 				"Pearson": fold_result["val_pearson"],
@@ -160,6 +186,7 @@ def build_summary_dataframe(
 	avg_best_monitor = safe_nanmean([res["best_monitor_value"] for res in cv_results])
 	avg_val_mse = safe_nanmean([res["val_mse"] for res in cv_results])
 	avg_val_rmse = safe_nanmean([res["val_rmse"] for res in cv_results])
+	avg_val_mae = safe_nanmean([res["val_mae"] for res in cv_results])
 	avg_val_r2 = safe_nanmean([res["val_r2"] for res in cv_results])
 	avg_val_rho = safe_nanmean([res["val_rho"] for res in cv_results])
 	avg_val_pearson = safe_nanmean([res["val_pearson"] for res in cv_results])
@@ -175,6 +202,7 @@ def build_summary_dataframe(
 			"ValLoss_MSE": avg_val_mse,
 			"MSE": avg_val_mse,
 			"RMSE": avg_val_rmse,
+			"MAE": avg_val_mae,
 			"R2": avg_val_r2,
 			"Rho": avg_val_rho,
 			"Pearson": avg_val_pearson,
@@ -189,6 +217,7 @@ def build_summary_dataframe(
 			"ValLoss_MSE": "",
 			"MSE": test_mse,
 			"RMSE": test_rmse,
+			"MAE": test_mae,
 			"R2": test_r2,
 			"Rho": test_rho,
 			"Pearson": test_pearson,

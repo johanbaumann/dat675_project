@@ -48,6 +48,10 @@ def _resolve_optional(
 	return value
 
 
+def _is_minimize_metric(metric_name: str) -> bool:
+	return metric_name in {"mse", "rmse", "mae"}
+
+
 def run_synthetic_pretraining_stage(
 	model: torch.nn.Module,
 	synthetic_data: list,
@@ -168,11 +172,30 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	scheduler_cfg = config["scheduler"]
 	scheduler_enabled = scheduler_cfg["enabled"]
 	scheduler_metric = scheduler_cfg["monitor_metric"]
+	scheduler_mode = scheduler_cfg["mode"]
+	if scheduler_enabled:
+		expected_scheduler_mode = "min" if _is_minimize_metric(scheduler_metric) else "max"
+		if scheduler_mode != expected_scheduler_mode:
+			print(
+				"[WARN] scheduler.mode does not match scheduler.monitor_metric "
+				f"(mode='{scheduler_mode}', metric='{scheduler_metric}'). "
+				f"Using mode='{expected_scheduler_mode}'."
+			)
+			scheduler_mode = expected_scheduler_mode
 
 	print(f"\nLoading holdout test set: {actual_test_file}")
 	test_data = load_dataset(actual_test_file, config, feature_context)
+	if len(test_data) == 0:
+		raise RuntimeError(
+			"Holdout test set produced 0 valid graphs. "
+			"Check smiles parsing and target column configuration."
+		)
 	test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
+	if _is_minimize_metric(early_stop_metric):
+		global_best_monitor_value = float("inf")
+	else:
+		global_best_monitor_value = -float("inf")
 	global_best_val_rmse = float("inf")
 	global_best_weights = None
 	best_fold_idx = -1
@@ -224,6 +247,14 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			seed=config["experiment"]["seed"],
 			fold_idx=val_idx,
 		)
+		if len(finetune_train_data) == 0:
+			raise RuntimeError(
+				f"Fold {val_idx} has 0 training graphs after preprocessing/filtering."
+			)
+		if len(val_data) == 0:
+			raise RuntimeError(
+				f"Fold {val_idx} has 0 validation graphs after preprocessing/filtering."
+			)
 
 		print_fold_data_summary(val_idx, finetune_train_data, val_data)
 
@@ -259,7 +290,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 		if scheduler_enabled:
 			scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 				optimizer,
-				mode=scheduler_cfg["mode"],
+				mode=scheduler_mode,
 				factor=scheduler_cfg["factor"],
 				patience=scheduler_cfg["patience"],
 			)
@@ -273,13 +304,14 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 
 		best_val_mse = float("inf")
 		best_val_rmse = float("inf")
+		best_val_mae = float("inf")
 		best_val_r2 = -float("inf")
 		best_val_rho = -float("inf")
 		best_val_pearson = -float("inf")
 		best_epoch = 0
 		best_model_weights = None
 
-		if early_stop_metric in {"mse", "rmse"}:
+		if _is_minimize_metric(early_stop_metric):
 			best_monitor_value = float("inf")
 		else:
 			best_monitor_value = -float("inf")
@@ -313,7 +345,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				train_loss += loss.item() * batch.num_graphs
 
 			train_loss /= len(finetune_train_data)
-			val_mse, val_rmse, val_r2, val_rho, val_pearson = evaluate(
+			val_mse, val_rmse, val_mae, val_r2, val_rho, val_pearson = evaluate(
 				model,
 				val_loader,
 				target_standardizer=target_standardizer,
@@ -321,7 +353,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 
 			# current monitor is the valye we compare aginst best value for early stopping and scheduler decisions
 			current_monitor = metric_from_name(
-				early_stop_metric, val_mse, val_rmse, val_r2, val_rho, val_pearson
+				early_stop_metric, val_mse, val_rmse, val_mae, val_r2, val_rho, val_pearson
 			)
 
 			if is_improvement(
@@ -330,6 +362,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				best_monitor_value = current_monitor
 				best_val_mse = val_mse
 				best_val_rmse = val_rmse
+				best_val_mae = val_mae
 				best_val_r2 = val_r2
 				best_val_rho = val_rho
 				best_val_pearson = val_pearson
@@ -340,9 +373,11 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 					{
 						"state_dict": best_model_weights,
 						"fold": val_idx,
+						"target_standardization_enabled": bool(target_standardizer is not None),
 						"target_mean": train_target_mean,
 						"target_std": train_target_std,
 						"val_rmse": val_rmse,
+						"val_mae": val_mae,
 						"val_pearson": val_pearson,
 					},
 					get_fold_checkpoint_path(target_folder, val_idx),
@@ -352,7 +387,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 
 			if scheduler is not None:
 				scheduler_value = metric_from_name(
-					scheduler_metric, val_mse, val_rmse, val_r2, val_rho, val_pearson
+					scheduler_metric, val_mse, val_rmse, val_mae, val_r2, val_rho, val_pearson
 				)
 				scheduler.step(scheduler_value)
 
@@ -365,7 +400,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				print(
 					f"[Fold {val_idx}][Epoch {epoch:03d}] "
 					f"train_mse={'(scaled) ' if use_target_standardization else ''}{train_loss:.4f} "
-					f"val_mse={val_mse:.4f} val_rmse={val_rmse:.4f} "
+					f"val_mse={val_mse:.4f} val_rmse={val_rmse:.4f} val_mae={val_mae:.4f} "
 					f"val_r2={val_r2:.4f} val_rho={val_rho:.4f} val_pearson={val_pearson:.4f} "
 					f"lr={optimizer.param_groups[0]['lr']:.2e} "
 					f"best_val_rmse={best_val_rmse:.4f} "
@@ -382,9 +417,15 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 
 		print(
 			f"[Fold {val_idx}] best epoch={best_epoch} | "
-			f"val_rmse={best_val_rmse:.4f} val_r2={best_val_r2:.4f} "
+			f"val_rmse={best_val_rmse:.4f} val_mae={best_val_mae:.4f} "
+			f"val_r2={best_val_r2:.4f} "
 			f"val_rho={best_val_rho:.4f} val_pearson={best_val_pearson:.4f}"
 		)
+		if best_model_weights is None:
+			raise RuntimeError(
+				f"Fold {val_idx} did not produce any best checkpoint updates. "
+				"This usually means monitor metrics were NaN/invalid for all epochs."
+			)
 
 		cv_results.append(
 			{
@@ -395,19 +436,29 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				"val_loss_mse": best_val_mse,
 				"val_mse": best_val_mse,
 				"val_rmse": best_val_rmse,
+				"val_mae": best_val_mae,
 				"val_r2": best_val_r2,
 				"val_rho": best_val_rho,
 				"val_pearson": best_val_pearson,
 			}
 		)
 
-		if best_val_rmse < global_best_val_rmse:
+		if is_improvement(
+			early_stop_metric,
+			best_monitor_value,
+			global_best_monitor_value,
+			0.0,
+		):
+			global_best_monitor_value = best_monitor_value
 			global_best_val_rmse = best_val_rmse
 			global_best_weights = copy.deepcopy(best_model_weights)
 			best_fold_idx = val_idx
 			global_best_target_mean = train_target_mean
 			global_best_target_std = train_target_std
-			print(f"[Fold {val_idx}] is current global best.")
+			print(
+				f"[Fold {val_idx}] is current global best "
+				f"(monitor={early_stop_metric} value={best_monitor_value:.6f})."
+			)
 
 		losses[f"fold_{val_idx}"] = {
 			"train": train_losses,
@@ -419,7 +470,8 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	print("\n-------------------- Holdout Evaluation --------------------")
 	print(
 		f"Loading global-best model from fold {best_fold_idx} "
-		f"(val_rmse={global_best_val_rmse:.4f})"
+		f"(monitor={early_stop_metric} value={global_best_monitor_value:.6f}, "
+		f"val_rmse={global_best_val_rmse:.4f})"
 	)
 	if global_best_weights is None:
 		raise RuntimeError("No best model weights were saved during cross-validation.")
@@ -439,13 +491,13 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			float(global_best_target_std),
 		)
 
-	test_mse, test_rmse, test_r2, test_rho, test_pearson = evaluate(
+	test_mse, test_rmse, test_mae, test_r2, test_rho, test_pearson = evaluate(
 		best_model,
 		test_loader,
 		target_standardizer=best_target_standardizer,
 	)
 	print(
-		f"Holdout -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, "
+		f"Holdout -> MSE: {test_mse:.4f}, RMSE: {test_rmse:.4f}, MAE: {test_mae:.4f}, "
 		f"R2: {test_r2:.4f}, Rho: {test_rho:.4f}, Pearson: {test_pearson:.4f}"
 	)
 
@@ -455,6 +507,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 		best_fold_idx,
 		test_mse,
 		test_rmse,
+		test_mae,
 		test_r2,
 		test_rho,
 		test_pearson,

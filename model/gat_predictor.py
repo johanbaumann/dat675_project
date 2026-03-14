@@ -21,7 +21,7 @@ from gat_utils import run_training_pipeline
 #   'bond_descriptors') with categorical encoding modes (one_hot/index + unknown).
 # - Training stability: reproducible seed, gradient clipping, ReduceLROnPlateau,
 #   early stopping with min_delta + configurable monitor metric.
-# - Reporting: expanded metrics (MSE/RMSE/R2/Spearman rho/Pearson), standardized
+# - Reporting: expanded metrics (MSE/RMSE/MAE/R2/Spearman rho/Pearson), standardized
 #   CV summary CSV columns, and learning-curve export.
 
 
@@ -45,10 +45,46 @@ from gat_utils import run_training_pipeline
 #   (uses chemprop's SimpleMoleculeMolGraphFeaturizer as a drop-in alternative;
 #   atom_descriptors / bond_descriptors are ignored in this mode).
 # problems with Label shift phenomenon in synthetic data, so added "use_target_standardization" option to
+# 2026-03-14
+# - Added MAE (mean absolute error) to all evaluation outputs: per-epoch logging,
+#   fold summary, CV results CSV, and holdout results CSV.
+# - Added predict() to gat_utils for raw (True, Pred) inference without computing metrics.
+# - When running run_gat.py, per-molecule predictions (de-standardized True_pIC50 vs
+#   Pred_pIC50) for every dataset x CV fold are now saved to GAT_predictions_heldout_set.csv.
+# 2026-03-14
+# - Completed full refactor of gat_utils.py monolith into the gat_utils/ package.
+#   The old flat file is removed; all logic now lives in focused submodules:
+#     target_scaling.py  — per-fold target standardization (fit/invert mean/std)
+#     features.py        — molecular featurization (SMILES → PyG Data, atom/bond
+#                          descriptors, chemprop featurizer alternative)
+#     data_loading.py    — dataset I/O, CV fold file selection, synthetic data
+#                          filtering (percentile + row_keep_fraction), load_dataset
+#     training_helpers.py— evaluation metrics (evaluate/predict/MAE/RMSE/R²/Pearson/
+#                          Spearman), build_model, CV summary dataframe, write_losses
+#     pipeline.py        — full training loop (run_training_pipeline) and synthetic
+#                          pretraining stage
+#     checkpoints.py     — robust checkpoint save/load with write-then-replace
+#     __init__.py        — public API re-exports (evaluate, predict,
+#                          get_fold_checkpoint_path, load_dataset, load_fold_checkpoint,
+#                          prepare_feature_config, run_training_pipeline)
+# 2026-03-14 (logic fix pass)
+# - Fixed early-stopping monitor initialization for MAE (MAE is now treated as
+#   a minimize metric consistently with mse/rmse).
+# - Global-best fold selection now follows the configured early-stopping monitor
+#   metric, not hard-coded RMSE-only comparison.
+# - Checkpoints now persist whether target standardization was enabled at
+#   training time; inference prefers this stored flag to avoid config-drift
+#   mismatches when reloading old folds.
+# - Added scheduler-mode safeguard: if monitor metric direction conflicts with
+#   scheduler mode, pipeline auto-corrects mode and prints a warning.
+# - Added runtime guards for empty holdout/train/validation graph sets after
+#   filtering/SMILES parsing to fail fast with actionable messages.
+# - Added backward-compatible support for categorical_encoding_mode=
+#   "index_with_unknown" (normalized internally to "index").
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": "./67%",  # Change to ./0% or ./33% or ./67% for other experiments.
+		"target_folder": "./0%",  # Change to ./0% or ./33% or ./67% for other experiments.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -140,9 +176,9 @@ CONFIG = {
 		"mode": "min",
 		"factor": 0.75,
 		"patience": 3,
-		# Metric options shared with early stopping: "mse", "rmse", "r2",
-		# "rho" (Spearman rank correlation), or "pearson".
-		# The pipeline minimizes mse/rmse and automatically maximizes r2/rho/pearson.
+		# Metric options shared with early stopping: "mse", "rmse", "mae", "r2",
+		# "rho" (Spearman rank correlation), or "pearson". Note: RMSE/MAE/MSE are minimized, while R2/rho/pearson are maximized.
+		# The pipeline minimizes mse/rmse/mae and automatically maximizes r2/rho/pearson.
 		"monitor_metric": "rmse",
 	},
 	"training": {
@@ -169,8 +205,8 @@ CONFIG = {
 		},
 		"early_stopping": {
 			"enabled": True,
-			# Metric options: "mse", "rmse", "r2", "rho", "pearson".
-			# The pipeline minimizes mse/rmse and automatically maximizes r2/rho/pearson.
+		# Metric options: "mse", "rmse", "mae", "r2", "rho", "pearson".
+		# The pipeline minimizes mse/rmse/mae and automatically maximizes r2/rho/pearson.
 			"monitor_metric": "rmse",
 			"patience": 15,
 			"min_delta": 0.0,

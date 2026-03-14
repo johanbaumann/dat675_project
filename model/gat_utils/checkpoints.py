@@ -84,11 +84,13 @@ def load_fold_checkpoint(
 
 	if isinstance(ckpt, dict) and "state_dict" in ckpt:
 		state_dict = ckpt["state_dict"]
+		stored_use_std = ckpt.get("target_standardization_enabled", None)
 		target_mean = float(ckpt.get("target_mean", 0.0))
 		target_std = float(ckpt.get("target_std", 1.0))
 	else:
 		# Legacy format: checkpoint is a plain state_dict (OrderedDict).
 		state_dict = ckpt
+		stored_use_std = None
 		target_mean = 0.0
 		target_std = 1.0
 
@@ -96,7 +98,11 @@ def load_fold_checkpoint(
 	model.load_state_dict(state_dict)
 	model.eval()
 
-	use_std = get_target_standardization_config(config)["enabled"]
+	if stored_use_std is None:
+		use_std = get_target_standardization_config(config)["enabled"]
+	else:
+		# Prefer persisted training-time behavior for consistency at inference.
+		use_std = bool(stored_use_std)
 	target_standardizer = None
 	if use_std:
 		target_standardizer = build_target_standardizer_from_stats(target_mean, target_std)

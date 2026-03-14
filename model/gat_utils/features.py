@@ -212,9 +212,12 @@ def prepare_feature_config(config: dict[str, Any]) -> dict[str, Any]:
 	encoding_mode = str(
 		config["features"].get("categorical_encoding_mode", "one_hot")
 	).lower()
+	if encoding_mode == "index_with_unknown":
+		encoding_mode = "index"
 	if encoding_mode not in {"one_hot", "index"}:
 		raise ValueError(
-			"CONFIG['features']['categorical_encoding_mode'] must be 'one_hot' or 'index'."
+			"CONFIG['features']['categorical_encoding_mode'] must be 'one_hot', "
+			"'index', or 'index_with_unknown'."
 		)
 
 	atom_descriptors = _normalize_descriptor_list(
