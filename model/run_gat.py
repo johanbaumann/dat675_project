@@ -1,7 +1,7 @@
 """GAT holdout evaluation script.
 
 For every dataset folder that has saved fold checkpoints this script loads
-each fold's best model, evaluates it on the held-out test set, and writes
+the configured checkpoint for each fold, evaluates it on the held-out test set, and writes
 all results to MPNN_results_heldout_set.csv in the workspace root.
 
 This script is inference-only - it does not train any models.
@@ -22,8 +22,9 @@ Output
 ------
     MPNN_results_heldout_set.csv  (in the same folder as this script)
 
-    Columns: Dataset | Fold | Val_RMSE | Val_MAE | Val_Pearson | Holdout_MSE | Holdout_RMSE |
-             Holdout_MAE | Holdout_R2 | Holdout_Rho | Holdout_Pearson
+    Columns: Dataset | Fold | Checkpoint | Val_RMSE | Val_MAE | Val_Pearson |
+             Holdout_MSE | Holdout_RMSE | Holdout_MAE | Holdout_R2 |
+             Holdout_Rho | Holdout_Pearson
 
     A second file, GAT_predictions_heldout_set.csv, contains per-molecule
     True_pIC50 vs Pred_pIC50 for every fold * dataset combination.
@@ -44,7 +45,7 @@ from torch_geometric.loader import DataLoader
 # The module-level code in MPNN_predictor only defines CONFIG + GATModel;
 # training is guarded by 'if __name__ == "__main__"', so this import is safe.
 from gat_predictor import CONFIG, GATModel
-from gat_utils.checkpoints import get_fold_checkpoint_path, load_fold_checkpoint
+from gat_utils.checkpoints import load_fold_checkpoint, resolve_checkpoint_path
 from gat_utils.data_loading import (
     cap_synthetic_train_ratio,
     get_fold_files,
@@ -58,6 +59,38 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent
 DATASETS = ["0%", "33%", "67%"]
 OUTPUT_CSV = WORKSPACE_ROOT / "MPNN_results_heldout_set.csv"
 OUTPUT_PRED_CSV = WORKSPACE_ROOT / "GAT_predictions_heldout_set.csv"
+
+# Optional per-dataset/per-fold checkpoint overrides.
+# Set a value to either:
+# - None: use the default best_model_fold_<k>.pth checkpoint
+# - an int epoch shorthand, e.g. 22 -> model_<dataset>_cv_iteration_<fold>_epoch_22.pth
+# - a filename inside that dataset's checkpoints/ folder, e.g.
+#   "model_0_percent_cv_iteration_0_epoch_25.pth"
+# - a relative path from the workspace root
+# - an absolute path
+CHECKPOINT_SELECTIONS: dict[str, dict[int, int | str | None]] = {
+    "0%": {
+        0: None,
+        1: None,
+        2: None,
+        3: None,
+        4: None,
+    },
+    "33%": {
+        0: 22,
+        1: None,
+        2: None,
+        3: None,
+        4: None,
+    },
+    "67%": {
+        0: None,
+        1: None,
+        2: None,
+        3: None,
+        4: None,
+    },
+}
 
 
 # ==================== helpers ====================
@@ -81,6 +114,17 @@ def _load_holdout_smiles_df(test_path: Path, config: dict[str, Any]) -> pd.DataF
         return df
     except Exception:
         return None
+
+
+def _resolve_selected_checkpoint(dataset_label: str, fold_idx: int, target_folder: str) -> Path:
+    dataset_map: dict[int, int | str | None] = CHECKPOINT_SELECTIONS.get(dataset_label, {})
+    selected_checkpoint = dataset_map.get(fold_idx)
+    return resolve_checkpoint_path(
+        target_folder,
+        fold_idx,
+        selected_checkpoint,
+        workspace_root=WORKSPACE_ROOT,
+    )
 
 
 # ==================== per-dataset evaluation ====================
@@ -112,8 +156,10 @@ def evaluate_dataset(
     pred_rows: list[pd.DataFrame] = []
 
     for fold_idx in range(total_folds):
-        ckpt_path = get_fold_checkpoint_path(
-            config["experiment"]["target_folder"], fold_idx
+        ckpt_path = _resolve_selected_checkpoint(
+            dataset_label,
+            fold_idx,
+            config["experiment"]["target_folder"],
         )
         if not ckpt_path.exists():
             print(
@@ -121,6 +167,7 @@ def evaluate_dataset(
                 f"{ckpt_path}"
             )
             continue
+        print(f"  Using checkpoint for {dataset_label} fold {fold_idx}: {ckpt_path.name}")
 
         # Rebuild fold-specific feature scalers from the training split so
         # inference uses the same transform policy as training for this fold.
@@ -204,6 +251,7 @@ def evaluate_dataset(
             {
                 "Dataset": dataset_label,
                 "Fold": fold_idx,
+                "Checkpoint": ckpt_path.name,
                 "Val_RMSE": val_rmse,
                 "Val_MAE": val_mae,
                 "Val_Pearson": val_pearson,
@@ -239,6 +287,7 @@ def evaluate_dataset(
                 {
                     "Dataset": dataset_label,
                     "Fold": fold_idx,
+                    "Checkpoint": ckpt_path.name,
                     "smiles": smiles_col,
                     "True_pIC50": y_true_arr,
                     "Pred_pIC50": y_pred_arr,

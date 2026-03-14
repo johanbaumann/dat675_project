@@ -88,10 +88,17 @@ from gat_utils import run_training_pipeline
 #   consistently to train/val/holdout and run_gat.py evaluation paths.
 # - When "none" is selected, only handcrafted descriptor-level scaling is used
 #   (e.g., scale_atomic_mass_by), matching previous behavior.
+# 2026-03-14 (checkpoint selection pass)
+# - Added periodic epoch checkpoint saving during training via
+#   CONFIG['training']['checkpointing']['save_every_n_epochs'].
+# - Epoch checkpoints are saved as model_<dataset>_cv_iteration_<fold>_epoch_<n>.pth
+#   inside each dataset's checkpoints/ folder, alongside the usual best_model_fold_<k>.pth.
+# - run_gat.py now supports a nested per-dataset/per-fold checkpoint selection map,
+#   so holdout evaluation can use any saved checkpoint file rather than only the best fold snapshot.
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": "./0%",  # Change to ./0% or ./33% or ./67% for other experiments.
+		"target_folder": "./33%",  # Change to ./0% or ./33% or ./67% for other experiments.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -118,7 +125,7 @@ CONFIG = {
 			"validation_selection": "single_next_non_train",
 			# Keep the central fraction of synthetic rows by value (1.0 = keep all).
 			# Example: 0.95 keeps the middle 95% and removes 2.5% from each tail.
-			"keep_percentile": 0.5,
+			"keep_percentile": 0.65,
 			# Uniform random row subsample after percentile filtering.
 			# Useful for reducing pseudo-label noise volume while keeping diversity.
 			# Set to None to disable row subsampling entirely.
@@ -177,8 +184,8 @@ CONFIG = {
 	},
 	"model": {
 		"hidden_dim": 256,
-		"num_conv_layers": 4,
-		"heads": 8,
+		"num_conv_layers": 3,
+		"heads": 4, # orig 4
 		"dropout": 0.2,
 		"residual": True,
 		"normalization": "layernorm", # options: "layernorm", "batchnorm1d", "none"
@@ -209,7 +216,7 @@ CONFIG = {
 			"epochs": 25,
 			"learning_rate": 8e-4,
 			"weight_decay": 1e-4,
-			"grad_clip_norm": 8.0,
+			"grad_clip_norm": 10.0,
 			"batch_size": 64,
 			"shuffle": True, #
 			"min_synthetic_graphs": 64, # Ensure at least one batch for pretraining, even if synthetic data is very limited after filtering.
@@ -228,6 +235,12 @@ CONFIG = {
 			"monitor_metric": "rmse",
 			"patience": 15,
 			"min_delta": 0.0,
+		},
+		"checkpointing": {
+			# Save an extra checkpoint every N epochs using the pattern:
+			# model_<dataset>_cv_iteration_<fold>_epoch_<epoch>.pth
+			# Set to 0 to disable periodic checkpoint saving.
+			"save_every_n_epochs": 1,
 		},
 	},
 }

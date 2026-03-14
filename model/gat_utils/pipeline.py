@@ -7,7 +7,11 @@ from typing import Any
 import torch
 from torch_geometric.loader import DataLoader
 
-from .checkpoints import get_fold_checkpoint_path, save_fold_checkpoint
+from .checkpoints import (
+	get_epoch_checkpoint_path,
+	get_fold_checkpoint_path,
+	save_fold_checkpoint,
+)
 from .data_loading import (
 	cap_synthetic_train_ratio,
 	get_fold_files,
@@ -109,7 +113,7 @@ def run_synthetic_pretraining_stage(
 		lr=float(learning_rate),
 		weight_decay=float(weight_decay),
 	)
-	criterion = torch.nn.MSELoss()
+	criterion = torch.nn.MSELoss() # same as main train loop. 
 
 	print(
 		f"[Fold {fold_idx}] synthetic pretraining: "
@@ -164,6 +168,12 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	batch_size = config["data"]["batch_size"]
 	num_epochs = config["training"]["num_epochs"]
 	print_every = config["training"]["print_every"]
+	checkpoint_cfg = config["training"].get("checkpointing", {})
+	save_every_n_epochs = int(checkpoint_cfg.get("save_every_n_epochs", 0) or 0)
+	if save_every_n_epochs < 0:
+		raise ValueError(
+			"CONFIG['training']['checkpointing']['save_every_n_epochs'] must be >= 0."
+		)
 
 	learning_rate = config["optimization"]["learning_rate"]
 	weight_decay = config["optimization"]["weight_decay"]
@@ -213,6 +223,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 
 	ckpt_dir = Path(target_folder) / "checkpoints"
 	ckpt_dir.mkdir(parents=True, exist_ok=True)
+	dataset_label = Path(target_folder).name if target_folder != "." else "default_experiment"
 
 	print("\n==================== 5-Fold Cross-Validation ====================")
 	for val_idx in range(total_folds):
@@ -299,7 +310,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 		optimizer = torch.optim.Adam(
 			model.parameters(), lr=learning_rate, weight_decay=weight_decay
 		)
-		criterion = torch.nn.MSELoss()
+		criterion = torch.nn.MSELoss() # always use MSELoss for training, even if monitoring a different metric
 
 		scheduler = None
 		if scheduler_enabled:
@@ -371,6 +382,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				early_stop_metric, val_mse, val_rmse, val_mae, val_r2, val_rho, val_pearson
 			)
 
+            # depends upon what metric we are monitoring, so need a function for it....
 			if is_improvement(
 				early_stop_metric, current_monitor, best_monitor_value, early_stop_min_delta
 			):
@@ -387,10 +399,17 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				save_fold_checkpoint(
 					{
 						"state_dict": best_model_weights,
+						"checkpoint_kind": "best",
+						"dataset_label": dataset_label,
 						"fold": val_idx,
+						"epoch": epoch,
+						"monitor_metric": early_stop_metric,
+						"monitor_value": current_monitor,
 						"target_standardization_enabled": bool(target_standardizer is not None),
 						"target_mean": train_target_mean,
 						"target_std": train_target_std,
+						"feature_scaling_mode": config.get("features", {}).get("feature_scaling", {}).get("mode", "none"),
+						"feature_scaling_fit_on": config.get("features", {}).get("feature_scaling", {}).get("fit_on", "real_plus_synthetic"),
 						"val_rmse": val_rmse,
 						"val_mae": val_mae,
 						"val_pearson": val_pearson,
@@ -399,6 +418,35 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				)
 			else:
 				epochs_wo_improv += 1
+
+			should_save_epoch_checkpoint = (
+				save_every_n_epochs > 0
+				and (epoch % save_every_n_epochs == 0 or epoch == num_epochs)
+			)
+			if should_save_epoch_checkpoint:
+				save_fold_checkpoint(
+					{
+						"state_dict": copy.deepcopy(model.state_dict()),
+						"checkpoint_kind": "epoch",
+						"dataset_label": dataset_label,
+						"fold": val_idx,
+						"epoch": epoch,
+						"monitor_metric": early_stop_metric,
+						"monitor_value": current_monitor,
+						"target_standardization_enabled": bool(target_standardizer is not None),
+						"target_mean": train_target_mean,
+						"target_std": train_target_std,
+						"feature_scaling_mode": config.get("features", {}).get("feature_scaling", {}).get("mode", "none"),
+						"feature_scaling_fit_on": config.get("features", {}).get("feature_scaling", {}).get("fit_on", "real_plus_synthetic"),
+						"val_mse": val_mse,
+						"val_rmse": val_rmse,
+						"val_mae": val_mae,
+						"val_r2": val_r2,
+						"val_rho": val_rho,
+						"val_pearson": val_pearson,
+					},
+					get_epoch_checkpoint_path(target_folder, val_idx, epoch),
+				)
 
 			if scheduler is not None:
 				scheduler_value = metric_from_name(

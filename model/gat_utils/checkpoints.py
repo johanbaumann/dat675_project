@@ -18,13 +18,102 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # ==================== checkpoint helpers ====================
+def _sanitize_dataset_label(label: str) -> str:
+	value = str(label).strip()
+	value = value.replace("%", "_percent")
+	value = value.replace(" ", "_")
+	return value
+
+
+def get_checkpoints_dir(target_folder: str) -> Path:
+	return Path(target_folder) / "checkpoints"
+
+
 def get_fold_checkpoint_path(target_folder: str, fold_idx: int) -> Path:
 	"""Canonical path for a per-fold best-model checkpoint.
 
 	Checkpoints live inside the dataset folder so each dataset mix keeps
 	its own set of saved weights and they never overwrite each other.
 	"""
-	return Path(target_folder) / "checkpoints" / f"best_model_fold_{fold_idx}.pth"
+	return get_checkpoints_dir(target_folder) / f"best_model_fold_{fold_idx}.pth"
+
+
+def get_epoch_checkpoint_path(target_folder: str, fold_idx: int, epoch: int) -> Path:
+	"""Canonical path for a periodic per-epoch checkpoint."""
+	dataset_label = _sanitize_dataset_label(Path(target_folder).name)
+	filename = f"model_{dataset_label}_cv_iteration_{fold_idx}_epoch_{epoch}.pth"
+	return get_checkpoints_dir(target_folder) / filename
+
+
+def infer_checkpoint_path_from_selection(
+	target_folder: str,
+	fold_idx: int,
+	selection: int | str | Path | None,
+) -> Path | None:
+	"""Infer a checkpoint path from a shorthand selection value.
+
+	Supported values:
+	- None: no override (caller should use default fold checkpoint)
+	- int: interpreted as epoch number for canonical epoch checkpoint naming
+	- numeric str (e.g. "22"): interpreted as epoch number
+	- non-numeric str / Path: treated as explicit path or filename
+	"""
+	if selection is None:
+		return None
+
+	if isinstance(selection, int):
+		if selection < 1:
+			raise ValueError("Epoch checkpoint shorthand must be >= 1.")
+		return get_epoch_checkpoint_path(target_folder, fold_idx, int(selection))
+
+	if isinstance(selection, Path):
+		return selection
+
+	selection_text = str(selection).strip()
+	if not selection_text:
+		return None
+
+	if selection_text.isdigit():
+		epoch = int(selection_text)
+		if epoch < 1:
+			raise ValueError("Epoch checkpoint shorthand must be >= 1.")
+		return get_epoch_checkpoint_path(target_folder, fold_idx, epoch)
+
+	return Path(selection_text)
+
+
+def resolve_checkpoint_path(
+	target_folder: str,
+	fold_idx: int,
+	selected_checkpoint: int | str | Path | None = None,
+	*,
+	workspace_root: str | Path | None = None,
+) -> Path:
+	"""Resolve a user-selected checkpoint path or fall back to the best checkpoint.
+
+	Relative filenames are first resolved inside <target_folder>/checkpoints.
+	If a workspace_root is provided and the relative path includes directories,
+	it is resolved from the workspace root instead.
+	"""
+	inferred = infer_checkpoint_path_from_selection(
+		target_folder,
+		fold_idx,
+		selected_checkpoint,
+	)
+	if inferred is None:
+		return get_fold_checkpoint_path(target_folder, fold_idx)
+
+	path_obj = inferred
+	if path_obj.is_absolute():
+		return path_obj
+
+	if len(path_obj.parts) == 1:
+		return get_checkpoints_dir(target_folder) / path_obj
+
+	if workspace_root is not None:
+		return Path(workspace_root) / path_obj
+
+	return Path(target_folder) / path_obj
 
 
 def save_fold_checkpoint(
