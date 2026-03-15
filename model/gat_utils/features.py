@@ -271,11 +271,7 @@ def fit_feature_scalers(
 	}
 
 
-def apply_feature_scalers(
-	data_list: list[Data],
-	*,
-	feature_scalers: dict[str, Any] | None,
-) -> list[Data]:
+def apply_feature_scalers( data_list: list[Data],*,	feature_scalers: dict[str, Any] | None) -> list[Data]:
 	if feature_scalers is None:
 		return data_list
 
@@ -326,12 +322,8 @@ def _normalize_descriptor_list(value, *, allowed: set[str], default: list[str], 
 	return ordered
 
 
-def build_feature_names(
-	encoding_mode: str,
-	*,
-	atom_descriptors: list[str],
-	bond_descriptors: list[str],
-):
+def build_feature_names(encoding_mode: str, *,	atom_descriptors: list[str],bond_descriptors: list[str]) -> tuple[list[str], list[str]]:
+						
 	atom_feature_names: list[str] = []
 	edge_feature_names: list[str] = []
 
@@ -482,13 +474,20 @@ def print_feature_summary(config: dict[str, Any], feature_context: dict[str, Any
 	print(f"  FFNN hidden layers: {config['model']['ffnn_hidden_layers']}")
 
 
-def one_hot_with_unknown(value, allowed_values):
+
+def one_hot_with_unknown(value: str, allowed_values: list[str]) -> list[float]:
+	"""
+	Unknown categories are encoded as all-zeros with an additional "other" flag set to 1.
+	"""
 	encoded = [1 if value == allowed else 0 for allowed in allowed_values]
 	encoded.append(1 if value not in allowed_values else 0)
 	return encoded
 
 
-def index_with_unknown(value, allowed_values):
+def index_with_unknown(value: str, allowed_values: list[str]) -> float:
+	"""
+	Unknown categories are encoded as the last index.
+	"""
 	for i, allowed in enumerate(allowed_values):
 		if value == allowed:
 			return float(i)
@@ -510,7 +509,7 @@ def _validate_feature_vector_length(
 		)
 
 
-def _get_chemprop_featurizer():
+def _get_chemprop_featurizer() -> Any:
 	global _chemprop_featurizer_instance
 	if _chemprop_featurizer_instance is None:
 		from chemprop import featurizers as _chemprop_featurizers
@@ -599,6 +598,7 @@ def get_atom_features(
 
 
 # Bond features also use one-hot categorical fields (+unknown) for stability.
+# unknown categories are unlikely for bonds since RDKit's bond types and stereochemistry...
 def get_bond_features(
 	bond: Chem.rdchem.Bond,
 	config: dict[str, Any],

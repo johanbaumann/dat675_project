@@ -2,10 +2,11 @@
 
 For every dataset folder that has saved fold checkpoints this script loads
 the configured checkpoint for each fold, evaluates it on the held-out test set, and writes
-all results to MPNN_results_heldout_set.csv in the workspace root.
+all results to gat_results_heldout.csv in the workspace root (configurable via
+OUTPUT_FILENAME below or the --output CLI flag).
 
 This script is inference-only - it does not train any models.
-Training is done separately via MPNN_predictor.py (one run per dataset).
+Training is done separately via gat_predictor.py (one run per dataset).
 
 Usage
 -----
@@ -20,7 +21,8 @@ Usage
 
 Output
 ------
-    MPNN_results_heldout_set.csv  (in the same folder as this script)
+    gat_results_heldout.csv  (in the same folder as this script; change OUTPUT_FILENAME
+    or pass --output to override)
 
     Columns: Dataset | Fold | Checkpoint | Val_RMSE | Val_MAE | Val_Pearson |
              Holdout_MSE | Holdout_RMSE | Holdout_MAE | Holdout_R2 |
@@ -57,7 +59,11 @@ from gat_utils.training_helpers import evaluate, predict
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
 DATASETS = ["0%", "33%", "67%"]
-OUTPUT_CSV = WORKSPACE_ROOT / "MPNN_results_heldout_set.csv"
+
+# Change this string to rename the output file, or pass --output at the command line.
+OUTPUT_FILENAME = "gat_results_heldout.csv"
+
+OUTPUT_CSV = WORKSPACE_ROOT / OUTPUT_FILENAME
 OUTPUT_PRED_CSV = WORKSPACE_ROOT / "GAT_predictions_heldout_set.csv"
 
 # Optional per-dataset/per-fold checkpoint overrides.
@@ -344,11 +350,21 @@ def parse_args() -> argparse.Namespace:
         help="Path to holdout CSV. Defaults to CONFIG['experiment']['actual_test_file'] "
              "resolved from the workspace root.",
     )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        metavar="FILENAME",
+        help="Override the output CSV filename (e.g. my_results.csv). "
+             f"Defaults to OUTPUT_FILENAME='{OUTPUT_FILENAME}'.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    output_csv = WORKSPACE_ROOT / (args.output if args.output else OUTPUT_FILENAME)
 
     test_path = (
         Path(args.test_file)
@@ -379,13 +395,13 @@ def main() -> None:
     if not all_results:
         print("\nNo results produced — are checkpoints present?")
         print(
-            "Train models first with MPNN_predictor.py, then re-run this script."
+            "Train models first with gat_predictor.py, then re-run this script."
         )
         return
 
     df = pd.DataFrame(all_results)
-    df.to_csv(OUTPUT_CSV, index=False)
-    print(f"\nSaved holdout results ({len(df)} rows) to: {OUTPUT_CSV}")
+    df.to_csv(output_csv, index=False)
+    print(f"\nSaved holdout results ({len(df)} rows) to: {output_csv}")
     print(df.to_string(index=False))
 
     if all_pred_rows:

@@ -111,6 +111,7 @@ def run_single_fold(
 	run_synthetic_pretraining_stage,
 	build_model,
 	model_class,
+	save_checkpoints: bool = True,
 ) -> dict[str, Any]:
 	print(f"\n-------------------- Fold {val_idx} (validation) --------------------")
 
@@ -245,25 +246,26 @@ def run_single_fold(
 			best_epoch = epoch
 			best_model_weights = copy.deepcopy(model.state_dict())
 			epochs_wo_improv = 0
-			save_fold_checkpoint(
-				build_checkpoint_payload(
-					model_state_dict=best_model_weights,
-					checkpoint_kind="best",
-					dataset_label=dataset_label,
-					fold_idx=val_idx,
-					epoch=epoch,
-					monitor_metric=early_stop_cfg["monitor_metric"],
-					monitor_value=current_monitor,
-					min_delta=early_stop_cfg["min_delta"],
-					minimum_improvement=early_stop_cfg["minimum_improvement"],
-					target_standardizer=target_standardizer,
-					train_target_mean=train_target_mean,
-					train_target_std=train_target_std,
-					config=config,
-					extra_metrics={"val_rmse": val_rmse, "val_mae": val_mae, "val_pearson": val_pearson},
-				),
-				get_fold_checkpoint_path(target_folder, val_idx),
-			)
+			if save_checkpoints:
+				save_fold_checkpoint(
+					build_checkpoint_payload(
+						model_state_dict=best_model_weights,
+						checkpoint_kind="best",
+						dataset_label=dataset_label,
+						fold_idx=val_idx,
+						epoch=epoch,
+						monitor_metric=early_stop_cfg["monitor_metric"],
+						monitor_value=current_monitor,
+						min_delta=early_stop_cfg["min_delta"],
+						minimum_improvement=early_stop_cfg["minimum_improvement"],
+						target_standardizer=target_standardizer,
+						train_target_mean=train_target_mean,
+						train_target_std=train_target_std,
+						config=config,
+						extra_metrics={"val_rmse": val_rmse, "val_mae": val_mae, "val_pearson": val_pearson},
+					),
+					get_fold_checkpoint_path(target_folder, val_idx),
+				)
 
 		if early_stop_improved:
 			early_stop_best_value = current_monitor
@@ -271,7 +273,11 @@ def run_single_fold(
 		else:
 			epochs_wo_improv += 1
 
-		should_save_epoch_checkpoint = save_every_n_epochs > 0 and (epoch % save_every_n_epochs == 0 or epoch == num_epochs)
+		should_save_epoch_checkpoint = (
+			save_checkpoints
+			and save_every_n_epochs > 0
+			and (epoch % save_every_n_epochs == 0 or epoch == num_epochs)
+		)
 		if should_save_epoch_checkpoint:
 			save_fold_checkpoint(
 				build_checkpoint_payload(
@@ -399,6 +405,7 @@ def run_cross_validation(
 	run_synthetic_pretraining_stage,
 	build_model,
 	model_class,
+	save_checkpoints: bool = True,
 ) -> dict[str, Any]:
 	if is_minimize_metric(early_stop_cfg["monitor_metric"]):
 		global_best_monitor_value = float("inf")
@@ -436,6 +443,7 @@ def run_cross_validation(
 			run_synthetic_pretraining_stage=run_synthetic_pretraining_stage,
 			build_model=build_model,
 			model_class=model_class,
+			save_checkpoints=save_checkpoints,
 		)
 
 		cv_results.append(fold_output["cv_result"])

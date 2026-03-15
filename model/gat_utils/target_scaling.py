@@ -25,11 +25,7 @@ def get_target_standardization_config(config: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
-def fit_target_standardizer(
-	train_targets: np.ndarray,
-	*,
-	epsilon: float = 1e-8,
-) -> tuple[float, float]:
+def fit_target_standardizer( train_targets: np.ndarray, *, epsilon: float = 1e-8) -> tuple[float, float]:
 	"""Fit (mean, std) on the training fold targets.
 
 	Uses population std (ddof=0) and guards against near-zero std.
@@ -41,37 +37,23 @@ def fit_target_standardizer(
 	return mean, std
 
 
-def standardize_targets_tensor(
-	y: torch.Tensor,
-	*,
-	mean: torch.Tensor,
-	std: torch.Tensor,
-) -> torch.Tensor:
+def standardize_targets_tensor( y: torch.Tensor, *, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
 	return (y - mean) / std
 
 
-def invert_standardization_tensor(
-	y_scaled: torch.Tensor,
-	*,
-	mean: torch.Tensor,
-	std: torch.Tensor,
-) -> torch.Tensor:
+def invert_standardization_tensor(y_scaled: torch.Tensor, *, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+	"""
+	Invert target standardization to get predictions back on the original scale.
+	"""
 	return y_scaled * std + mean
 
 
-def build_target_standardizer(
-	train_targets: np.ndarray,
-	*,
-	epsilon: float = 1e-8,
-) -> dict[str, Any]:
+def build_target_standardizer(train_targets: np.ndarray,*,epsilon: float = 1e-8) -> dict[str, Any]:
 	mean, std = fit_target_standardizer(train_targets, epsilon=epsilon)
 	return build_target_standardizer_from_stats(mean, std)
 
 
-def build_target_standardizer_from_stats(
-	mean: float,
-	std: float,
-) -> dict[str, Any]:
+def build_target_standardizer_from_stats( mean: float,std: float,) -> dict[str, Any]:
 	mean_tensor = torch.tensor(mean, dtype=torch.float32, device=device)
 	std_tensor = torch.tensor(std, dtype=torch.float32, device=device)
 	return {
@@ -82,11 +64,7 @@ def build_target_standardizer_from_stats(
 	}
 
 
-def standardize_batch_targets(
-	y_true: torch.Tensor,
-	*,
-	target_standardizer: dict[str, Any] | None,
-) -> torch.Tensor:
+def standardize_batch_targets(y_true: torch.Tensor,*, target_standardizer: dict[str, Any] | None) -> torch.Tensor:
 	if target_standardizer is None:
 		return y_true
 	return standardize_targets_tensor(
@@ -96,11 +74,7 @@ def standardize_batch_targets(
 	)
 
 
-def invert_standardized_predictions(
-	y_pred: torch.Tensor,
-	*,
-	target_standardizer: dict[str, Any] | None,
-) -> torch.Tensor:
+def invert_standardized_predictions(y_pred: torch.Tensor,*,	target_standardizer: dict[str, Any] | None) -> torch.Tensor:
 	if target_standardizer is None:
 		return y_pred
 	return invert_standardization_tensor(

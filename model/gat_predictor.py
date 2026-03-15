@@ -198,7 +198,7 @@ CONFIG = {
 		"ffnn_hidden_layers": [256], # and was [256,512], [256,128,64] orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
 	},
 	"optimization": {
-		"learning_rate": 1e-3, # orig 5e-4, but increased to 1e-3 after removing conv dropout and adding an extra FFNN layer; the model can now handle a higher learning rate without diverging and it trains faster.
+		"learning_rate": 8e-4, # orig 5e-4, but increased to 1e-3 after removing conv dropout and adding an extra FFNN layer; the model can now handle a higher learning rate without diverging and it trains faster.
 		"weight_decay": 1e-4,
 		"grad_clip_norm": 10.0,
 	},
@@ -241,7 +241,7 @@ CONFIG = {
 			"monitor_metric": "rmse",
 			"patience": 10,
 			# Minimum metric improvement required to save a new best checkpoint.
-			"min_delta": 0.0,
+			"min_delta": 0.00,
 			# Minimum metric improvement required to reset early-stopping patience.
 			"minimum_improvement": 0.05,
 		},
@@ -268,6 +268,21 @@ class GATModel(torch.nn.Module):
 		normalization: str = "layernorm",
 		dropout: float = 0.2,
 	):
+		"""
+		Custom configurable GATv2-based model with optional residual connections (loop connections), normalization (after conv layers), and flexible FFNN head architecture. 
+		Number of parameters and heads can be adjusted. 
+		
+		NOTE: dropout is applied only to FFNN layers not conv Layers. 
+		
+		
+		Applying dropout to GATConv when you have more than 1 layer leads to instability and divergence during training. 
+		Could be due to compounding effect of dropout (i dont know).
+		
+
+		https://pytorch-geometric.readthedocs.io/en/2.6.1/generated/torch_geometric.nn.conv.GATv2Conv.html 
+		
+		
+		"""
 		super().__init__()
 
 		if num_conv_layers < 1:
@@ -279,6 +294,9 @@ class GATModel(torch.nn.Module):
 				"normalization must be 'layernorm', 'batchnorm1d', or 'none'."
 			)
 
+
+
+
 		self.residual = bool(residual)
 		self.normalization = normalization
 
@@ -287,7 +305,7 @@ class GATModel(torch.nn.Module):
 		self.residual_projections = torch.nn.ModuleList()
 		conv_in_dim = node_in_dim
 		for _ in range(num_conv_layers):
-			# NOTE: DO NOT APPLY DROPOUT HERE! GATv2Conv already applies dropout to attention coefficients internally.
+			# NOTE: DO NOT APPLY DROPOUT HERE! It leads to huge instabilities.
 			self.convs.append(
 				GATv2Conv(
 					conv_in_dim,
