@@ -1,0 +1,2 @@
+PREDICTIONS_CSV,OUTPUT_DIR,DATASET_ORDER,MOLECULE_LEVEL_METRICS
+GAT_predictions_heldout_set.csv,pretrain,"0%,33%,67%","mean_abs_error,rmse"
