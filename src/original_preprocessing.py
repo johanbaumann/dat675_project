@@ -61,7 +61,7 @@ def sort_dataset_by_scaffolds(dataset : dict) -> dict:
 
 # Split the data into hold out testset and 5 folds.
 # Is done so by scaffold splitting, in which allocations are made with molecules associated to scaffolds.
-# The allocation is procedural where each bin's (hold out set and folds) ability to contain the scaffolds associated molecules is check sequentially.
+# The allocation is procedural: Each bin's (hold out set and folds) ability to contain the scaffolds associated molecules is check sequentially.
 # Code is again generic and so the size of the hold out testset and the amount of folds can be changed.
 def split_data_by_scaffolds_dataset(scaffold_sorted_dataset : dict, mol_count : int,
                                     holdout_size : int, fold_count : int
