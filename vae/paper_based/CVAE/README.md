@@ -69,7 +69,8 @@ This repository now contains an extended implementation that supports both:
 - Ability to use only a subset of parameters for conditions compared to the origonal papers which had: MW,LogP, TPSA, HBD, HBA
 - Latent memory injection into the Transformer-decoder. This is since the decoder produces sequences conditioned on both *z* and *c.* This means that for each time step, the decoder builds token input from: token embeddings, latent vector z and condition vector c, where both z and c is broadcasted across time steps. Then a memory vector is built and alastly cross-attention is applied in decoder. (a technique studied in the context of  LLMS for Memory injection atacks...)
 - Separate prediction head for label predictions, this introduces a $\lambda_l$ term with is a label loss importance coeficent. It also introduces the label loss as **MSE**
-- Label prediction head
+- Label prediction head that samples on latent varible, and/or the target vector c. so: p(z,c)
+- Oversampling by taking synonyms of the SMILES, to learn the underlying meaning instead of
 
 ## The ELBO optimization of $\beta$-CVAE:
 

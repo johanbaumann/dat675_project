@@ -1,12 +1,12 @@
 {
   "unique_train_scaffolds": 580,
   "unique_validation_scaffolds": 56,
-  "unique_generated_scaffolds": 6140,
-  "overlap_scaffolds": 142,
+  "unique_generated_scaffolds": 6554,
+  "overlap_scaffolds": 119,
   "overlap_train_validation_scaffolds": 16,
-  "overlap_validation_generated_scaffolds": 5,
-  "novel_generated_scaffolds": 5998,
-  "novel_generated_scaffolds_vs_train_validation": 5997,
+  "overlap_validation_generated_scaffolds": 8,
+  "novel_generated_scaffolds": 6435,
+  "novel_generated_scaffolds_vs_train_validation": 6431,
   "top_train_scaffolds": [
     {
       "scaffold": "O=S1(=O)CC(Cc2ccccc2)CC(NCc2ccccc2)C1",
@@ -206,295 +206,295 @@
   "top_generated_scaffolds": [
     {
       "scaffold": "O=S1(=O)CC(Cc2ccccc2)CC(NCc2ccccc2)C1",
-      "count": 474
+      "count": 451
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2cncnc2)c1",
-      "count": 185
+      "count": 138
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2cccnc2)c1",
-      "count": 137
-    },
-    {
-      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1ccccc1",
-      "count": 96
+      "count": 97
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccccc2)c1",
-      "count": 80
+      "count": 96
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cncnc2)cc1",
-      "count": 68
-    },
-    {
-      "scaffold": "c1ccc(CCCCNC2(c3ccccc3)CC2)cc1",
-      "count": 67
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccncc2)c1",
-      "count": 57
+      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1ccccc1",
+      "count": 93
     },
     {
       "scaffold": "c1ccc(CCCCNC2(c3ccccc3)CCCC2)cc1",
-      "count": 55
+      "count": 68
     },
     {
       "scaffold": "O=C(NCc1ccccc1)c1cccc(C(=O)NC(CCNCc2ccccc2)Cc2ccccc2)c1",
-      "count": 53
+      "count": 47
     },
     {
-      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)C2=NCCCN12",
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccncc2)c1",
       "count": 44
     },
     {
-      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)C2=NCCCN12",
-      "count": 37
-    },
-    {
-      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1cccc(N2CCCC2=O)c1",
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cncnc2)cc1",
       "count": 36
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cccnc2)cc1",
-      "count": 34
+      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1cccc(N2CCCC2=O)c1",
+      "count": 35
     },
     {
-      "scaffold": "c1ccc(-c2ccc(-c3ccccc3)n2Cc2ccccn2)cc1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(c2ccccc2)C1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=C1NC=NC1c1cccc(-c2ccccc2)c1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=C(NC(CCNC1CC1)Cc1ccccc1)c1ccccc1",
+      "scaffold": "c1ccc(CCCCNC2(c3ccccc3)CC2)cc1",
       "count": 33
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccncc1)c1cccc(-c2cncnc2)c1",
+      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)C2=NCCCN12",
+      "count": 33
+    },
+    {
+      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3ccccc3)c2)CO1",
+      "count": 32
+    },
+    {
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cccnc2)cc1",
+      "count": 32
+    },
+    {
+      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3ccccc3)c2)C2=NCCCN12",
+      "count": 30
+    },
+    {
+      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)C2=NCCCN12",
       "count": 29
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccncc1)c1cccc(-c2ccccc2)c1",
+      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)CO1",
+      "count": 29
+    },
+    {
+      "scaffold": "c1ccc(CCCCNC2(c3ccccc3)CCC2)cc1",
       "count": 28
+    },
+    {
+      "scaffold": "O=C(NC(CCNC1CC1)Cc1ccccc1)c1ccccc1",
+      "count": 28
+    },
+    {
+      "scaffold": "O=C1NC=NC1c1cccc(-c2ccccc2)c1",
+      "count": 27
+    },
+    {
+      "scaffold": "c1ccc(CCCCNCc2ccccc2)cc1",
+      "count": 27
+    },
+    {
+      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(c2ccccc2)C1",
+      "count": 24
     },
     {
       "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)CO1",
-      "count": 28
+      "count": 24
     },
     {
-      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)CO1",
-      "count": 26
-    },
-    {
-      "scaffold": "c1ccc(CCCCNC2(c3cccs3)CCCCC2)cc1",
-      "count": 23
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2ccccc2)c1",
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2ccccc2)cc1",
       "count": 23
     }
   ],
   "top_novel_generated_scaffolds": [
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccccc2)c1",
-      "count": 80
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cncnc2)cc1",
-      "count": 68
+      "count": 96
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccncc2)c1",
-      "count": 57
+      "count": 44
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cccnc2)cc1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(c2ccccc2)C1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=C1NC=NC1c1cccc(-c2ccccc2)c1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=C(NC(CCNC1CC1)Cc1ccccc1)c1ccccc1",
-      "count": 33
-    },
-    {
-      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)CO1",
-      "count": 28
-    },
-    {
-      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)CO1",
-      "count": 26
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2ccccc2)c1",
-      "count": 23
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cncnc2)cc1",
+      "count": 36
     },
     {
       "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3ccccc3)c2)CO1",
-      "count": 23
+      "count": 32
     },
     {
-      "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2cncnc2)c1",
-      "count": 22
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cccnc2)cc1",
+      "count": 32
+    },
+    {
+      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)CO1",
+      "count": 29
+    },
+    {
+      "scaffold": "O=C(NC(CCNC1CC1)Cc1ccccc1)c1ccccc1",
+      "count": 28
+    },
+    {
+      "scaffold": "O=C1NC=NC1c1cccc(-c2ccccc2)c1",
+      "count": 27
+    },
+    {
+      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(c2ccccc2)C1",
+      "count": 24
+    },
+    {
+      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)CO1",
+      "count": 24
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2ccccc2)cc1",
-      "count": 20
-    },
-    {
-      "scaffold": "O=C1NC=NC1c1cccc(-c2cncnc2)c1",
-      "count": 19
+      "count": 23
     },
     {
       "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2ccccc2)c1",
-      "count": 19
+      "count": 21
     },
     {
-      "scaffold": "O=C1CC(c2ccccc2)(c2cccc(-c3cncnc3)c2)N=CN1",
-      "count": 19
-    },
-    {
-      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3ccncc3)c2)C2=NCCCN12",
+      "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2cccnc2)c1",
       "count": 18
     },
     {
-      "scaffold": "O=C1NC=NC1c1cccc(-c2cccnc2)c1",
+      "scaffold": "c1ccc(CCCCNC2(c3ccccn3)CCCC2)cc1",
       "count": 18
     },
     {
-      "scaffold": "N=C1C=NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)N1",
+      "scaffold": "c1ccc(CCCCNC2(c3ccccn3)CCCCC2)cc1",
       "count": 18
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccsc1)c1cccc(-c2ccccc2)c1",
-      "count": 16
+      "scaffold": "O=S1(=O)CC(Cc2ccccc2)CC(Cc2ccccc2)C1",
+      "count": 17
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2cnccn2)c1",
-      "count": 16
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccccn2)c1",
-      "count": 16
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1cccc(-c2ccccc2)c1)C1CCCCC1",
-      "count": 16
-    },
-    {
-      "scaffold": "c1ccc(CCCCNC2(c3ccccc3)CCNC2)cc1",
+      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2ccccc2)c1",
       "count": 15
+    },
+    {
+      "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2cncnc2)c1",
+      "count": 15
+    },
+    {
+      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(NCc2ccccc2)C1",
+      "count": 14
+    },
+    {
+      "scaffold": "N=C1NC(c2ccccc2)(c2ccc(-c3cccnc3)cc2)CO1",
+      "count": 14
+    },
+    {
+      "scaffold": "O=S1(=O)CC(CCc2ccccc2)CC(NCc2ccccc2)C1",
+      "count": 13
+    },
+    {
+      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1cccc(N2CCCS2(=O)=O)c1",
+      "count": 13
+    },
+    {
+      "scaffold": "O=C(NC(CCNC1CCCCC1)Cc1ccccc1)c1ccccc1",
+      "count": 12
+    },
+    {
+      "scaffold": "c1ccc(CCCNC2(c3ccccc3)CCCCC2)cc1",
+      "count": 12
     }
   ],
   "top_novel_generated_scaffolds_vs_train_validation": [
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccccc2)c1",
-      "count": 80
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cncnc2)cc1",
-      "count": 68
+      "count": 96
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccncc2)c1",
-      "count": 57
+      "count": 44
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cccnc2)cc1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(c2ccccc2)C1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=C1NC=NC1c1cccc(-c2ccccc2)c1",
-      "count": 34
-    },
-    {
-      "scaffold": "O=C(NC(CCNC1CC1)Cc1ccccc1)c1ccccc1",
-      "count": 33
-    },
-    {
-      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)CO1",
-      "count": 28
-    },
-    {
-      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)CO1",
-      "count": 26
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2ccccc2)c1",
-      "count": 23
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cncnc2)cc1",
+      "count": 36
     },
     {
       "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3ccccc3)c2)CO1",
-      "count": 23
+      "count": 32
     },
     {
-      "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2cncnc2)c1",
-      "count": 22
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2cccnc2)cc1",
+      "count": 32
+    },
+    {
+      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)CO1",
+      "count": 29
+    },
+    {
+      "scaffold": "O=C(NC(CCNC1CC1)Cc1ccccc1)c1ccccc1",
+      "count": 28
+    },
+    {
+      "scaffold": "O=C1NC=NC1c1cccc(-c2ccccc2)c1",
+      "count": 27
+    },
+    {
+      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(c2ccccc2)C1",
+      "count": 24
+    },
+    {
+      "scaffold": "N=C1NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)CO1",
+      "count": 24
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccccc1)c1ccc(-c2ccccc2)cc1",
-      "count": 20
-    },
-    {
-      "scaffold": "O=C1NC=NC1c1cccc(-c2cncnc2)c1",
-      "count": 19
+      "count": 23
     },
     {
       "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2ccccc2)c1",
-      "count": 19
+      "count": 21
     },
     {
-      "scaffold": "O=C1CC(c2ccccc2)(c2cccc(-c3cncnc3)c2)N=CN1",
-      "count": 19
-    },
-    {
-      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3ccncc3)c2)C2=NCCCN12",
+      "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2cccnc2)c1",
       "count": 18
     },
     {
-      "scaffold": "O=C1NC=NC1c1cccc(-c2cccnc2)c1",
+      "scaffold": "c1ccc(CCCCNC2(c3ccccn3)CCCC2)cc1",
       "count": 18
     },
     {
-      "scaffold": "N=C1C=NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)N1",
+      "scaffold": "c1ccc(CCCCNC2(c3ccccn3)CCCCC2)cc1",
       "count": 18
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccsc1)c1cccc(-c2ccccc2)c1",
-      "count": 16
+      "scaffold": "O=S1(=O)CC(Cc2ccccc2)CC(Cc2ccccc2)C1",
+      "count": 17
     },
     {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2cnccn2)c1",
-      "count": 16
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2ccccn2)c1",
-      "count": 16
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1cccc(-c2ccccc2)c1)C1CCCCC1",
-      "count": 16
-    },
-    {
-      "scaffold": "c1ccc(CCCCNC2(c3ccccc3)CCNC2)cc1",
+      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2ccccc2)c1",
       "count": 15
+    },
+    {
+      "scaffold": "O=C1NC=NC1(c1cccnc1)c1cccc(-c2cncnc2)c1",
+      "count": 15
+    },
+    {
+      "scaffold": "O=S1(=O)CC(NCc2ccccc2)CC(NCc2ccccc2)C1",
+      "count": 14
+    },
+    {
+      "scaffold": "N=C1NC(c2ccccc2)(c2ccc(-c3cccnc3)cc2)CO1",
+      "count": 14
+    },
+    {
+      "scaffold": "O=S1(=O)CC(CCc2ccccc2)CC(NCc2ccccc2)C1",
+      "count": 13
+    },
+    {
+      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1cccc(N2CCCS2(=O)=O)c1",
+      "count": 13
+    },
+    {
+      "scaffold": "O=C(NC(CCNC1CCCCC1)Cc1ccccc1)c1ccccc1",
+      "count": 12
+    },
+    {
+      "scaffold": "c1ccc(CCCNC2(c3ccccc3)CCCCC2)cc1",
+      "count": 12
     }
   ]
 }

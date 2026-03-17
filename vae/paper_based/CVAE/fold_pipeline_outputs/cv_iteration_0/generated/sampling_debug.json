@@ -1,6 +1,6 @@
 {
-  "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
-  "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\save\\fold_pipeline_runs\\cv_iteration_0\\training\\model_best.ckpt-36.pt",
+  "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
+  "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training\\model_best.ckpt-30.pt",
   "sampling_cfg": {
     "enabled": true,
     "checkpoint_glob": "model_best.ckpt-*.pt",
@@ -54,20 +54,20 @@
   "scaffold_make_generic": false,
   "num_blocked_validation_scaffolds": 60,
   "num_blocked_heldout_scaffolds": 29,
-  "rejected_by_validation_scaffold": 195,
-  "rejected_by_heldout_scaffold": 178,
+  "rejected_by_validation_scaffold": 180,
+  "rejected_by_heldout_scaffold": 155,
   "num_saved": 10000,
   "stats": {
-    "total_generated": 33600,
-    "accepted": 10382,
-    "invalid_or_empty": 20529,
+    "total_generated": 34688,
+    "accepted": 10353,
+    "invalid_or_empty": 22315,
     "discarded_cleanup": 0,
-    "in_training": 680,
-    "duplicate": 2008,
-    "rejected_by_filter": 374,
+    "in_training": 504,
+    "duplicate": 1513,
+    "rejected_by_filter": 338,
     "salt_stripped": 0,
-    "tautomer_canonicalized": 1554
+    "tautomer_canonicalized": 1669
   },
-  "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_0\\generated\\generated.csv",
-  "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\CVAE\\fold_pipeline_outputs\\cv_iteration_0\\generated\\quality_summary.csv"
+  "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\generated.csv",
+  "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\quality_summary.csv"
 }

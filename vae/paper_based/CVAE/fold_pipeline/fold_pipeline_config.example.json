@@ -10,7 +10,7 @@
   ],
   "python_executable": null,
   "train": {
-    "enabled": true,
+    "enabled": false,
     "script": "train_labels.py",
     "base_config": {
       "training_preset": "custom",
@@ -30,7 +30,7 @@
         "label_target_indices": null,
         "label_dim": null,
         "label_loss_weight": 1.0,
-        "include_condition_in_label_head": false,
+        "include_condition_in_label_head": true,
         "label_targets_use_raw_scale": false
       },
       "transformer": {
@@ -77,7 +77,7 @@
     }
   },
   "sampling": {
-    "enabled": false,
+    "enabled": true,
     "checkpoint_glob": "model_best.ckpt-*.pt",
     "run_training_dist": true,
     "training_dist_std_scale": 1.0,
@@ -120,23 +120,23 @@
     "quality_summary_filename": "quality_summary.csv"
   },
   "analysis": {
-    "enabled": false,
+    "enabled": true,
     "script": "run_viz_pipeline.py",
     "profile": "bace_pic50_10k",
     "overrides": {
       "save_distribution_plot": true,
-      "save_scaffold_plot": false,
-      "save_scaffold_grids": false,
-      "run_prediction_error_plot": false,
-      "run_train_loss_plot": false,
-      "run_tanimoto_histogram": false,
-      "run_chemical_space": false,
+      "save_scaffold_plot": true,
+      "save_scaffold_grids": true,
+      "run_prediction_error_plot": true,
+      "run_train_loss_plot": true,
+      "run_tanimoto_histogram": true,
+      "run_chemical_space": true,
       "run_descriptor_space": false,
       "debug": true
     }
   },
   "cv_combo": {
-    "enabled": false,
+    "enabled": true,
     "only": false,
     "cross_fold_summary_path": null
   }

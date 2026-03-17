@@ -23,14 +23,24 @@
   "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
   "sampling_result": {
     "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
-    "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
+    "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training\\model_best.ckpt-30.pt",
     "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\generated.csv",
     "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\quality_summary.csv",
     "num_saved": 10000,
-    "stats": {}
+    "stats": {
+      "total_generated": 34688,
+      "accepted": 10353,
+      "invalid_or_empty": 22315,
+      "discarded_cleanup": 0,
+      "in_training": 504,
+      "duplicate": 1513,
+      "rejected_by_filter": 338,
+      "salt_stripped": 0,
+      "tautomer_canonicalized": 1669
+    }
   },
   "analysis_enabled": true,
   "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\analysis\\analysis_config.json",
   "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\analysis\\analysis_summary.json",
-  "completed_unix": 1773783356.6822705
+  "completed_unix": 1773789568.5661404
 }

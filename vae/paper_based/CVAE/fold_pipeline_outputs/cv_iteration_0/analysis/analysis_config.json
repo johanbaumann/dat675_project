@@ -13,14 +13,14 @@
     "generated_sep": ",",
     "target_property_column": "pIC50",
     "predicted_property_column": "pred_pIC50",
-    "run_prediction_error_plot": false,
+    "run_prediction_error_plot": true,
     "debug": true,
     "save_distribution_plot": true,
-    "save_scaffold_plot": false,
-    "save_scaffold_grids": false,
-    "run_train_loss_plot": false,
-    "run_tanimoto_histogram": false,
-    "run_chemical_space": false,
+    "save_scaffold_plot": true,
+    "save_scaffold_grids": true,
+    "run_train_loss_plot": true,
+    "run_tanimoto_histogram": true,
+    "run_chemical_space": true,
     "run_descriptor_space": false
   }
 }
