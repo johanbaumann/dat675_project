@@ -20,7 +20,7 @@ CHANGELOG
 
 from model_labels import CVAE
 from utils import *
-from utils_labels import (
+from utils import (
     apply_training_preset,
     get_kl_beta,
     log_cuda_mem,

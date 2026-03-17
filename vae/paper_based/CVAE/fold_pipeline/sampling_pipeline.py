@@ -27,7 +27,7 @@ from utils import (
     load_training_canonical_smiles,
     resolve_checkpoint_path,
 )
-from utils_labels import (
+from utils import (
     _accumulate_stats,
     _build_accept_predicate,
     _collect_new_unique_from_raw_with_payload,

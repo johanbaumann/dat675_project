@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -95,11 +96,11 @@ class AnalysisConfig:
 
 DEFAULT_ZINC_PROFILE = AnalysisConfig(
     profile_name='zinc_logp',
-    train_folder='save/run_20260224_205844',
+    train_folder='save/legacy_zinc_run/training',
     train_data_path='250k_zinc_clean.txt',
     validation_data_path=None,
-    generated_data_path='train_dist_temp_transformer_300k_test.txt',
-    output_dir='save/run_20260224_205844/analysis',
+    generated_data_path='save/legacy_zinc_run/generated/generated.csv',
+    output_dir='save/legacy_zinc_run/analysis',
     target_property_column='LogP',
     predicted_property_column='pred_LogP',
 )
@@ -107,14 +108,30 @@ DEFAULT_ZINC_PROFILE = AnalysisConfig(
 
 DEFAULT_BACE_PROFILE = AnalysisConfig(
     profile_name='bace_pic50_10k',
-    train_folder='save/run_20260226_095012',
+    train_folder='save/fold_pipeline_runs/cv_iteration_0/training',
     train_data_path='bace_pic50.txt',
     validation_data_path=None,
-    generated_data_path='10k_bace_test.txt',
-    output_dir='save/run_20260226_095012/analysis_bace_10k',
+    generated_data_path='fold_pipeline_outputs/cv_iteration_0/generated/generated.csv',
+    output_dir='fold_pipeline_outputs/cv_iteration_0/analysis_refreshed',
     target_property_column='pIC50',
     predicted_property_column='pred_pIC50',
 )
+
+
+def _validate_analysis_config_paths(cfg: AnalysisConfig) -> None:
+    missing: list[str] = []
+    if not os.path.exists(cfg.train_data_path):
+        missing.append(f'train_data_path: {cfg.train_data_path}')
+    if not os.path.exists(cfg.generated_data_path):
+        missing.append(f'generated_data_path: {cfg.generated_data_path}')
+    if cfg.validation_data_path and not os.path.exists(cfg.validation_data_path):
+        missing.append(f'validation_data_path: {cfg.validation_data_path}')
+    if missing:
+        joined = '; '.join(missing)
+        raise FileNotFoundError(
+            'Analysis config contains missing input paths. '
+            f'Fix these fields in analysis_run_config.json: {joined}'
+        )
 
 
 def build_profile_config(profile: str = 'bace_pic50_10k', **overrides) -> AnalysisConfig:
@@ -157,4 +174,6 @@ def load_analysis_config_from_file(path: str) -> AnalysisConfig:
     valid_keys = set(AnalysisConfig.__dataclass_fields__.keys())
     overrides = {k: v for k, v in overrides.items() if k in valid_keys}
 
-    return build_profile_config(profile=profile, **overrides)
+    cfg = build_profile_config(profile=profile, **overrides)
+    _validate_analysis_config_paths(cfg)
+    return cfg

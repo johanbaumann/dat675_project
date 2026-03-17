@@ -1226,6 +1226,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
         f"uniqueness={vun_metrics.get('uniqueness')}, "
         f"novelty={vun_metrics.get('novelty')}",
     )
+    #first part of the needle. 
 
     summary = {
         'profile_name': cfg.profile_name,

@@ -63,7 +63,7 @@ This repository now contains an extended implementation that supports both:
   - Augmentation by resampling (adding multiple instances of non-cannonical smiles for molecules)
     - This is helpfull for the base dataset.
     - 
-- Modular config helpers in `utils.py` for defaults, JSON load/save, and compose-from-overrides.
+- Modular config helpers in the `utils/` package for defaults, JSON load/save, and compose-from-overrides.
 - Improved generation filtering/reporting in sampling (`unique`, `invalid`, `duplicates`, `in_training`).
 - EOS-aware early stopping in decode loop for faster generation. So it does not go trough everything multiple times
 - Ability to use only a subset of parameters for conditions compared to the origonal papers which had: MW,LogP, TPSA, HBD, HBA
@@ -223,15 +223,15 @@ Supported descriptor names:
 - `NumHBD`
 - `NumHBA`
 
-You can use any subset/order. The selected order becomes the conditioning-column order in `smiles_prop.txt` and must match `sample.py` `target_prop` order.
+You can use any subset/order. The selected order becomes the conditioning-column order in `smiles_prop.txt` and must match `sample_labels.py` `target_prop` order.
 
 ## 2) Train model
 
-Training is configured directly inside `train.py` using a single `config` dictionary.
+Training is configured directly inside `train_labels.py` using a single `config` dictionary.
 
-### Configure in `train.py`
+### Configure in `train_labels.py`
 
-Edit the grouped `config` block near the top of `train.py`.
+Edit the grouped `config` block near the top of `train_labels.py`.
 
 **Stable for lstm:**
 
@@ -399,12 +399,12 @@ In Transformer mode, embedding width is still `latent_size`, while internal atte
 ### Run training
 
 ```bash
-python -u train.py
+python -u train_labels.py
 ```
 
 No external config file is required to start training.
 
-`train.py` now infers `num_prop` directly from `smiles_prop.txt` (number of numeric columns after SMILES), so you do not need to hardcode it.
+`train_labels.py` now infers `num_prop` directly from `smiles_prop.txt` (number of numeric columns after SMILES), so you do not need to hardcode it.
 
 ### Training outputs
 
@@ -416,7 +416,7 @@ Each run saves:
 
 ## 3) Generate molecules (sampling)
 
-`sample.py` now uses an internal config block. Set:
+`sample_labels.py` now uses an internal config block. Set:
 
 - `save_file` to a trained checkpoint path,
 - `target_prop` to desired property values in the same order as `cal_prop.py` `args["properties"]`.
@@ -429,12 +429,12 @@ For MW + LogP training, use:
 'target_prop': '300.0 3.0' which corresponds to MW = 300, logP = 3.0!
 ```
 
-`sample.py` validates that the number of values in `target_prop` matches the trained model/property-file dimensionality.
+`sample_labels.py` validates that the number of values in `target_prop` matches the trained model/property-file dimensionality.
 
 Example:
 
 ```bash
-python sample.py
+python sample_labels.py
 ```
 
 Output is written to `result_filename` (default `result.txt`).
@@ -477,17 +477,17 @@ Note: in training-dist mode the per-sample targets vary, so the fixed-target acc
 
 ### Sampling controls (diversity vs validity)
 
-This repo uses token-by-token decoding for SMILES generation. If you decode with greedy `argmax` at every step, the model can *collapse* and output the same molecule repeatedly (even with different latent vectors). To avoid this, `model.sample()` now supports stochastic decoding and `sample.py` exposes these knobs:
+This repo uses token-by-token decoding for SMILES generation. If you decode with greedy `argmax` at every step, the model can *collapse* and output the same molecule repeatedly (even with different latent vectors). To avoid this, `model.sample()` now supports stochastic decoding and `sample_labels.py` exposes these knobs:
 
 - `do_sample`: if `True`, samples the next token from the model distribution; if `False`, uses greedy decoding.
 - `temperature`: scales logits before sampling. Lower values generally improve validity but reduce diversity.
 - `top_k`: restricts sampling to the `k` most probable tokens per step (often improves validity).
 
-The defaults in `sample.py` are set for faster unique generation (tune as needed for your checkpoint/dataset).
+The defaults in `sample_labels.py` are set for faster unique generation (tune as needed for your checkpoint/dataset).
 
 ### Training-set novelty filter cache
 
-When `exclude_training=True`, `sample.py` loads canonical SMILES from the training/property file so it can reject molecules already seen during training. For large files, canonicalization is expensive, so the loader now writes a cache next to the property file:
+When `exclude_training=True`, `sample_labels.py` loads canonical SMILES from the training/property file so it can reject molecules already seen during training. For large files, canonicalization is expensive, so the loader now writes a cache next to the property file:
 
 - `prop_mw_logp.txt.canon_seq120.pkl.gz`
 
@@ -506,6 +506,8 @@ python run_viz_pipeline.py --config analysis_run_config.json
 
 The analysis config is file-driven (JSON), so you do **not** need to pass many CLI
 arguments anymore.
+
+The checked-in `analysis_run_config.json` is runnable against the included fold outputs. You can still override `overrides.train_folder`, `overrides.generated_data_path`, and `overrides.output_dir` for your own runs.
 
 ### Starter config file
 
@@ -546,7 +548,7 @@ It writes processed CSV + analysis summary JSON + figures under `output_dir`.
 
 ### BACE pIC50 + 10k generated molecules
 
-`analysis_run_config.json` defaults are set up for BACE pIC50 with 10k generated molecules.
+`analysis_run_config.json` is written in the BACE pIC50 style.
 You can switch to ZINC/LogP by changing `profile` and the path overrides.
 
 - Transformer encoder/decoder blocks run in fp32 under AMP (`selective autocast`) to avoid fp16 softmax/masked-attention NaNs.

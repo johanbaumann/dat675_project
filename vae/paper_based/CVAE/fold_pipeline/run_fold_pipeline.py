@@ -1362,7 +1362,7 @@ def main() -> None:
                 cross_fold_summary_path=cross_fold_summary_path,
                 artifacts_root=artifacts_root,
             )
-
+    #This is the second part of the needle
     global_manifest['finished_unix'] = time.time()
     global_manifest['duration_sec'] = float(global_manifest['finished_unix'] - global_manifest['started_unix'])
     global_manifest['cross_fold_analysis_summary_path'] = cross_fold_summary_path
