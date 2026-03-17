@@ -4,13 +4,17 @@ from __future__ import annotations
 import itertools
 import os
 import time as t
-from typing import Callable, Optional
+from typing import Callable, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from rdkit import Chem
 from rdkit import RDLogger
 from rdkit.Chem.Scaffolds import MurckoScaffold
+
+if TYPE_CHECKING:
+    import model_labels
+
 from utils import (
     canonicalize_for_filtering,
     compose_train_config_from_dict,
@@ -56,12 +60,12 @@ def _recanonicalize_outputs_for_evaluation(
     *,
     mols: list[Chem.Mol],
     smiles: list[str],
-    pred_labels: Optional[list[np.ndarray]],
-    target_props_per_molecule: Optional[list[tuple[float, ...]]],
+    pred_labels: list[np.ndarray] | None,
+    target_props_per_molecule: list[tuple[float, ...]] | None,
     strip_salts: bool,
     decharge: bool,
     canonicalize_tautomer: bool,
-) -> tuple[list[Chem.Mol], list[str], Optional[list[np.ndarray]], Optional[list[tuple[float, ...]]], dict]:
+) -> tuple[list[Chem.Mol], list[str], list[np.ndarray] | None, list[tuple[float, ...]] | None, dict]:
     """Re-canonicalize generated outputs before descriptor evaluation/export."""
     if len(smiles) == 0:
         return mols, smiles, pred_labels, target_props_per_molecule, {
@@ -105,8 +109,8 @@ def _recanonicalize_outputs_for_evaluation(
         if use_targets and target_props_per_molecule is not None:
             out_targets.append(target_props_per_molecule[i])
 
-    pred_out: Optional[list[np.ndarray]] = out_pred if use_pred else None
-    targets_out: Optional[list[tuple[float, ...]]] = out_targets if use_targets else None
+    pred_out: list[np.ndarray] | None = out_pred if use_pred else None
+    targets_out: list[tuple[float, ...]] | None = out_targets if use_targets else None
 
     return out_mols, out_smiles, pred_out, targets_out, {
         'num_input': int(len(smiles)),
@@ -116,7 +120,7 @@ def _recanonicalize_outputs_for_evaluation(
     }
 
 
-def _safe_murcko_scaffold_smiles(mol: Optional[Chem.Mol]) -> Optional[str]:
+def _safe_murcko_scaffold_smiles(mol: Chem.Mol | None) -> str | None:
     if mol is None:
         return None
     try:
@@ -163,10 +167,10 @@ def _exclude_blocked_scaffolds(
     *,
     mols: list[Chem.Mol],
     smiles: list[str],
-    pred_labels: Optional[list[np.ndarray]],
-    target_props_per_molecule: Optional[list[tuple[float, ...]]],
+    pred_labels: list[np.ndarray] | None,
+    target_props_per_molecule: list[tuple[float, ...]] | None,
     blocked_scaffolds: set[str],
-) -> tuple[list[Chem.Mol], list[str], Optional[list[np.ndarray]], Optional[list[tuple[float, ...]]], dict]:
+) -> tuple[list[Chem.Mol], list[str], list[np.ndarray] | None, list[tuple[float, ...]] | None, dict]:
     if len(smiles) == 0 or len(blocked_scaffolds) == 0:
         return mols, smiles, pred_labels, target_props_per_molecule, {
             'num_input': int(len(smiles)),
@@ -227,13 +231,13 @@ def _select_generated_output_columns(df: pd.DataFrame, config: dict) -> pd.DataF
 
 def generate_unique_molecules(
     *,
-    model: CVAE,
+    model: model_labels.CVAE,
     charset: np.ndarray,
     target_prop: np.ndarray,
     start_codon: np.ndarray,
     seq_length: int,
     num_unique: int,
-    max_batches: Optional[int],
+    max_batches: int | None,
     mean: float,
     stddev: float,
     batch_size: int,
@@ -241,13 +245,13 @@ def generate_unique_molecules(
     training_smiles: set,
     do_sample: bool,
     temperature: float,
-    top_k: Optional[int],
+    top_k: int | None,
     strip_salts: bool,
     decharge: bool,
     canonicalize_tautomer: bool,
-    accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
+    accept_predicate: Callable[[str, Chem.Mol], bool] | None = None,
     require_neutral: bool = False,
-) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]]]:
+) -> tuple[list[Chem.Mol], list[str], dict, list[np.ndarray] | None]:
     """Generate molecules until `num_unique` unique valid molecules are collected."""
     if num_unique <= 0:
         raise ValueError('num_unique must be a positive integer')
@@ -329,12 +333,12 @@ def generate_unique_molecules(
 
 def generate_unique_molecules_from_training_dist(
     *,
-    model: CVAE,
+    model: model_labels.CVAE,
     charset: np.ndarray,
     start_codon: np.ndarray,
     seq_length: int,
     num_unique: int,
-    max_batches: Optional[int],
+    max_batches: int | None,
     mean: float,
     stddev: float,
     batch_size: int,
@@ -342,17 +346,17 @@ def generate_unique_molecules_from_training_dist(
     training_smiles: set,
     do_sample: bool,
     temperature: float,
-    top_k: Optional[int],
+    top_k: int | None,
     strip_salts: bool,
     decharge: bool,
     canonicalize_tautomer: bool,
     prop_norm_mean: list,
     prop_norm_std: list,
     std_scale: float,
-    clip_n_std: Optional[float],
+    clip_n_std: float | None,
     require_neutral: bool = False,
-    rng: Optional[np.random.Generator] = None,
-) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]], list[tuple[float, ...]]]:
+    rng: np.random.Generator | None = None,
+) -> tuple[list[Chem.Mol], list[str], dict, list[np.ndarray] | None, list[tuple[float, ...]]]:
     """Generate unique molecules while sampling target properties near training data.
 
     This mode samples a fresh conditioning target 'c_raw' each batch from an
@@ -453,7 +457,7 @@ def generate_unique_molecules_from_training_dist(
 
 def generate_fixed_iterations(
     *,
-    model: CVAE,
+    model: model_labels.CVAE,
     charset: np.ndarray,
     target_prop: np.ndarray,
     start_codon: np.ndarray,
@@ -466,13 +470,13 @@ def generate_fixed_iterations(
     training_smiles: set,
     do_sample: bool,
     temperature: float,
-    top_k: Optional[int],
+    top_k: int | None,
     strip_salts: bool,
     decharge: bool,
     canonicalize_tautomer: bool,
-    accept_predicate: Optional[Callable[[str, Chem.Mol], bool]] = None,
+    accept_predicate: Callable[[str, Chem.Mol], bool] | None = None,
     require_neutral: bool = False,
-) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]]]:
+) -> tuple[list[Chem.Mol], list[str], dict, list[np.ndarray] | None]:
     """Old behavior: run for a fixed number of iterations, then deduplicate."""
     unique_mols_by_smiles: dict[str, Chem.Mol] = {}
     unique_labels_by_smiles: dict[str, np.ndarray] = {}
@@ -543,17 +547,17 @@ def generate_fixed_iterations_from_training_dist(
     training_smiles: set,
     do_sample: bool,
     temperature: float,
-    top_k: Optional[int],
+    top_k: int | None,
     strip_salts: bool,
     decharge: bool,
     canonicalize_tautomer: bool,
     prop_norm_mean: list,
     prop_norm_std: list,
     std_scale: float,
-    clip_n_std: Optional[float],
+    clip_n_std: float | None,
     require_neutral: bool = False,
-    rng: Optional[np.random.Generator] = None,
-) -> tuple[list[Chem.Mol], list[str], dict, Optional[list[np.ndarray]], list[tuple[float, ...]]]:
+    rng: np.random.Generator | None = None,
+) -> tuple[list[Chem.Mol], list[str], dict, list[np.ndarray] | None, list[tuple[float, ...]]]:
     """Fixed-iteration generation variant using training-distribution conditioning."""
     if rng is None:
         rng = np.random.default_rng()
@@ -632,13 +636,13 @@ def generate_fixed_iterations_from_training_dist(
 def generate_unique_over_param_sweeps(
     *, # for better readability....
     props: dict[str, list[float]]|dict[str, np.ndarray|list[float]], 
-    model: CVAE,
+    model: model_labels.CVAE,
     model_conf: dict,
     config: dict,
     charset: np.ndarray,
     start_codon: np.ndarray,
     training_smiles: set,
-    top_k: Optional[int],
+    top_k: int | None,
     unique: int,
 ) -> pd.DataFrame:
     """

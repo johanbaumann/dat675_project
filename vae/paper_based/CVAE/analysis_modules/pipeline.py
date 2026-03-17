@@ -130,7 +130,7 @@ def _compute_vun_from_counts(
     duplicate: int,
     accepted: int,
 ) -> dict:
-    total = int(total_generated)
+    total = total_generated
     if total <= 0:
         return {
             'validity': 0.0,
@@ -142,19 +142,19 @@ def _compute_vun_from_counts(
             'novel_count': 0,
         }
 
-    valid_count = int(total - int(invalid_or_empty) - int(discarded_cleanup))
-    unique_count = int(total - int(duplicate))
-    novel_count = int(total - int(in_training))
-    accepted_count = int(accepted)
+    valid_count = total - invalid_or_empty - discarded_cleanup
+    unique_count = total - duplicate
+    novel_count = total - in_training
+    accepted_count = accepted
 
     return {
         'validity': float(valid_count) / float(total),
         'uniqueness': float(unique_count) / float(total),
         'novelty': float(novel_count) / float(total),
         'acceptance_rate': float(accepted_count) / float(total),
-        'valid_count': int(valid_count),
-        'unique_count': int(unique_count),
-        'novel_count': int(novel_count),
+        'valid_count': valid_count,
+        'unique_count': unique_count,
+        'novel_count': novel_count,
     }
 
 
@@ -187,19 +187,27 @@ def _try_read_vun_from_quality_summary_csv(path: str | None) -> dict | None:
     has_required_counts = all(counts.get(k) is not None for k in required)
 
     if has_required_counts:
+        # All required counts are guaranteed to be non-None at this point
+        total_generated: int = counts['total_generated']  # type: ignore
+        invalid_or_empty: int = counts['invalid_or_empty']  # type: ignore
+        discarded_cleanup: int = counts['discarded_cleanup']  # type: ignore
+        in_training: int = counts['in_training']  # type: ignore
+        duplicate: int = counts['duplicate']  # type: ignore
+        accepted: int = counts['accepted']  # type: ignore
+        
         vun = _compute_vun_from_counts(
-            total_generated=int(counts['total_generated']),
-            invalid_or_empty=int(counts['invalid_or_empty']),
-            discarded_cleanup=int(counts['discarded_cleanup']),
-            in_training=int(counts['in_training']),
-            duplicate=int(counts['duplicate']),
-            accepted=int(counts['accepted']),
+            total_generated=total_generated,
+            invalid_or_empty=invalid_or_empty,
+            discarded_cleanup=discarded_cleanup,
+            in_training=in_training,
+            duplicate=duplicate,
+            accepted=accepted,
         )
         return {
             'source': 'quality_summary_csv',
             'quality_summary_csv_path': os.path.abspath(path),
             'quality_run_scope': row.get('run_scope'),
-            'quality_counts': {k: int(v) for k, v in counts.items() if v is not None},
+            'quality_counts': {k: v for k, v in counts.items() if v is not None},
             **vun,
         }
 

@@ -94,18 +94,9 @@ class AnalysisConfig:
     descriptor_tsne_tanimoto_plot_filename: str = 'tsne_descriptors_generated_colored_by_tanimoto.png'
 
 
-DEFAULT_ZINC_PROFILE = AnalysisConfig(
-    profile_name='zinc_logp',
-    train_folder='save/legacy_zinc_run/training',
-    train_data_path='250k_zinc_clean.txt',
-    validation_data_path=None,
-    generated_data_path='save/legacy_zinc_run/generated/generated.csv',
-    output_dir='save/legacy_zinc_run/analysis',
-    target_property_column='LogP',
-    predicted_property_column='pred_LogP',
-)
-
-
+# ============================================================
+# ACTIVE PROFILE (BACE beta-CVAE workflow)
+# ============================================================
 DEFAULT_BACE_PROFILE = AnalysisConfig(
     profile_name='bace_pic50_10k',
     train_folder='save/fold_pipeline_runs/cv_iteration_0/training',
@@ -116,9 +107,25 @@ DEFAULT_BACE_PROFILE = AnalysisConfig(
     target_property_column='pIC50',
     predicted_property_column='pred_pIC50',
 )
+"""
+Default active profile for BACE pIC50 beta-CVAE analysis.
+Points to validated workspace artifacts (fold_pipeline outputs).
+This is the ONLY officially supported profile for current development.
+"""
 
 
 def _validate_analysis_config_paths(cfg: AnalysisConfig) -> None:
+    """
+    Validate that all required config paths exist in the workspace.
+    
+    Checks train_data_path, generated_data_path, and optional validation_data_path.
+    
+    Args:
+        cfg: AnalysisConfig to validate
+    
+    Raises:
+        FileNotFoundError: if any required path doesn't exist, with actionable message
+    """
     missing: list[str] = []
     if not os.path.exists(cfg.train_data_path):
         missing.append(f'train_data_path: {cfg.train_data_path}')
@@ -135,13 +142,28 @@ def _validate_analysis_config_paths(cfg: AnalysisConfig) -> None:
 
 
 def build_profile_config(profile: str = 'bace_pic50_10k', **overrides) -> AnalysisConfig:
+    """
+    Build AnalysisConfig from a profile name and optional overrides.
+    
+    Supported profiles:
+    - 'bace_pic50_10k': BACE pIC50 beta-CVAE workflow (default, active)
+    - 'bace', 'bace_pic50': aliases for bace_pic50_10k
+    
+    Args:
+        profile: Profile name (default 'bace_pic50_10k')
+        **overrides: Config fields to override (e.g., output_dir='custom_dir')
+    
+    Returns:
+        AnalysisConfig instance with merged settings
+    
+    Raises:
+        ValueError: if profile is not recognized
+    """
     normalized = str(profile).strip().lower()
-    if normalized in ('zinc', 'zinc_logp'):
-        base = DEFAULT_ZINC_PROFILE
-    elif normalized in ('bace', 'bace_pic50', 'bace_pic50_10k'):
+    if normalized in ('bace', 'bace_pic50', 'bace_pic50_10k'):
         base = DEFAULT_BACE_PROFILE
     else:
-        raise ValueError("profile must be one of: 'zinc_logp', 'bace_pic50_10k'")
+        raise ValueError("profile must be one of: 'bace_pic50_10k', 'bace', 'bace_pic50'")
 
     payload = dict(base.__dict__)
     payload.update(overrides)
@@ -149,6 +171,26 @@ def build_profile_config(profile: str = 'bace_pic50_10k', **overrides) -> Analys
 
 
 def load_analysis_config_from_file(path: str) -> AnalysisConfig:
+    """
+    Load and validate AnalysisConfig from a JSON file.
+    
+    The JSON file can include:
+    - 'profile': profile name (default 'bace_pic50_10k')
+    - 'overrides': object with config field overrides
+    - Or directly include override fields at top level
+    
+    All input paths are validated; FileNotFoundError raised if missing.
+    
+    Args:
+        path: Path to config JSON file
+    
+    Returns:
+        AnalysisConfig instance with validated paths
+    
+    Raises:
+        FileNotFoundError: if required data paths don't exist
+        ValueError: if config JSON structure is invalid
+    """
     with open(path, 'r', encoding='utf-8') as f:
         payload = json.load(f)
 

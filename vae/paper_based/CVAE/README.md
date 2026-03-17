@@ -237,11 +237,11 @@ Edit the grouped `config` block near the top of `train_labels.py`.
 
 ```python
 # Single source of truth for run configuration.
-# Grouped sections are easier to edit; utils will flatten this to legacy keys.
+# Grouped sections are easier to edit and map directly to runtime settings.
 config = {
     'training_preset': 'custom',  # 'custom' or 'stable_transformer'
     'data': {
-        'prop_file': '250k_zinc_clean.txt',
+      'prop_file': 'bace_pic50.txt',
         'seq_length': 120,
         'train_ratio': 0.75,
     },
@@ -392,7 +392,7 @@ config = {
 
 ```
 
-Grouped config is flattened internally, so legacy flat keys are still supported for compatibility.
+Grouped config is the only supported format.
 
 In Transformer mode, embedding width is still `latent_size`, while internal attention/FFN width is `unit_size`.
 
@@ -519,7 +519,7 @@ analysis_run_config.json
 
 Key fields to edit:
 
-- `profile`: `bace_pic50_10k` or `zinc_logp`
+- `profile`: `bace_pic50_10k`
 - `overrides.train_folder`
 - `overrides.train_data_path`
 - `overrides.generated_data_path`
@@ -548,8 +548,7 @@ It writes processed CSV + analysis summary JSON + figures under `output_dir`.
 
 ### BACE pIC50 + 10k generated molecules
 
-`analysis_run_config.json` is written in the BACE pIC50 style.
-You can switch to ZINC/LogP by changing `profile` and the path overrides.
+`analysis_run_config.json` is written for the active BACE pIC50 workflow.
 
 - Transformer encoder/decoder blocks run in fp32 under AMP (`selective autocast`) to avoid fp16 softmax/masked-attention NaNs.
 - Reconstruction loss is length-masked (padded tokens do not contribute to CE).

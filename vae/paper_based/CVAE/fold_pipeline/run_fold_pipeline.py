@@ -95,7 +95,7 @@ def _to_float(value, *, default: Optional[float] = None) -> Optional[float]:
         return default
     raw = str(value).strip()
     if raw == '':
-        return default
+        return defaultb
     try:
         return float(raw)
     except Exception:
@@ -774,28 +774,14 @@ def _resolve_training_run_dir_for_iteration_sampling(
 ) -> str:
     """Return the run dir that actually contains checkpoints.
 
-    New layout (preferred):
+    Required layout:
       training_output_root/fold_k/training/
-
-    Back-compat: older configs wrote checkpoints under:
-      artifacts_output_root/fold_k/training/
     """
     expected_train_dir = str(expected_train_dir)
     if _glob_has_any(os.path.join(expected_train_dir, checkpoint_glob)) or _glob_has_any(
         os.path.join(expected_train_dir, '*.pt')
     ):
         return expected_train_dir
-
-    legacy_dir = os.path.join(str(artifacts_iteration_dir), 'training')
-    if os.path.isdir(legacy_dir) and (
-        _glob_has_any(os.path.join(legacy_dir, checkpoint_glob)) or _glob_has_any(os.path.join(legacy_dir, '*.pt'))
-    ):
-        print(
-            f'[sampling] NOTE: no checkpoints found in expected training dir: {expected_train_dir}. '\
-            f'Falling back to legacy artifacts training dir: {legacy_dir}'
-        )
-        return legacy_dir
-
     return expected_train_dir
 
 

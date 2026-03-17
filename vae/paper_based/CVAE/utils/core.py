@@ -33,7 +33,6 @@ TRAIN_CONFIG_DEFAULTS = {
     'save_dir': 'save/',
     'run_name': None,
     'use_run_subdir': True,
-    'patientce': 10,
     'model_mode': 'lstm',
     'optimizer': 'adam',
     'weight_decay': 0.0,
@@ -101,29 +100,6 @@ def _largest_fragment(mol:Chem.Mol) -> tuple[Chem.Mol, bool]:
 
     best = max(frags, key=lambda m: int(m.GetNumHeavyAtoms()))
     return best, True
-
-
-def _standardize_mol(
-    mol: Chem.Mol,
-    *,
-    strip_salts: bool,
-    decharge: bool,
-    canonicalize_tautomer: bool,
-) -> tuple[Chem.Mol, dict]:
-    """DEPRECATED: kept for backward compatibility.
-
-    Use `clean_mol(...)` instead.
-    """
-    smi, out, info = clean_mol(
-        mol,
-        strip_salts=strip_salts,
-        decharge=decharge,
-        canonicalize_tautomer=canonicalize_tautomer,
-        canonical=True,
-    )
-    if out is None:
-        raise ValueError('Standardization failed')
-    return out, info
 
 
 def clean_mol(
@@ -409,10 +385,6 @@ def _normalize_train_config(config_override:dict) -> dict:
         if key in config_override:
             config[key] = config_override[key]
 
-    # Legacy typo kept for backward compatibility.
-    if 'patience' in config_override and 'patientce' not in config_override:
-        config['patientce'] = config_override['patience']
-
     config['model_mode'] = str(config.get('model_mode', 'lstm')).lower()
     if config['model_mode'] not in ('lstm', 'transformer'):
         raise ValueError("model_mode must be either 'lstm' or 'transformer'")
@@ -448,7 +420,6 @@ def _normalize_train_config(config_override:dict) -> dict:
         config['run_name'] = run_name if run_name else None
     config['use_run_subdir'] = bool(config.get('use_run_subdir', True))
     config['save_every'] = int(config.get('save_every', 10))
-    config['patientce'] = int(config.get('patientce', config.get('early_stopping_patience', 10)))
     config['weight_decay'] = float(config.get('weight_decay', 0.0))
     config['use_amp'] = bool(config.get('use_amp', True))
     config['use_reduce_lr_on_plateau'] = bool(config.get('use_reduce_lr_on_plateau', False))
@@ -456,7 +427,7 @@ def _normalize_train_config(config_override:dict) -> dict:
     config['lr_plateau_patience'] = int(config.get('lr_plateau_patience', 10))
     config['lr_plateau_threshold'] = float(config.get('lr_plateau_threshold', 1e-4))
     config['lr_plateau_min_lr'] = float(config.get('lr_plateau_min_lr', 1e-6))
-    config['early_stopping_patience'] = int(config.get('early_stopping_patience', config['patientce']))
+    config['early_stopping_patience'] = int(config.get('early_stopping_patience', 10))
     config['early_stopping_min_delta'] = float(config.get('early_stopping_min_delta', 0.0))
     config['early_stopping_restore_best'] = bool(config.get('early_stopping_restore_best', True))
     config['transformer_heads'] = int(config['transformer_heads'])

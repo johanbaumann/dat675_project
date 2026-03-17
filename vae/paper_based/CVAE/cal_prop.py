@@ -21,8 +21,11 @@ from rdkit.Chem.rdMolDescriptors import CalcTPSA
 
 args = {
     # Modes:
-    # 1) 'rdkit_descriptors': compute descriptors from SMILES (legacy behavior)
-    # 2) 'from_csv_columns': copy target columns from existing CSV (e.g. BACE pIC50)
+    # 1) 'rdkit_descriptors': compute descriptors from SMILES (legacy behavior for ZINC experiments)
+    # 2) 'from_csv_columns': copy target columns from existing CSV (current BACE workflow)
+    # 
+    # Set EXACTLY ONE MODE below. The default 'from_csv_columns' is for BACE pIC50 conditioning.
+    # For ZINC experiments or others, change mode to 'rdkit_descriptors' and configure 'properties'.
     'mode': 'from_csv_columns',
 
     # Input/output data files.
@@ -31,9 +34,11 @@ args = {
 
     # For mode='rdkit_descriptors': choose descriptor columns to compute.
     # Order defines conditioning order for train/sample.
+    # IGNORED if mode='from_csv_columns'
     'properties': ['MW', 'LogP'],  # subset/order of: MW, LogP, TPSA, NumHBD, NumHBA
 
     # For mode='from_csv_columns': choose source columns from CSV.
+    # IGNORED if mode='rdkit_descriptors'
     'smiles_column': 'mol',
     'target_columns': ['pIC50'],
 
@@ -44,7 +49,8 @@ args = {
     'descriptor_summary_filename': 'bace_descriptor_summary.json',
     'descriptor_exclude_columns': ['CID', 'Class', 'Model', 'canvasUID'],
 
-    # Parallel workers for rdkit_descriptors mode.
+    # Parallel workers for rdkit_descriptors mode only.
+    # IGNORED if mode='from_csv_columns'
     'ncpus': 1,
 }
 

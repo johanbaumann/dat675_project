@@ -10,7 +10,7 @@
   ],
   "python_executable": null,
   "train": {
-    "enabled": false,
+    "enabled": true,
     "script": "train_labels.py",
     "base_config": {
       "training_preset": "custom",
@@ -120,7 +120,7 @@
     "quality_summary_filename": "quality_summary.csv"
   },
   "analysis": {
-    "enabled": true,
+    "enabled": false,
     "script": "run_viz_pipeline.py",
     "profile": "bace_pic50_10k",
     "overrides": {
