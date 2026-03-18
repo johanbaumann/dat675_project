@@ -94,7 +94,8 @@ def run_single_fold(
 	val_idx: int,
 	config: dict[str, Any],
 	feature_context: dict[str, Any],
-	target_folder: str,
+	data_folder: str,
+	artifact_folder: str,
 	total_folds: int,
 	batch_size: int,
 	num_epochs: int,
@@ -114,12 +115,13 @@ def run_single_fold(
 	save_checkpoints: bool = True,
 ) -> dict[str, Any]:
 	print(f"\n-------------------- Fold {val_idx} (validation) --------------------")
+	checkpoint_target_folder = artifact_folder or data_folder
 
-	train_paths, val_paths = get_fold_files(target_folder, val_idx, config, total_folds=total_folds)
+	train_paths, val_paths = get_fold_files(data_folder, val_idx, config, total_folds=total_folds)
 	train_data = load_dataset(train_paths, config, feature_context)
 	val_data = load_dataset(val_paths, config, feature_context)
 
-	pretrain_synth_paths = get_synthetic_pretraining_files(target_folder, val_idx, config)
+	pretrain_synth_paths = get_synthetic_pretraining_files(data_folder, val_idx, config)
 	pretrain_synth_data = load_dataset(pretrain_synth_paths, config, feature_context) if pretrain_synth_paths else []
 
 	model = build_model(model_class, config, feature_context)
@@ -264,7 +266,7 @@ def run_single_fold(
 						config=config,
 						extra_metrics={"val_rmse": val_rmse, "val_mae": val_mae, "val_pearson": val_pearson},
 					),
-					get_fold_checkpoint_path(target_folder, val_idx),
+					get_fold_checkpoint_path(checkpoint_target_folder, val_idx),
 				)
 
 		if early_stop_improved:
@@ -303,7 +305,7 @@ def run_single_fold(
 						"val_pearson": val_pearson,
 					},
 				),
-				get_epoch_checkpoint_path(target_folder, val_idx, epoch),
+				get_epoch_checkpoint_path(checkpoint_target_folder, val_idx, epoch),
 			)
 
 		if scheduler is not None:
@@ -388,7 +390,8 @@ def run_cross_validation(
 	*,
 	config: dict[str, Any],
 	feature_context: dict[str, Any],
-	target_folder: str,
+	data_folder: str,
+	artifact_folder: str,
 	total_folds: int,
 	batch_size: int,
 	num_epochs: int,
@@ -426,7 +429,8 @@ def run_cross_validation(
 			val_idx=val_idx,
 			config=config,
 			feature_context=feature_context,
-			target_folder=target_folder,
+			data_folder=data_folder,
+			artifact_folder=artifact_folder,
 			total_folds=total_folds,
 			batch_size=batch_size,
 			num_epochs=num_epochs,

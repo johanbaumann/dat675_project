@@ -15,6 +15,7 @@ from gat_predictor import CONFIG, GATModel
 from gat_utils.config_helpers import (
 	get_early_stopping_config,
 	get_experiment_runtime_config,
+	infer_dataset_percent_label,
 	get_optimization_config,
 	get_scheduler_config,
 	is_minimize_metric,
@@ -39,7 +40,10 @@ SWEEP_CONFIG = {
 	"datasets": {
 		# One folder string or multiple folder strings are both supported.
 		# Examples: ["67%"] or ["0%", "33%", "67%"]
-		"target_folders": ["0%", "67%"],
+		"target_folders": [
+			"../data/combination_1300_molecules_and_0_%_synthetic",
+			"../data/combination_3900_molecules_and_67_%_synthetic",
+		],
 		# Set to None to use CONFIG["experiment"]["actual_test_file"].
 		"holdout_test_file": None,
 	},
@@ -150,6 +154,7 @@ def _run_single_dataset_sweep(
 	*,
 	base_config: dict[str, Any],
 	target_folder: str,
+	artifact_folder: str,
 	test_path: Path,
 ) -> dict[str, Any]:
 	dataset_config = copy.deepcopy(base_config)
@@ -182,7 +187,8 @@ def _run_single_dataset_sweep(
 			val_idx=fold_idx,
 			config=dataset_config,
 			feature_context=feature_context,
-			target_folder=target_folder,
+			data_folder=target_folder,
+			artifact_folder=artifact_folder,
 			total_folds=runtime_cfg["total_folds"],
 			batch_size=runtime_cfg["batch_size"],
 			num_epochs=runtime_cfg["num_epochs"],
@@ -269,10 +275,14 @@ def main() -> None:
 
 		combo_dataset_means: list[float] = []
 		for dataset in datasets:
-			print(f"\n--- Dataset {Path(dataset).name} ---")
+			dataset_name = Path(dataset).name
+			percent_label = infer_dataset_percent_label(dataset_name)
+			artifact_folder = str(WORKSPACE_ROOT / (percent_label if percent_label else dataset_name))
+			print(f"\n--- Dataset {dataset_name} ---")
 			dataset_row = _run_single_dataset_sweep(
 				base_config=combo_config,
 				target_folder=dataset,
+				artifact_folder=artifact_folder,
 				test_path=test_path,
 			)
 			dataset_row["Pretrain_LR"] = float(pretrain_lr)

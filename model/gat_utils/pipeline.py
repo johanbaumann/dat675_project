@@ -11,6 +11,7 @@ from .config_helpers import (
 	get_checkpointing_config,
 	get_early_stopping_config,
 	get_experiment_runtime_config,
+	infer_dataset_percent_label,
 	get_optimization_config,
 	get_scheduler_config,
 	is_minimize_metric,
@@ -38,6 +39,7 @@ from .training_helpers import (
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _resolve_optional(
@@ -138,12 +140,13 @@ def _run_single_dataset_training(
 	config: dict[str, Any],
 	model_class,
 	*,
+	data_folder: str,
+	artifact_folder: str,
 	feature_context: dict[str, Any],
 	target_std_cfg: dict[str, Any],
 	use_target_standardization: bool,
 ) -> None:
 	runtime_cfg = get_experiment_runtime_config(config)
-	target_folder = runtime_cfg["target_folder"]
 	actual_test_file = runtime_cfg["actual_test_file"]
 	total_folds = runtime_cfg["total_folds"]
 	batch_size = runtime_cfg["batch_size"]
@@ -194,13 +197,14 @@ def _run_single_dataset_training(
 			"Check smiles parsing and target column configuration."
 		)
 
-	ckpt_dir = Path(target_folder) / "checkpoints"
+	ckpt_dir = Path(artifact_folder) / "checkpoints"
 	ckpt_dir.mkdir(parents=True, exist_ok=True)
-	dataset_label = Path(target_folder).name if target_folder != "." else "default_experiment"
+	dataset_label = Path(artifact_folder).name if artifact_folder != "." else "default_experiment"
 	cv_output = run_cross_validation(
 		config=config,
 		feature_context=feature_context,
-		target_folder=target_folder,
+		data_folder=data_folder,
+		artifact_folder=artifact_folder,
 		total_folds=total_folds,
 		batch_size=batch_size,
 		num_epochs=num_epochs,
@@ -287,8 +291,8 @@ def _run_single_dataset_training(
 	)
 	print(df_results.to_string(index=False))
 
-	target_path_obj = Path(target_folder)
-	folder_name = target_path_obj.name if target_folder != "." else "default_experiment"
+	target_path_obj = Path(artifact_folder)
+	folder_name = target_path_obj.name if artifact_folder != "." else "default_experiment"
 
 	save_path = target_path_obj / f"MPNN_results_{folder_name}.csv"
 	df_results.to_csv(save_path, index=False)
@@ -302,6 +306,7 @@ def _run_single_dataset_training(
 def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	runtime_cfg = get_experiment_runtime_config(config)
 	target_folders = runtime_cfg["target_folders"]
+	artifact_folders = runtime_cfg["artifact_folders"]
 
 	if len(target_folders) > 1:
 		print(
@@ -309,9 +314,29 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 			+ ", ".join(target_folders)
 		)
 
-	for run_idx, target_folder in enumerate(target_folders, start=1):
+	for run_idx, (target_folder, configured_artifact_folder) in enumerate(
+		zip(target_folders, artifact_folders),
+		start=1,
+	):
+		data_folder_path = Path(target_folder)
+		if not data_folder_path.is_absolute():
+			data_folder_path = (WORKSPACE_ROOT / data_folder_path).resolve()
+		data_folder = str(data_folder_path)
+
 		dataset_config = copy.deepcopy(config)
-		dataset_config["experiment"]["target_folder"] = target_folder
+		dataset_config["experiment"]["target_folder"] = data_folder
+
+		artifact_folder = str(configured_artifact_folder).strip()
+		if not artifact_folder:
+			artifact_folder = "."
+		if artifact_folder == ".":
+			percent_label = infer_dataset_percent_label(Path(data_folder).name)
+			artifact_folder = percent_label if percent_label else Path(data_folder).name
+		artifact_folder_path = Path(artifact_folder)
+		if not artifact_folder_path.is_absolute():
+			artifact_folder_path = (WORKSPACE_ROOT / artifact_folder_path).resolve()
+		artifact_folder = str(artifact_folder_path)
+		dataset_config["experiment"]["artifact_folder"] = artifact_folder
 
 		set_seed(dataset_config["experiment"]["seed"])
 		feature_context = prepare_feature_config(dataset_config)
@@ -332,7 +357,8 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 				"\n============================================================"
 			)
 			print(
-				f"Dataset run {run_idx}/{len(target_folders)} | target_folder={target_folder}"
+				f"Dataset run {run_idx}/{len(target_folders)} | "
+				f"data_folder={data_folder} | artifact_folder={artifact_folder}"
 			)
 			print(
 				"============================================================"
@@ -341,6 +367,8 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 		_run_single_dataset_training(
 			dataset_config,
 			model_class,
+			data_folder=data_folder,
+			artifact_folder=artifact_folder,
 			feature_context=feature_context,
 			target_std_cfg=target_std_cfg,
 			use_target_standardization=use_target_standardization,

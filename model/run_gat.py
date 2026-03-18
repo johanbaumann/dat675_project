@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import copy
 from pathlib import Path
+import re
 from typing import Any
 
 import torch
@@ -48,6 +49,7 @@ from torch_geometric.loader import DataLoader
 # training is guarded by 'if __name__ == "__main__"', so this import is safe.
 from gat_predictor import CONFIG, GATModel
 from gat_utils.checkpoints import load_fold_checkpoint, resolve_checkpoint_path
+from gat_utils.config_helpers import parse_target_folders
 from gat_utils.data_loading import (
     cap_synthetic_train_ratio,
     get_fold_files,
@@ -58,13 +60,19 @@ from gat_utils.features import apply_feature_scalers, fit_feature_scalers, prepa
 from gat_utils.training_helpers import evaluate, predict
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
-DATASETS = ["0%", "33%", "67%"]
+DATA_ROOT = WORKSPACE_ROOT.parent / "data"
+
+DATASET_ALIAS_TO_FOLDER = {
+    "0%": "combination_1300_molecules_and_0_%_synthetic",
+    "33%": "combination_1950_molecules_and_33_%_synthetic",
+    "67%": "combination_3900_molecules_and_67_%_synthetic",
+}
 
 # Change this string to rename the output file, or pass --output at the command line.
 OUTPUT_FILENAME = "gat_results_heldout.csv"
-
-OUTPUT_CSV = WORKSPACE_ROOT / OUTPUT_FILENAME
-OUTPUT_PRED_CSV = WORKSPACE_ROOT / "GAT_predictions_heldout_set.csv"
+OUTPUT_PRED_FILENAME = "GAT_predictions_heldout_set.csv"
+PRETRAIN_OUTPUT_FOLDER = "pretrain"
+NO_PRETRAIN_OUTPUT_FOLDER = "no_pretrain"
 
 # Optional per-dataset/per-fold checkpoint overrides.
 # Set a value to either:
@@ -146,7 +154,17 @@ def _load_holdout_smiles_df(test_path: Path, config: dict[str, Any]) -> pd.DataF
 
 
 def _resolve_selected_checkpoint(dataset_label: str, fold_idx: int, target_folder: str) -> Path:
-    dataset_map: dict[int, int | str | None] = CHECKPOINT_SELECTIONS.get(dataset_label, {})
+    dataset_map: dict[int, int | str | None] = {}
+    lookup_keys = [
+        dataset_label,
+        _canonical_dataset_label(dataset_label),
+        Path(target_folder).name,
+    ]
+    for key in lookup_keys:
+        if key in CHECKPOINT_SELECTIONS:
+            dataset_map = CHECKPOINT_SELECTIONS[key]
+            break
+
     selected_checkpoint = dataset_map.get(fold_idx)
     return resolve_checkpoint_path(
         target_folder,
@@ -156,10 +174,161 @@ def _resolve_selected_checkpoint(dataset_label: str, fold_idx: int, target_folde
     )
 
 
+def _extract_dataset_percent(name: str) -> str | None:
+    if re.fullmatch(r"\d+%", name.strip()):
+        return name.strip()
+
+    match = re.search(r"(\d+)_%_synthetic", name)
+    if match:
+        return f"{match.group(1)}%"
+    return None
+
+
+def _canonical_dataset_label(label: str) -> str:
+    return _extract_dataset_percent(label) or label
+
+
+def _resolve_local_artifact_path(dataset_label: str, dataset_path: Path) -> Path:
+    percent = _extract_dataset_percent(dataset_label) or _extract_dataset_percent(dataset_path.name)
+    folder_name = percent if percent else dataset_path.name
+    return (WORKSPACE_ROOT / folder_name).resolve()
+
+
+def _is_synthetic_pretraining_enabled(config: dict[str, Any]) -> bool:
+    training_cfg = config.get("training", {})
+    synth_pre_cfg = training_cfg.get("synthetic_pretraining", {})
+    return bool(synth_pre_cfg.get("enabled", False))
+
+
+def _resolve_mode_output_dir(config: dict[str, Any]) -> Path:
+    folder_name = (
+        PRETRAIN_OUTPUT_FOLDER
+        if _is_synthetic_pretraining_enabled(config)
+        else NO_PRETRAIN_OUTPUT_FOLDER
+    )
+    return (WORKSPACE_ROOT / folder_name).resolve()
+
+
+def _resolve_results_output_path(args_output: str | None, mode_output_dir: Path) -> Path:
+    if not args_output:
+        return mode_output_dir / OUTPUT_FILENAME
+
+    out_path = Path(args_output)
+    if out_path.is_absolute():
+        return out_path
+
+    # Plain filename: keep automatic mode-based output routing.
+    if len(out_path.parts) == 1:
+        return mode_output_dir / out_path
+
+    # Relative subpath: resolve from workspace root for explicit user control.
+    return (WORKSPACE_ROOT / out_path).resolve()
+
+
+def _resolve_configured_artifact_path(artifact_value: str, dataset_label: str, dataset_path: Path) -> Path:
+    text = str(artifact_value).strip()
+    if not text or text == ".":
+        return _resolve_local_artifact_path(dataset_label, dataset_path)
+
+    path_obj = Path(text)
+    if not path_obj.is_absolute():
+        path_obj = (WORKSPACE_ROOT / path_obj).resolve()
+    return path_obj
+
+
+def _resolve_dataset_entry(dataset_value: str) -> tuple[str, Path, Path]:
+    """Resolve user-provided dataset identifiers to (label, data_path, artifact_path)."""
+    raw = str(dataset_value).strip()
+    if not raw:
+        raise ValueError("Dataset value must not be empty.")
+
+    percent_alias = _extract_dataset_percent(raw)
+    if percent_alias in DATASET_ALIAS_TO_FOLDER:
+        data_folder = DATA_ROOT / DATASET_ALIAS_TO_FOLDER[percent_alias]
+        if data_folder.exists():
+            data_path = data_folder.resolve()
+            return percent_alias, data_path, _resolve_local_artifact_path(percent_alias, data_path)
+
+    path_candidate = Path(raw)
+    explicit_candidates: list[Path] = []
+    if path_candidate.is_absolute():
+        explicit_candidates.append(path_candidate)
+    else:
+        explicit_candidates.extend([
+            WORKSPACE_ROOT / path_candidate,
+            DATA_ROOT / path_candidate,
+        ])
+
+    for candidate in explicit_candidates:
+        if candidate.exists() and candidate.is_dir():
+            resolved = candidate.resolve()
+            label = _canonical_dataset_label(resolved.name)
+            return label, resolved, _resolve_local_artifact_path(label, resolved)
+
+    if raw in DATASET_ALIAS_TO_FOLDER:
+        data_folder = DATA_ROOT / DATASET_ALIAS_TO_FOLDER[raw]
+        if data_folder.exists():
+            data_path = data_folder.resolve()
+            return raw, data_path, _resolve_local_artifact_path(raw, data_path)
+
+    raise FileNotFoundError(
+        f"Could not resolve dataset '{dataset_value}'. "
+        "Provide 0%/33%/67%, a finalized folder name, or a valid folder path."
+    )
+
+
+def _discover_default_datasets(base_config: dict[str, Any]) -> list[tuple[str, Path, Path]]:
+    exp_cfg = base_config.get("experiment", {})
+    configured_data_folders = parse_target_folders(exp_cfg.get("target_folder", []))
+    configured_artifact_folders = parse_target_folders(
+        exp_cfg.get("artifact_folder", ["."])
+    )
+    if len(configured_artifact_folders) == 1 and len(configured_data_folders) > 1:
+        configured_artifact_folders = configured_artifact_folders * len(configured_data_folders)
+    if len(configured_artifact_folders) != len(configured_data_folders):
+        raise ValueError(
+            "CONFIG['experiment']['artifact_folder'] must have either one entry or "
+            "the same number of entries as CONFIG['experiment']['target_folder']."
+        )
+
+    discovered: list[tuple[str, Path, Path]] = []
+    seen_paths: set[Path] = set()
+
+    for folder_value, artifact_value in zip(configured_data_folders, configured_artifact_folders):
+        folder_path = Path(str(folder_value).strip())
+        if not folder_path.is_absolute():
+            folder_path = (WORKSPACE_ROOT / folder_path).resolve()
+        if not folder_path.exists() or not folder_path.is_dir():
+            continue
+        if folder_path in seen_paths:
+            continue
+        seen_paths.add(folder_path)
+        label = _canonical_dataset_label(folder_path.name)
+        artifact_path = _resolve_configured_artifact_path(artifact_value, label, folder_path)
+        discovered.append((label, folder_path, artifact_path))
+
+    if discovered:
+        return discovered
+
+    fallback_entries = [
+        (alias, DATA_ROOT / folder_name)
+        for alias, folder_name in DATASET_ALIAS_TO_FOLDER.items()
+    ]
+    for alias, data_folder in fallback_entries:
+        if data_folder.exists() and data_folder.is_dir():
+            data_path = data_folder.resolve()
+            artifact_path = _resolve_local_artifact_path(alias, data_path)
+            discovered.append((alias, data_path, artifact_path))
+
+    return discovered
+
+
 # ==================== per-dataset evaluation ====================
 
 def evaluate_dataset(
     dataset_label: str,
+    dataset_path: Path,
+    artifact_path: Path,
     base_config: dict[str, Any],
     test_path: Path,
     holdout_smiles_df: pd.DataFrame | None = None,
@@ -174,7 +343,7 @@ def evaluate_dataset(
     Missing checkpoints are skipped with a warning.
     """
     config = copy.deepcopy(base_config)
-    config["experiment"]["target_folder"] = str(WORKSPACE_ROOT / dataset_label)
+    config["experiment"]["target_folder"] = str(dataset_path)
 
     feature_context = prepare_feature_config(config)
 
@@ -188,7 +357,7 @@ def evaluate_dataset(
         ckpt_path = _resolve_selected_checkpoint(
             dataset_label,
             fold_idx,
-            config["experiment"]["target_folder"],
+            str(artifact_path),
         )
         if not ckpt_path.exists():
             print(
@@ -340,7 +509,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="DATASET",
         help="Evaluate only one dataset folder, e.g. '0%%', '33%%', '67%%'. "
-             "Omit to evaluate all datasets.",
+               "You can also pass a finalized folder name or a folder path. "
+               "Omit to evaluate all configured datasets.",
     )
     parser.add_argument(
         "--test-file",
@@ -363,8 +533,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-
-    output_csv = WORKSPACE_ROOT / (args.output if args.output else OUTPUT_FILENAME)
+    mode_output_dir = _resolve_mode_output_dir(CONFIG)
+    mode_output_dir.mkdir(parents=True, exist_ok=True)
+    output_csv = _resolve_results_output_path(args.output, mode_output_dir)
+    output_pred_csv = mode_output_dir / OUTPUT_PRED_FILENAME
 
     test_path = (
         Path(args.test_file)
@@ -374,19 +546,40 @@ def main() -> None:
     if not test_path.exists():
         raise FileNotFoundError(f"Holdout test file not found: {test_path}")
 
-    datasets = [args.folder] if args.folder else DATASETS
+    datasets: list[tuple[str, Path, Path]]
+    if args.folder:
+        datasets = [_resolve_dataset_entry(args.folder)]
+    else:
+        datasets = _discover_default_datasets(CONFIG)
+
+    if not datasets:
+        raise FileNotFoundError(
+            "No dataset folders were found. "
+            "Check CONFIG['experiment']['target_folder'] or pass --folder explicitly."
+        )
+
+    mode_label = "pretrain" if _is_synthetic_pretraining_enabled(CONFIG) else "no_pretrain"
+    print(f"Output mode resolved from CONFIG: {mode_label} -> {mode_output_dir}")
 
     all_results: list[dict[str, Any]] = []
     all_pred_rows: list[pd.DataFrame] = []
-    for dataset_label in datasets:
-        folder_path = WORKSPACE_ROOT / dataset_label
-        if not folder_path.exists():
-            print(f"[SKIP] Dataset folder not found: {folder_path}")
+    for dataset_label, dataset_path, artifact_path in datasets:
+        if not dataset_path.exists():
+            print(f"[SKIP] Dataset folder not found: {dataset_path}")
             continue
-        print(f"\n=== Evaluating dataset: {dataset_label} ===")
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        print(
+            f"\n=== Evaluating dataset: {dataset_label} "
+            f"(data={dataset_path}, artifacts={artifact_path}) ==="
+        )
         holdout_smiles_df = _load_holdout_smiles_df(test_path, CONFIG)
         metric_results, pred_df = evaluate_dataset(
-            dataset_label, CONFIG, test_path, holdout_smiles_df
+            dataset_label,
+            dataset_path,
+            artifact_path,
+            CONFIG,
+            test_path,
+            holdout_smiles_df,
         )
         all_results.extend(metric_results)
         if not pred_df.empty:
@@ -406,8 +599,8 @@ def main() -> None:
 
     if all_pred_rows:
         pred_all = pd.concat(all_pred_rows, ignore_index=True)
-        pred_all.to_csv(OUTPUT_PRED_CSV, index=False)
-        print(f"\nSaved per-fold predictions ({len(pred_all)} rows) to: {OUTPUT_PRED_CSV}")
+        pred_all.to_csv(output_pred_csv, index=False)
+        print(f"\nSaved per-fold predictions ({len(pred_all)} rows) to: {output_pred_csv}")
         print(pred_all.head(10).to_string(index=False))
 
 

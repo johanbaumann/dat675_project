@@ -118,6 +118,24 @@ def _get_available_synthetic_files(dir_path: Path) -> dict[int, Path]:
 	return files
 
 
+def _resolve_fold_file(dir_path: Path, fold_idx: int) -> Path:
+	"""Resolve a fold CSV path across legacy and finalized naming schemes."""
+	candidates = [
+		dir_path / f"fold_{fold_idx}.csv",
+		dir_path / f"original_fold_{fold_idx}.csv",
+		dir_path / f"fold_{fold_idx}",
+		dir_path / f"original_fold_{fold_idx}",
+	]
+	for candidate in candidates:
+		if candidate.exists():
+			return candidate
+
+	raise FileNotFoundError(
+		f"Missing fold file for fold index {fold_idx} in '{dir_path}'. "
+		"Tried: fold_<k>.csv and original_fold_<k>.csv naming patterns."
+	)
+
+
 def _select_synthetic_indices(
 	*,
 	selection: str,
@@ -142,13 +160,13 @@ def get_fold_files(
 	total_folds: int = 5,
 ):
 	dir_path = Path(target_dir)
-	val_file = dir_path / f"fold_{val_idx}.csv"
+	val_file = _resolve_fold_file(dir_path, val_idx)
 
 	policy = get_synthetic_cv_config(config)
 	available_synth = _get_available_synthetic_files(dir_path)
 	train_fold_indices = [i for i in range(total_folds) if i != val_idx]
 
-	train_files = [dir_path / f"fold_{i}.csv" for i in train_fold_indices]
+	train_files = [_resolve_fold_file(dir_path, i) for i in train_fold_indices]
 	val_files = [val_file]
 	train_synth_indices: set[int] = set()
 

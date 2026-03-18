@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -92,6 +93,21 @@ def parse_target_folders(target_folder_value: Any) -> list[str]:
 	raise ValueError(f"{field_name} must be a string path or a list of string paths.")
 
 
+def infer_dataset_percent_label(value: str) -> str | None:
+	text = str(value).strip()
+	if not text:
+		return None
+
+	if re.fullmatch(r"\d+%", text):
+		return text
+
+	match = re.search(r"(\d+)_%_synthetic", text)
+	if match:
+		return f"{match.group(1)}%"
+
+	return None
+
+
 def is_minimize_metric(metric_name: str) -> bool:
 	return str(metric_name).lower().strip() in MINIMIZE_METRICS
 
@@ -164,9 +180,21 @@ def get_experiment_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
 	data_cfg = as_dict(config.get("data", {}))
 	training_cfg = as_dict(config.get("training", {}))
 	target_folders = parse_target_folders(exp_cfg.get("target_folder", "."))
+	artifact_folders = parse_target_folders(
+		exp_cfg.get("artifact_folder", target_folders)
+	)
+	if len(artifact_folders) == 1 and len(target_folders) > 1:
+		artifact_folders = artifact_folders * len(target_folders)
+	if len(artifact_folders) != len(target_folders):
+		raise ValueError(
+			"CONFIG['experiment']['artifact_folder'] must have either one entry or "
+			"the same number of entries as CONFIG['experiment']['target_folder']."
+		)
 	return {
 		"target_folder": target_folders[0],
 		"target_folders": target_folders,
+		"artifact_folder": artifact_folders[0],
+		"artifact_folders": artifact_folders,
 		"actual_test_file": str(exp_cfg.get("actual_test_file", "heldout_testset.csv")),
 		"total_folds": int(exp_cfg.get("total_folds", 5)),
 		"batch_size": int(data_cfg.get("batch_size", 64)),
