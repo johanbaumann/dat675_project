@@ -93,10 +93,13 @@ clean_dataset = clean_and_process_dataframe(bace_df, "mol", "pIC50")
 sorted_dataset = sort_dataset_by_scaffolds(clean_dataset)
 holdout_set, data_folds = split_data_by_scaffolds_dataset(sorted_dataset, len(clean_dataset), 200, 5)
 
-directory = f"/data"
+directory = f"data/heldout_datasets"
+if not os.path.exists(directory): os.makedirs(directory)
 saving_df = pd.DataFrame(data=holdout_set, columns=["smiles", "pIC50"])
 saving_df.to_csv(f"{directory}/heldout_testset.csv")
 
+directory = f"data/combination_1300_molecules_and_0_%_synthetic"
+if not os.path.exists(directory): os.makedirs(directory)
 for fold_index in range(len(data_folds)):
     saving_df = pd.DataFrame(data=data_folds[fold_index], columns=["smiles", "pIC50"])
     saving_df.to_csv(f"{directory}/original_fold_{fold_index}.csv")
