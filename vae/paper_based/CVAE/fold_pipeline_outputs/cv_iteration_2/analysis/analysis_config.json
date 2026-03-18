@@ -1,0 +1,26 @@
+{
+  "profile": "bace_pic50_10k",
+  "overrides": {
+    "train_folder": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_2\\training",
+    "train_data_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\data\\cv_iteration_2_train_merged.csv",
+    "validation_data_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_2.csv",
+    "generated_data_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\generated\\generated.csv",
+    "quality_summary_data_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\generated\\quality_summary.csv",
+    "output_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\analysis",
+    "smiles_column": "smiles",
+    "train_sep": ",",
+    "validation_sep": ",",
+    "generated_sep": ",",
+    "target_property_column": "pIC50",
+    "predicted_property_column": "pred_pIC50",
+    "run_prediction_error_plot": true,
+    "debug": true,
+    "save_distribution_plot": true,
+    "save_scaffold_plot": true,
+    "save_scaffold_grids": true,
+    "run_train_loss_plot": true,
+    "run_tanimoto_histogram": true,
+    "run_chemical_space": true,
+    "run_descriptor_space": false
+  }
+}

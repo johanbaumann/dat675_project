@@ -237,5 +237,11 @@
       "completed_unix": 1773791831.1464715
     }
   ],
-  "started_unix": 1773788988.195989
+  "started_unix": 1773788988.195989,
+  "finished_unix": 1773791833.2852755,
+  "duration_sec": 2845.0892865657806,
+  "cross_fold_analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cross_fold_analysis_summary.json",
+  "cv_combo_metrics_plot_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_combo\\cv_combo_metrics_summary.png",
+  "cv_combo_metrics_boxplot_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_combo\\cv_combo_metrics_boxplots.png",
+  "cv_combo_metrics_stats_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_combo\\cv_combo_metrics_stats.json"
 }
