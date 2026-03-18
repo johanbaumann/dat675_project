@@ -1,12 +1,12 @@
 {
-  "unique_train_scaffolds": 465,
+  "unique_train_scaffolds": 470,
   "unique_validation_scaffolds": 180,
   "unique_generated_scaffolds": 5908,
-  "overlap_scaffolds": 124,
-  "overlap_train_validation_scaffolds": 25,
-  "overlap_validation_generated_scaffolds": 13,
-  "novel_generated_scaffolds": 5784,
-  "novel_generated_scaffolds_vs_train_validation": 5779,
+  "overlap_scaffolds": 125,
+  "overlap_train_validation_scaffolds": 24,
+  "overlap_validation_generated_scaffolds": 15,
+  "novel_generated_scaffolds": 5783,
+  "novel_generated_scaffolds_vs_train_validation": 5778,
   "top_train_scaffolds": [
     {
       "scaffold": "O=S1(=O)CC(Cc2ccccc2)CC(NCc2ccccc2)C1",

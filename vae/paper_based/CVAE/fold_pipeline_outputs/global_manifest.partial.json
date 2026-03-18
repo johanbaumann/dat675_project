@@ -1,7 +1,7 @@
 {
   "config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline\\fold_pipeline_config.example.json",
-  "workspace_root": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae",
-  "train_validation_folds_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic",
+  "workspace_root": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae",
+  "train_validation_folds_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic",
   "training_output_root": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs",
   "artifacts_output_root": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs",
   "num_iterations": 5,
@@ -9,19 +9,19 @@
     {
       "iteration_index": 0,
       "iteration_name": "cv_iteration_0",
-      "validation_fold_name": "fold_0",
+      "validation_fold_name": "original_fold_0",
       "training_fold_names": [
-        "fold_1",
-        "fold_2",
-        "fold_3",
-        "fold_4"
+        "original_fold_1",
+        "original_fold_2",
+        "original_fold_3",
+        "original_fold_4"
       ],
-      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_0.csv",
+      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv",
       "training_csvs": [
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_1.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_2.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_3.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_4.csv"
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_1.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_2.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_3.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_4.csv"
       ],
       "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_train_prop.txt",
       "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_validation_prop.txt",
@@ -31,43 +31,33 @@
       "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
       "sampling_result": {
         "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
-        "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_0\\training\\model_best.ckpt-30.pt",
+        "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
         "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\generated.csv",
         "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\generated\\quality_summary.csv",
         "num_saved": 10000,
-        "stats": {
-          "total_generated": 34688,
-          "accepted": 10353,
-          "invalid_or_empty": 22315,
-          "discarded_cleanup": 0,
-          "in_training": 504,
-          "duplicate": 1513,
-          "rejected_by_filter": 338,
-          "salt_stripped": 0,
-          "tautomer_canonicalized": 1669
-        }
+        "stats": {}
       },
       "analysis_enabled": true,
       "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\analysis\\analysis_config.json",
       "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_0\\analysis\\analysis_summary.json",
-      "completed_unix": 1773789568.5661404
+      "completed_unix": 1773830176.4833477
     },
     {
       "iteration_index": 1,
       "iteration_name": "cv_iteration_1",
-      "validation_fold_name": "fold_1",
+      "validation_fold_name": "original_fold_1",
       "training_fold_names": [
-        "fold_0",
-        "fold_2",
-        "fold_3",
-        "fold_4"
+        "original_fold_0",
+        "original_fold_2",
+        "original_fold_3",
+        "original_fold_4"
       ],
-      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_1.csv",
+      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_1.csv",
       "training_csvs": [
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_0.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_2.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_3.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_4.csv"
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_2.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_3.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_4.csv"
       ],
       "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_1\\data\\cv_iteration_1_train_prop.txt",
       "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_1\\data\\cv_iteration_1_validation_prop.txt",
@@ -77,43 +67,33 @@
       "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_1\\training",
       "sampling_result": {
         "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_1\\training",
-        "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_1\\training\\model_best.ckpt-46.pt",
+        "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
         "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_1\\generated\\generated.csv",
         "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_1\\generated\\quality_summary.csv",
         "num_saved": 10000,
-        "stats": {
-          "total_generated": 30528,
-          "accepted": 10630,
-          "invalid_or_empty": 17177,
-          "discarded_cleanup": 0,
-          "in_training": 782,
-          "duplicate": 1939,
-          "rejected_by_filter": 611,
-          "salt_stripped": 0,
-          "tautomer_canonicalized": 1731
-        }
+        "stats": {}
       },
       "analysis_enabled": true,
       "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_1\\analysis\\analysis_config.json",
       "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_1\\analysis\\analysis_summary.json",
-      "completed_unix": 1773790131.0643988
+      "completed_unix": 1773830369.6288257
     },
     {
       "iteration_index": 2,
       "iteration_name": "cv_iteration_2",
-      "validation_fold_name": "fold_2",
+      "validation_fold_name": "original_fold_2",
       "training_fold_names": [
-        "fold_0",
-        "fold_1",
-        "fold_3",
-        "fold_4"
+        "original_fold_0",
+        "original_fold_1",
+        "original_fold_3",
+        "original_fold_4"
       ],
-      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_2.csv",
+      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_2.csv",
       "training_csvs": [
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_0.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_1.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_3.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_4.csv"
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_1.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_3.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_4.csv"
       ],
       "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\data\\cv_iteration_2_train_prop.txt",
       "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\data\\cv_iteration_2_validation_prop.txt",
@@ -123,43 +103,33 @@
       "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_2\\training",
       "sampling_result": {
         "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_2\\training",
-        "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_2\\training\\model_best.ckpt-40.pt",
+        "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
         "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\generated\\generated.csv",
         "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\generated\\quality_summary.csv",
         "num_saved": 10000,
-        "stats": {
-          "total_generated": 34176,
-          "accepted": 10289,
-          "invalid_or_empty": 21978,
-          "discarded_cleanup": 0,
-          "in_training": 681,
-          "duplicate": 1226,
-          "rejected_by_filter": 277,
-          "salt_stripped": 0,
-          "tautomer_canonicalized": 1527
-        }
+        "stats": {}
       },
       "analysis_enabled": true,
       "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\analysis\\analysis_config.json",
       "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_2\\analysis\\analysis_summary.json",
-      "completed_unix": 1773790697.0085948
+      "completed_unix": 1773830567.0670857
     },
     {
       "iteration_index": 3,
       "iteration_name": "cv_iteration_3",
-      "validation_fold_name": "fold_3",
+      "validation_fold_name": "original_fold_3",
       "training_fold_names": [
-        "fold_0",
-        "fold_1",
-        "fold_2",
-        "fold_4"
+        "original_fold_0",
+        "original_fold_1",
+        "original_fold_2",
+        "original_fold_4"
       ],
-      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_3.csv",
+      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_3.csv",
       "training_csvs": [
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_0.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_1.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_2.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_4.csv"
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_1.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_2.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_4.csv"
       ],
       "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_3\\data\\cv_iteration_3_train_prop.txt",
       "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_3\\data\\cv_iteration_3_validation_prop.txt",
@@ -169,43 +139,33 @@
       "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_3\\training",
       "sampling_result": {
         "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_3\\training",
-        "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_3\\training\\model_best.ckpt-37.pt",
+        "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
         "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_3\\generated\\generated.csv",
         "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_3\\generated\\quality_summary.csv",
         "num_saved": 10000,
-        "stats": {
-          "total_generated": 32192,
-          "accepted": 10297,
-          "invalid_or_empty": 19969,
-          "discarded_cleanup": 0,
-          "in_training": 544,
-          "duplicate": 1381,
-          "rejected_by_filter": 282,
-          "salt_stripped": 0,
-          "tautomer_canonicalized": 1334
-        }
+        "stats": {}
       },
       "analysis_enabled": true,
       "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_3\\analysis\\analysis_config.json",
       "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_3\\analysis\\analysis_summary.json",
-      "completed_unix": 1773791243.017295
+      "completed_unix": 1773830756.1704297
     },
     {
       "iteration_index": 4,
       "iteration_name": "cv_iteration_4",
-      "validation_fold_name": "fold_4",
+      "validation_fold_name": "original_fold_4",
       "training_fold_names": [
-        "fold_0",
-        "fold_1",
-        "fold_2",
-        "fold_3"
+        "original_fold_0",
+        "original_fold_1",
+        "original_fold_2",
+        "original_fold_3"
       ],
-      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_4.csv",
+      "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_4.csv",
       "training_csvs": [
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_0.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_1.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_2.csv",
-        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\Preprocessing\\combination_1300_molecules_and_0_%_synthetic\\fold_3.csv"
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_1.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_2.csv",
+        "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_3.csv"
       ],
       "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\data\\cv_iteration_4_train_prop.txt",
       "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\data\\cv_iteration_4_validation_prop.txt",
@@ -215,27 +175,17 @@
       "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_4\\training",
       "sampling_result": {
         "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_4\\training",
-        "checkpoint_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_4\\training\\model_best.ckpt-36.pt",
+        "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
         "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\generated\\generated.csv",
         "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\generated\\quality_summary.csv",
         "num_saved": 10000,
-        "stats": {
-          "total_generated": 37184,
-          "accepted": 10394,
-          "invalid_or_empty": 24759,
-          "discarded_cleanup": 0,
-          "in_training": 534,
-          "duplicate": 1495,
-          "rejected_by_filter": 392,
-          "salt_stripped": 0,
-          "tautomer_canonicalized": 1385
-        }
+        "stats": {}
       },
       "analysis_enabled": true,
       "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\analysis\\analysis_config.json",
       "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\analysis\\analysis_summary.json",
-      "completed_unix": 1773791831.1464715
+      "completed_unix": 1773830945.6827962
     }
   ],
-  "started_unix": 1773788988.195989
+  "started_unix": 1773829987.2305593
 }

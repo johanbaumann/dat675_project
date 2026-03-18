@@ -12,9 +12,9 @@ from typing import Optional
 Beta-CVAE model for molecule generation + optional auxiliary label predictor.
 
 This file is a non-breaking extension of the base CVAE:
-- The conditioning vector `c` (properties) is unchanged.
+- The conditioning vector 'c' (properties) is unchanged.
 - When disabled (default), the model behaves like the original CVAE.
-- When enabled, the model also predicts labels from the latent `z`.
+- When enabled, the model also predicts labels from the latent 'z'.
 
 Its a combo of three different papers:
 Beta-VAE style KL annealing and optional label prediction loss for multi-task learning.
@@ -38,7 +38,7 @@ https://arxiv.org/pdf/1610.02415
 CHANGELOG
 ---------
 2026-02-23
-- Added optional label prediction head 'label_head' (reads latent 'z').
+- Added optional label prediction head 'label_head' (reads latent 'z'), and optionaly condition vector 'c'.
 - Added config knobs: 'predict_labels', 'label_dim', 'label_loss_weight'.
 - Added optional 'label_loss' to the total loss and metrics.
 - Kept sampling pipeline unchanged; forward signature is backward compatible
@@ -99,8 +99,8 @@ class CVAE(nn.Module):
         # Defaults are chosen to keep older configs/checkpoints working.
         self.predict_labels = bool(self._get_arg_or_default(args, 'predict_labels', False))
         self.label_dim = int(self._get_arg_or_default(args, 'label_dim', 0))
-        # Alias: `lambda_label` matches common ELBO notation.
-        # Keep `label_loss_weight` as the canonical key for checkpoint compatibility.
+        # Alias: 'lambda_label' matches common ELBO notation.
+        # Keep 'label_loss_weight' as the canonical key for checkpoint compatibility.
         if 'label_loss_weight' in args:
             self.label_loss_weight = float(self._get_arg_or_default(args, 'label_loss_weight', 1.0))
         else:
@@ -108,11 +108,20 @@ class CVAE(nn.Module):
         self.include_condition_in_label_head = bool(self._get_arg_or_default(args, 'include_condition_in_label_head', False))
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        ####################################################################
+        #NOTE: AMP for speedup of transformer...
+        ####################################################################
         if self.amp_dtype_name not in ('float16', 'bfloat16'):
             raise ValueError("amp_dtype must be either 'float16' or 'bfloat16'.")
         self.amp_dtype = torch.float16 if self.amp_dtype_name == 'float16' else torch.bfloat16
         self.amp_enabled = bool(self.use_amp and self.device.type == 'cuda')
         self.use_grad_scaler = bool(self.amp_enabled and self.amp_dtype == torch.float16)
+
+
+
+
+        # NOTE: main mode logic.
 
         if self.model_mode == 'lstm':
             self.embedding = nn.Embedding(self.vocab_size, self.latent_size)
@@ -123,7 +132,7 @@ class CVAE(nn.Module):
                 num_layers=self.n_rnn_layer,
                 batch_first=True,
             )
-
+            # concat of sampled latent vec 'z', x_emb, and cond vec 'c' as input at each step.
             self.decoder = nn.LSTM(
                 input_size=(self.latent_size * 2) + self.num_prop,
                 hidden_size=self.unit_size,
@@ -187,7 +196,13 @@ class CVAE(nn.Module):
                     nn.ReLU(),
                     nn.Linear(self.unit_size, self.label_dim),
                 )
-
+        
+        """
+        Adamw is more stable for training transformer-based models, especially with weight decay.
+        For LSTM-based models, Adam is usually sufficient.
+        
+        
+        """
         if self.optimizer_name == 'adamw':
             if self.weight_decay > 0:
                 self.optimizer = torch.optim.AdamW(self._build_adamw_param_groups(), lr=self.lr)
@@ -276,7 +291,7 @@ class CVAE(nn.Module):
 
     def encode(self, x: torch.Tensor, c: torch.Tensor, l: torch.Tensor) -> tuple:
         """
-        Encoding function that maps input to latent vector `z`:
+        Encoding function that maps input to latent vector 'z':
         - For lstm: input at each step is [x_emb, c], where c is repeated across sequence length.
         - For transformer: input at each step is [x_emb, c] projected to unit_size, with no recurrence and cross-attention to [z, c] memory.
         
@@ -324,17 +339,17 @@ class CVAE(nn.Module):
     def predict_label(self, z: torch.Tensor, c: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Predict auxiliary labels from latent vector (optionally conditioned).
 
-        By default this predicts from `z` only:
+        By default this predicts from 'z' only:
             y_hat = f_label(z)
 
-        If `include_condition_in_label_head=True`, then the label head predicts from
+        If 'include_condition_in_label_head=True', then the label head predicts from
         the concatenation of the latent vector and the conditioning properties:
             y_hat = f_label([z, c])
 
         Notes:
-          - Only valid if `self.predict_labels` is True.
-          - `z` should have shape (batch, latent_size).
-          - If `include_condition_in_label_head=True`, `c` must be provided with
+          - Only valid if 'self.predict_labels' is True.
+          - 'z' should have shape (batch, latent_size).
+          - If 'include_condition_in_label_head=True', 'c' must be provided with
             shape (batch, num_prop).
         """
         if not self.predict_labels:
@@ -342,7 +357,7 @@ class CVAE(nn.Module):
 
         if self.include_condition_in_label_head:
             if c is None:
-                raise RuntimeError('predict_label() requires conditioning `c` when include_condition_in_label_head=True')
+                raise RuntimeError('predict_label() requires conditioning "c" when include_condition_in_label_head=True')
             return self.label_head(torch.cat([z, c], dim=-1))
 
         return self.label_head(z)
@@ -405,7 +420,7 @@ class CVAE(nn.Module):
         probs, logits, _ = self.decode(x, z, c, lengths=l)
 
         if self.predict_labels:
-            # If configured, the label head can also use the conditioning vector `c`.
+            # If configured, the label head can also use the conditioning vector 'c'.
             y_hat = self.predict_label(z, c=c)
             return probs, logits, z, mean, log_sigma, y_hat
         return probs, logits, z, mean, log_sigma

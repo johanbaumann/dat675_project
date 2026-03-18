@@ -95,7 +95,7 @@ def _to_float(value, *, default: Optional[float] = None) -> Optional[float]:
         return default
     raw = str(value).strip()
     if raw == '':
-        return defaultb
+        return default
     try:
         return float(raw)
     except Exception:
@@ -198,10 +198,15 @@ def _write_cross_fold_analysis_summary(
     diversity_weight_sum = 0
     mean_tanimoto_weighted_sum = 0.0
     mean_tanimoto_weight_sum = 0
+    internal_diversity_weighted_sum = 0.0
+    internal_diversity_weight_sum = 0
+    internal_mean_tanimoto_weighted_sum = 0.0
+    internal_mean_tanimoto_weight_sum = 0
 
     per_fold: list[dict] = []
     folds_with_quality = 0
     folds_with_diversity = 0
+    folds_with_internal_diversity = 0
 
     for fold in iterations:
         fold_name = str(fold.get('iteration_name', 'unknown_fold'))
@@ -219,6 +224,17 @@ def _write_cross_fold_analysis_summary(
             'acceptance_rate': None,
             'diversity_score': None,
             'mean_tanimoto_all_pairs': None,
+            'diversity_internal_score': None,
+            'mean_tanimoto_internal_all_pairs': None,
+            'internal_similarity_mode': None,
+            'internal_similarity_pairs_used': None,
+            'internal_similarity_pairs_total': None,
+            'pred_vs_ref_mae': None,
+            'pred_vs_ref_std_ae': None,
+            'pred_vs_ref_count': None,
+            'target_vs_ref_mae': None,
+            'target_vs_ref_std_ae': None,
+            'target_vs_ref_count': None,
         }
 
         if quality_path and os.path.isfile(quality_path):
@@ -263,7 +279,18 @@ def _write_cross_fold_analysis_summary(
             summary = dict(payload.get('summary', {}) or {})
             div = _to_float(summary.get('diversity_score'))
             mean_sim = _to_float(summary.get('mean_tanimoto_all_pairs'))
+            div_internal = _to_float(summary.get('diversity_internal_score'))
+            mean_sim_internal = _to_float(summary.get('mean_tanimoto_internal_all_pairs'))
+            internal_mode = summary.get('internal_similarity_mode')
+            internal_pairs_used = _to_int(summary.get('internal_similarity_pairs_used'), default=0)
+            internal_pairs_total = _to_int(summary.get('internal_similarity_pairs_total'), default=0)
             n_rows = _to_int(summary.get('num_generated_rows'), default=generated_rows)
+            pred_mae = _to_float(summary.get('pred_vs_ref_mae'))
+            pred_std_ae = _to_float(summary.get('pred_vs_ref_std_ae'))
+            pred_count = _to_int(summary.get('pred_vs_ref_count'), default=0)
+            target_mae = _to_float(summary.get('target_vs_ref_mae'))
+            target_std_ae = _to_float(summary.get('target_vs_ref_std_ae'))
+            target_count = _to_int(summary.get('target_vs_ref_count'), default=0)
             if div is not None and n_rows > 0:
                 diversity_weighted_sum += float(div) * float(n_rows)
                 diversity_weight_sum += int(n_rows)
@@ -273,6 +300,33 @@ def _write_cross_fold_analysis_summary(
                 mean_tanimoto_weighted_sum += float(mean_sim) * float(n_rows)
                 mean_tanimoto_weight_sum += int(n_rows)
                 fold_row['mean_tanimoto_all_pairs'] = float(mean_sim)
+            if div_internal is not None and n_rows > 0:
+                internal_diversity_weighted_sum += float(div_internal) * float(n_rows)
+                internal_diversity_weight_sum += int(n_rows)
+                fold_row['diversity_internal_score'] = float(div_internal)
+                folds_with_internal_diversity += 1
+            if mean_sim_internal is not None and n_rows > 0:
+                internal_mean_tanimoto_weighted_sum += float(mean_sim_internal) * float(n_rows)
+                internal_mean_tanimoto_weight_sum += int(n_rows)
+                fold_row['mean_tanimoto_internal_all_pairs'] = float(mean_sim_internal)
+            if internal_mode is not None:
+                fold_row['internal_similarity_mode'] = str(internal_mode)
+            if internal_pairs_used > 0:
+                fold_row['internal_similarity_pairs_used'] = int(internal_pairs_used)
+            if internal_pairs_total > 0:
+                fold_row['internal_similarity_pairs_total'] = int(internal_pairs_total)
+            if pred_mae is not None:
+                fold_row['pred_vs_ref_mae'] = float(pred_mae)
+            if pred_std_ae is not None:
+                fold_row['pred_vs_ref_std_ae'] = float(pred_std_ae)
+            if pred_count > 0:
+                fold_row['pred_vs_ref_count'] = int(pred_count)
+            if target_mae is not None:
+                fold_row['target_vs_ref_mae'] = float(target_mae)
+            if target_std_ae is not None:
+                fold_row['target_vs_ref_std_ae'] = float(target_std_ae)
+            if target_count > 0:
+                fold_row['target_vs_ref_count'] = int(target_count)
 
         per_fold.append(fold_row)
 
@@ -295,11 +349,22 @@ def _write_cross_fold_analysis_summary(
         if diversity_weight_sum > 0
         else None
     )
+    internal_mean_tanimoto_weighted = (
+        float(internal_mean_tanimoto_weighted_sum) / float(internal_mean_tanimoto_weight_sum)
+        if internal_mean_tanimoto_weight_sum > 0
+        else None
+    )
+    internal_diversity_weighted = (
+        float(internal_diversity_weighted_sum) / float(internal_diversity_weight_sum)
+        if internal_diversity_weight_sum > 0
+        else None
+    )
 
     payload = {
         'num_iterations': int(len(iterations)),
         'num_folds_with_quality_summary': int(folds_with_quality),
         'num_folds_with_diversity_summary': int(folds_with_diversity),
+        'num_folds_with_internal_diversity_summary': int(folds_with_internal_diversity),
         'quality_counts': {
             'total_generated': int(total_generated),
             'accepted': int(accepted),
@@ -325,12 +390,114 @@ def _write_cross_fold_analysis_summary(
             'weighted_mean_tanimoto_all_pairs': mean_tanimoto_weighted,
             'weighted_diversity_score': diversity_weighted,
             'weight_total_generated_rows': int(diversity_weight_sum),
+            'weighted_mean_tanimoto_external_all_pairs': mean_tanimoto_weighted,
+            'weighted_diversity_external_score': diversity_weighted,
+            'weight_total_generated_rows_external': int(diversity_weight_sum),
+            'weighted_mean_tanimoto_internal_all_pairs': internal_mean_tanimoto_weighted,
+            'weighted_diversity_internal_score': internal_diversity_weighted,
+            'weight_total_generated_rows_internal': int(internal_diversity_weight_sum),
         },
         'per_fold': per_fold,
     }
 
     out_path = _write_json(os.path.join(artifacts_root, 'cross_fold_analysis_summary.json'), payload)
     print(f'[analysis] cross-fold summary written: {out_path}')
+    return out_path
+
+
+def _write_cv_combo_error_summary_csv(*, cross_fold_summary_path: str, artifacts_root: str) -> Optional[str]:
+    payload = _read_json(cross_fold_summary_path)
+    per_fold = list(payload.get('per_fold', []) or [])
+    if len(per_fold) == 0:
+        return None
+
+    out_dir = os.path.join(artifacts_root, 'cv_combo')
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.abspath(os.path.join(out_dir, 'cv_combo_error_stats.csv'))
+
+    fieldnames = [
+        'iteration_name',
+        'pred_vs_ref_count',
+        'pred_vs_ref_mae',
+        'pred_vs_ref_std_ae',
+        'target_vs_ref_count',
+        'target_vs_ref_mae',
+        'target_vs_ref_std_ae',
+        'mae_gap_target_minus_pred',
+    ]
+
+    pred_weighted_sum = 0.0
+    pred_weight_total = 0
+    target_weighted_sum = 0.0
+    target_weight_total = 0
+    rows: list[dict] = []
+
+    for row in per_fold:
+        pred_count = _to_int(row.get('pred_vs_ref_count'), default=0)
+        pred_mae = _to_float(row.get('pred_vs_ref_mae'))
+        pred_std = _to_float(row.get('pred_vs_ref_std_ae'))
+        target_count = _to_int(row.get('target_vs_ref_count'), default=0)
+        target_mae = _to_float(row.get('target_vs_ref_mae'))
+        target_std = _to_float(row.get('target_vs_ref_std_ae'))
+
+        if pred_mae is not None and pred_count > 0:
+            pred_weighted_sum += float(pred_mae) * float(pred_count)
+            pred_weight_total += int(pred_count)
+        if target_mae is not None and target_count > 0:
+            target_weighted_sum += float(target_mae) * float(target_count)
+            target_weight_total += int(target_count)
+
+        mae_gap = None
+        if pred_mae is not None and target_mae is not None:
+            mae_gap = float(target_mae) - float(pred_mae)
+
+        rows.append(
+            {
+                'iteration_name': str(row.get('iteration_name', 'unknown_fold')),
+                'pred_vs_ref_count': int(pred_count) if pred_count > 0 else None,
+                'pred_vs_ref_mae': pred_mae,
+                'pred_vs_ref_std_ae': pred_std,
+                'target_vs_ref_count': int(target_count) if target_count > 0 else None,
+                'target_vs_ref_mae': target_mae,
+                'target_vs_ref_std_ae': target_std,
+                'mae_gap_target_minus_pred': mae_gap,
+            }
+        )
+
+    pred_weighted_mae = (
+        float(pred_weighted_sum) / float(pred_weight_total)
+        if pred_weight_total > 0
+        else None
+    )
+    target_weighted_mae = (
+        float(target_weighted_sum) / float(target_weight_total)
+        if target_weight_total > 0
+        else None
+    )
+    combined_gap = None
+    if pred_weighted_mae is not None and target_weighted_mae is not None:
+        combined_gap = float(target_weighted_mae) - float(pred_weighted_mae)
+
+    rows.append(
+        {
+            'iteration_name': '__weighted_mean__',
+            'pred_vs_ref_count': int(pred_weight_total) if pred_weight_total > 0 else None,
+            'pred_vs_ref_mae': pred_weighted_mae,
+            'pred_vs_ref_std_ae': None,
+            'target_vs_ref_count': int(target_weight_total) if target_weight_total > 0 else None,
+            'target_vs_ref_mae': target_weighted_mae,
+            'target_vs_ref_std_ae': None,
+            'mae_gap_target_minus_pred': combined_gap,
+        }
+    )
+
+    with open(out_path, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+    print(f'[analysis] cv_combo error summary written: {out_path}')
     return out_path
 
 def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root: str) -> dict:
@@ -367,7 +534,8 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
         ('validity', 'Validity', '#1E3A8A'),
         ('uniqueness', 'Uniqueness', '#0F766E'),
         ('novelty', 'Novelty', '#7C3AED'),
-        ('diversity_score', 'Diversity', '#B45309'),
+        ('diversity_score', 'Diversity External', '#B45309'),
+        ('diversity_internal_score', 'Diversity Internal', '#0EA5E9'),
     ]
     iteration_names = [str(row.get('iteration_name', f'fold_{i}')) for i, row in enumerate(per_fold)]
     x_all = np.arange(len(iteration_names), dtype=float)
@@ -381,8 +549,10 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
     # -------------------------------------------------------------------------
     # Plot 1: Fold-value line plots + mean + stderr band + std band
     # -------------------------------------------------------------------------
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=True)
-    axes_list = list(axes.ravel())
+    n_cols = 2
+    n_rows = int(np.ceil(float(len(metric_specs)) / float(n_cols)))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, max(8.5, 4.2 * n_rows)), sharex=True)
+    axes_list = list(np.asarray(axes).reshape(-1))
 
     for ax, (metric_key, metric_title, color) in zip(axes_list, metric_specs):
         values = np.asarray([_to_float(row.get(metric_key)) for row in per_fold], dtype=float)
@@ -466,7 +636,7 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
         ax.set_ylabel(metric_title)
         ax.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
 
-        legend_handles = [
+        legend_handles: list[object] = [
             Line2D([0], [0], color=color, marker='o', linewidth=1.7, markersize=5.5, label='Fold values'),
             Line2D([0], [0], color='#111111', linestyle='--', linewidth=1.3, label=f'Mean = {mean_val:.4f}'),
         ]
@@ -495,14 +665,20 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
             ],
         }
 
-    for ax in axes_list[2:]:
-        ax.set_xlabel('CV iteration')
-    for ax in axes_list:
+    for ax in axes_list[len(metric_specs):]:
+        ax.axis('off')
+
+    bottom_start = (n_rows - 1) * n_cols
+    for i, ax in enumerate(axes_list[:len(metric_specs)]):
+        if i >= bottom_start:
+            ax.set_xlabel('CV iteration')
+
+    for ax in axes_list[:len(metric_specs)]:
         ax.set_xticks(x_all)
         ax.set_xticklabels(iteration_names, rotation=30, ha='right')
 
-    fig.suptitle('Cross-fold metrics with mean, standard error, and standard deviation', fontsize=13)
-    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+    fig.suptitle('Cross-fold metrics (V.U.N + external/internal diversity) with uncertainty bands', fontsize=13)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
 
     plot_path = os.path.abspath(os.path.join(out_dir, 'cv_combo_metrics_summary.png'))
     fig.savefig(plot_path, dpi=300)
@@ -512,8 +688,8 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
     # Plot 2: Dedicated boxplots, one subplot per metric
     # -------------------------------------------------------------------------
     boxplot_path = None
-    fig2, axes2 = plt.subplots(2, 2, figsize=(12, 9), sharey=False)
-    axes2_list = list(axes2.ravel())
+    fig2, axes2 = plt.subplots(n_rows, n_cols, figsize=(12, max(8.5, 4.2 * n_rows)), sharey=False)
+    axes2_list = list(np.asarray(axes2).reshape(-1))
     have_boxplot_data = False
 
     for ax2, (metric_key, metric_title, color) in zip(axes2_list, metric_specs):
@@ -608,8 +784,11 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
         ]
         ax2.legend(handles=legend_handles, loc='best', frameon=True, fontsize=12)
 
-    fig2.suptitle('Cross-fold metric boxplots: V.U.N and diversity', fontsize=16)
-    fig2.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+    for ax2 in axes2_list[len(metric_specs):]:
+        ax2.axis('off')
+
+    fig2.suptitle('Cross-fold metric boxplots: V.U.N + external/internal diversity', fontsize=16)
+    fig2.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
 
     if have_boxplot_data:
         boxplot_path = os.path.abspath(os.path.join(out_dir, 'cv_combo_metrics_boxplots.png'))
@@ -947,7 +1126,10 @@ def main() -> None:
     args = _parse_args()
     cfg = _read_json(args.config)
 
-    workspace_root = os.path.abspath(str(cfg.get('workspace_root', _ROOT_DIR)))
+    workspace_root_cfg = cfg.get('workspace_root', _ROOT_DIR)
+    workspace_root = _resolve_optional_path(str(workspace_root_cfg), base_dir=_ROOT_DIR)
+    if workspace_root is None:
+        workspace_root = os.path.abspath(_ROOT_DIR)
     os.chdir(workspace_root)
 
     # Output roots:
@@ -1009,6 +1191,10 @@ def main() -> None:
             cross_fold_summary_path=cross_fold_summary_path,
             artifacts_root=artifacts_root,
         )
+        cv_combo_error_summary_path = _write_cv_combo_error_summary_csv(
+            cross_fold_summary_path=cross_fold_summary_path,
+            artifacts_root=artifacts_root,
+        )
 
         final_manifest_path = os.path.join(artifacts_root, 'global_manifest.json')
         existing_manifest = {}
@@ -1027,6 +1213,7 @@ def main() -> None:
         existing_manifest['cv_combo_metrics_plot_path'] = cv_combo_outputs.get('plot_path')
         existing_manifest['cv_combo_metrics_boxplot_path'] = cv_combo_outputs.get('boxplot_path')
         existing_manifest['cv_combo_metrics_stats_path'] = cv_combo_outputs.get('stats_path')
+        existing_manifest['cv_combo_error_summary_csv_path'] = cv_combo_error_summary_path
         existing_manifest['finished_unix'] = time.time()
         _write_json(final_manifest_path, existing_manifest)
 
@@ -1337,7 +1524,7 @@ def main() -> None:
         print(f'[{fold_name}] CV iteration complete and manifest saved')
 
     cross_fold_summary_path = None
-    cv_combo_outputs = {'plot_path': None, 'boxplot_path': None, 'stats_path': None}
+    cv_combo_outputs = {'plot_path': None, 'boxplot_path': None, 'stats_path': None, 'error_summary_csv_path': None}
     if analysis_enabled_global:
         cross_fold_summary_path = _write_cross_fold_analysis_summary(
             artifacts_root=artifacts_root,
@@ -1348,6 +1535,10 @@ def main() -> None:
                 cross_fold_summary_path=cross_fold_summary_path,
                 artifacts_root=artifacts_root,
             )
+            cv_combo_outputs['error_summary_csv_path'] = _write_cv_combo_error_summary_csv(
+                cross_fold_summary_path=cross_fold_summary_path,
+                artifacts_root=artifacts_root,
+            )
     #This is the second part of the needle
     global_manifest['finished_unix'] = time.time()
     global_manifest['duration_sec'] = float(global_manifest['finished_unix'] - global_manifest['started_unix'])
@@ -1355,6 +1546,7 @@ def main() -> None:
     global_manifest['cv_combo_metrics_plot_path'] = cv_combo_outputs.get('plot_path')
     global_manifest['cv_combo_metrics_boxplot_path'] = cv_combo_outputs.get('boxplot_path')
     global_manifest['cv_combo_metrics_stats_path'] = cv_combo_outputs.get('stats_path')
+    global_manifest['cv_combo_error_summary_csv_path'] = cv_combo_outputs.get('error_summary_csv_path')
     final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
 
     print('\n' + '=' * 90)

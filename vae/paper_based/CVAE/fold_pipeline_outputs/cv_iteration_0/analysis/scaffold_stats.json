@@ -1,12 +1,12 @@
 {
-  "unique_train_scaffolds": 580,
-  "unique_validation_scaffolds": 56,
+  "unique_train_scaffolds": 588,
+  "unique_validation_scaffolds": 55,
   "unique_generated_scaffolds": 6554,
-  "overlap_scaffolds": 119,
-  "overlap_train_validation_scaffolds": 16,
-  "overlap_validation_generated_scaffolds": 8,
-  "novel_generated_scaffolds": 6435,
-  "novel_generated_scaffolds_vs_train_validation": 6431,
+  "overlap_scaffolds": 120,
+  "overlap_train_validation_scaffolds": 17,
+  "overlap_validation_generated_scaffolds": 9,
+  "novel_generated_scaffolds": 6434,
+  "novel_generated_scaffolds_vs_train_validation": 6430,
   "top_train_scaffolds": [
     {
       "scaffold": "O=S1(=O)CC(Cc2ccccc2)CC(NCc2ccccc2)C1",
@@ -23,10 +23,6 @@
     {
       "scaffold": "c1ccc(-c2ccc(-c3ccccc3)n2Cc2ccccn2)cc1",
       "count": 14
-    },
-    {
-      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2cccnc2)c1",
-      "count": 11
     },
     {
       "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1ccccc1",
@@ -65,6 +61,10 @@
       "count": 8
     },
     {
+      "scaffold": "O=C(NOCc1ccccc1)C1=CNC=C(C(=O)NC(CCNC2CC2)Cc2ccccc2)C1",
+      "count": 7
+    },
+    {
       "scaffold": "c1ccc(CCCCNC2(c3cccs3)CCCCC2)cc1",
       "count": 7
     },
@@ -93,15 +93,15 @@
       "count": 7
     },
     {
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2cncnc2)c1",
+      "count": 6
+    },
+    {
       "scaffold": "O=C1NC=NC1(c1ccccc1)C1CCCCC1",
       "count": 6
     },
     {
       "scaffold": "O=C1NC=NC12CCOc1ccc(-c3cccnc3)cc12",
-      "count": 6
-    },
-    {
-      "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3cncnc3)c2)N=C1",
       "count": 6
     }
   ],
@@ -143,6 +143,10 @@
       "count": 11
     },
     {
+      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2cccnc2)c1",
+      "count": 10
+    },
+    {
       "scaffold": "C1=NC(c2ccncc2)(c2cccc(-c3cncnc3)c2)c2ccccc21",
       "count": 9
     },
@@ -156,10 +160,6 @@
     },
     {
       "scaffold": "c1ccccc1",
-      "count": 7
-    },
-    {
-      "scaffold": "O=C(NOCc1ccccc1)C1=CNC=C(C(=O)NC(CCNC2CC2)Cc2ccccc2)C1",
       "count": 7
     },
     {

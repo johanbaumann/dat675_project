@@ -12,10 +12,6 @@ CCCCCOc1ccc(-c2ccc(-c3ccccc3Cl)n2Cc2ccc(OCCO)c(N)n2)cc1 6.9586072
 C=CCNC(=O)c1ccc(-c2ccc(-c3ccccc3)n2Cc2cccc(N)n2)cc1 6.2291479
 Nc1cccc(Cn2c(-c3ccccc3)ccc2-c2ccccc2)n1 5.2839966
 CCCNC(=O)c1ccc(-c2ccc(-c3ccccc3)n2Cc2cccc(N)n2)cc1 5.5228786
-CN1C(=O)[C@@](c2ccc(OC(F)F)cc2)(c2ccc(F)c(C#CC3CC3)c2)N=C1N 7.6989698
-Cc1cc([C@]2(c3ccc(F)c(C#CC4CC4)c3)N=C(N)N(C)C2=O)ccc1OC(F)F 7.6989698
-Cc1cc([C@]2(c3cccc(C#CC4CC4)c3)N=C(N)N(C)C2=O)ccc1OC(F)F 7.6575775
-CN1C(=O)[C@@](c2ccc(OC(F)F)cc2)(c2cccc(C#CC3CC3)c2)N=C1N 7.6989698
 Nc1nc2ccccc2nc1N1CCCC1 3.0604808
 CN1C(=O)C(c2ccncc2)(c2cccc(-c3cnccn3)c2)N=C1N 7.154902
 COCc1cc2cc(c1)C(=O)NC(C(O)CNC(CF)c1cccc(C(C)(C)C)c1)Cc1cccc(c1)OCCCCN2 6.7520266
@@ -258,3 +254,9 @@ CC(C)c1cccc(CNCC(O)C2COC/C=C/C[C@H](c3ccccc3)NC(=O)c3cc(cc(N(C)S(C)(=O)=O)c3)C(=
 CC#Cc1cncc(-c2cccc(C3(c4ccnc(C(F)F)c4)N=C(N)c4c(F)cccc43)c2)c1 8.1877556
 N#Cc1cncc(-c2cccc(C3(c4ccnc(C(F)(F)F)c4)N=C(N)c4c(F)cccc43)c2)c1 6.5968795
 NC1=NC(c2ccncc2)(c2cccc(-c3cncc(F)c3)c2)c2cccc(F)c21 6.8632793
+Cc1ccc(C(=O)Nc2ccc3c(c2)C2(CC(C)(C)O3)N=C(N)N(C)C2=O)o1 6.6382723
+Cc1ccccc1-c1ccc2nc(N)c(CC(C)C(=O)NCc3ccccc3)cc2c1 7.6989698
+CN1C(=N)N[C@](C)([C@@H]2C[C@H]2c2ccccc2)CC1=O 4.7447276
+CCNc1cc(C(=O)NC(Cc2ccccc2)C(O)CNCc2cccc(C(F)(F)F)c2)cc2c1CCCS(=O)(=O)N2C 7.7212462
+CN1C(=O)C(C)(c2cccc(NC(=O)c3ccc(Cl)cn3)c2)N=C1N 5.9913998
+CN1C(=O)C2(CC(C)(C)C(F)(F)c3ccc(-c4cncnc4)cc32)N=C1N 5.8259401

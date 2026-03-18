@@ -1,13 +1,7 @@
-Cc1ccc(C(=O)Nc2ccc3c(c2)C2(CC(C)(C)O3)N=C(N)N(C)C2=O)o1 6.6382723
-Cc1ccccc1-c1ccc2nc(N)c(CC(C)C(=O)NCc3ccccc3)cc2c1 7.6989698
-CN1C(=N)N[C@](C)([C@@H]2C[C@H]2c2ccccc2)CC1=O 4.7447276
-CCNc1cc(C(=O)NC(Cc2ccccc2)C(O)CNCc2cccc(C(F)(F)F)c2)cc2c1CCCS(=O)(=O)N2C 7.7212462
 CC#Cc1cncc(-c2cccc(C3(c4cc(C)c(OC)c(C)c4)N=C(C)C(N)=N3)c2)c1 7.5850267
 CC1=NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)N=C1N 5.8860569
 COc1ccc(C2(c3cccc(-c4cccnc4)c3)N=C(C)C(N)=N2)cc1 6.4814858
 CC1=NC(c2ccc(F)cc2)(c2cccc(-c3cccnc3)c2)N=C1N 6.309804
-CN1C(=O)C(C)(c2cccc(NC(=O)c3ccc(Cl)cn3)c2)N=C1N 5.9913998
-CN1C(=O)C2(CC(C)(C)C(F)(F)c3ccc(-c4cncnc4)cc32)N=C1N 5.8259401
 COc1ccc([C@]2(c3cccc(-c4cncnc4)c3)N=C(N)N3CCCN=C32)cc1 7
 Nc1ncccc1CCc1cccc(Cl)c1 3
 CC1(C)Cc2cc(Cl)ccc2C(NC(Cc2cscc2-c2ccncc2)C(=O)O)=N1 5.7328281
@@ -258,3 +252,11 @@ CC1(C)Cc2cc(Cl)ccc2C(NC(Cc2ccccc2)c2nccc(=O)[nH]2)=N1 5.5670309
 CC1(C)Cc2cc(Cl)ccc2C(NC(Cc2ccccc2)c2ncc(C#N)c(=O)[nH]2)=N1 6.3279023
 CC1(C)Cc2cc(Cl)ccc2C(NC(Cc2ccccc2)c2ncc(I)c(=O)[nH]2)=N1 6.2291479
 CC1(C)Cc2cc(Cl)ccc2C(NC(Cc2ccccc2)c2ncc(Cl)c(=O)[nH]2)=N1 6.251812
+O=C(C1CNCC12CCCc1cc(Br)ccc12)N1CCC(c2ccccc2)CC1c1ccccc1 7.154902
+CCn1ccc2c(N3CCCC3=O)cc(C(=O)NC(Cc3ccccc3)C(O)CNCc3cccc(C(F)(F)F)c3)cc21 7.6382723
+CCn1ccc2c(N3CCCC3=O)cc(C(=O)NC(Cc3ccccc3)C(O)CNC(C)(C)c3cccc(OC)c3)cc21 4.4559321
+CCCCN(C)C(=O)n1cc(C(=O)NC(Cc2cc(F)cc(F)c2)C(O)C2Cc3ccccc3CN2)c2cccnc21 5.9208188
+CC(C)(C)c1cccc(CNC2CS(=O)(=O)CC(Cc3cc(F)c(N)c(-c4cc[nH]n4)c3)C2O)c1 7.5528421
+CN1C(=O)[C@]2(CC(C)(C)Oc3ccc(Br)cc32)N=C1N 4.4337983
+Cn1c(N)nc(C2CC2c2cccc(-c3ccccc3)c2)cc1=O 2.7332981
+Nc1cccc(Cn2c(-c3ccccc3)ccc2-c2ccc(C(=O)NC3CCC3)cc2)n1 5.4685211

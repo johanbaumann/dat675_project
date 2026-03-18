@@ -1,12 +1,12 @@
 {
-  "unique_train_scaffolds": 556,
-  "unique_validation_scaffolds": 80,
+  "unique_train_scaffolds": 559,
+  "unique_validation_scaffolds": 82,
   "unique_generated_scaffolds": 6458,
-  "overlap_scaffolds": 174,
-  "overlap_train_validation_scaffolds": 16,
-  "overlap_validation_generated_scaffolds": 12,
-  "novel_generated_scaffolds": 6284,
-  "novel_generated_scaffolds_vs_train_validation": 6282,
+  "overlap_scaffolds": 173,
+  "overlap_train_validation_scaffolds": 15,
+  "overlap_validation_generated_scaffolds": 13,
+  "novel_generated_scaffolds": 6285,
+  "novel_generated_scaffolds_vs_train_validation": 6281,
   "top_train_scaffolds": [
     {
       "scaffold": "c1ccc(CCCCNC2CC3(CCC3)Oc3ncccc32)cc1",
@@ -53,6 +53,10 @@
       "count": 13
     },
     {
+      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2cccnc2)c1",
+      "count": 11
+    },
+    {
       "scaffold": "C1=NC(c2ccncc2)(c2cccc(-c3cncnc3)c2)c2ccccc21",
       "count": 10
     },
@@ -78,10 +82,6 @@
     },
     {
       "scaffold": "c1ccccc1",
-      "count": 7
-    },
-    {
-      "scaffold": "O=C(NOCc1ccccc1)C1=CNC=C(C(=O)NC(CCNC2CC2)Cc2ccccc2)C1",
       "count": 7
     },
     {
@@ -119,16 +119,16 @@
       "count": 11
     },
     {
-      "scaffold": "O=C1NC=NC1(c1cn[nH]c1)c1cccc(-c2cccnc2)c1",
-      "count": 10
-    },
-    {
       "scaffold": "N=C(NCc1ccccc1)NC(=O)Cn1ccc2ccccc21",
       "count": 10
     },
     {
       "scaffold": "c1ccc2c(c1)CCN=C2NCCc1ccsc1",
       "count": 9
+    },
+    {
+      "scaffold": "O=C(NOCc1ccccc1)C1=CNC=C(C(=O)NC(CCNC2CC2)Cc2ccccc2)C1",
+      "count": 7
     },
     {
       "scaffold": "O=C1NC=NC1(c1ccncc1)c1cccc(-c2ccccc2)c1",
@@ -183,6 +183,10 @@
       "count": 4
     },
     {
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(C#CC2CC2)c1",
+      "count": 4
+    },
+    {
       "scaffold": "O=S1(=O)CC(Cc2ccc3[nH]ccc3c2)CC(NCc2ccccc2)C1",
       "count": 3
     },
@@ -196,10 +200,6 @@
     },
     {
       "scaffold": "C1=NC(c2ccncc2)(c2cccc(-c3ccccc3)c2)C2=NCCCN12",
-      "count": 2
-    },
-    {
-      "scaffold": "c1ccc(CCCCNC2(c3ccccc3)CCNCC2)cc1",
       "count": 2
     }
   ],

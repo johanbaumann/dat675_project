@@ -104,7 +104,7 @@ from gat_utils import run_training_pipeline
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": ["./67%"],  # Can be a single path string or a list of dataset folders.
+		"target_folder": ["./0%"],  # Can be a single path string or a list of dataset folders.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -118,7 +118,7 @@ CONFIG = {
 		"synthetic_cv": {
 			# Training uses the synthetic file matching the CV iteration index.
 			# Even if this is turned off, synthetic data can be used for pre-training
-			"include_in_training": True,
+			"include_in_training": False,
 			# Options: "matching_fold", "all", "none".
 			"train_selection": "matching_fold",
 			# Default keeps synthetic data out of validation.
@@ -135,7 +135,7 @@ CONFIG = {
 			# Uniform random row subsample after percentile filtering.
 			# Useful for reducing pseudo-label noise volume while keeping diversity.
 			# Set to None to disable row subsampling entirely.
-			"row_keep_fraction": 0.5,
+			"row_keep_fraction": 1.0,#0.174, #0.348 for 67%, 0.174 for 33%
 			# Optional cap for synthetic-to-real ratio in finetuning train folds.
 			# Example: 1.0 keeps at most as many synthetic graphs as real graphs.
 			# Set to None to disable ratio capping.
@@ -218,7 +218,7 @@ CONFIG = {
 		# Stage 1 in two-stage training: synthetic-only pretraining per fold,
 		# then Stage 2 finetunes on the fold training set.
 		"synthetic_pretraining": {
-			"enabled": False,
+			"enabled": True,
 			"epochs": 35,
 			"learning_rate": 1e-4, # was 4e-4
 			"weight_decay": 1e-4,
@@ -249,7 +249,7 @@ CONFIG = {
 			# Save an extra checkpoint every N epochs using the pattern:
 			# model_<dataset>_cv_iteration_<fold>_epoch_<epoch>.pth
 			# Set to 0 to disable periodic checkpoint saving.
-			"save_every_n_epochs": 5,
+			"save_every_n_epochs": 0,
 		},
 	},
 }

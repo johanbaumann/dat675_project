@@ -18,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from .chem_utils import (
     canonicalize_smiles,
     max_tanimoto_to_reference,
+    mean_pairwise_tanimoto,
     morgan_fp,
     morgan_fp_generator,
     safe_mol_from_smiles,
@@ -551,49 +552,199 @@ def _resolve_property_column(df: pd.DataFrame, requested: str | None, *, role: s
     return None
 
 
+def _resolve_reference_property_column(df: pd.DataFrame, requested: str | None) -> str | None:
+    """Resolve a true reference/ground-truth property column.
+
+    Unlike `_resolve_property_column(..., role='target')`, this function does
+    not fall back to `target_<name>` aliases because those are conditioning
+    inputs, not measured labels.
+    """
+    if requested and requested in df.columns:
+        return requested
+    if not requested:
+        return None
+
+    req = str(requested)
+    candidates = [req, req.lower(), req.upper()]
+    for col in df.columns:
+        if col in candidates:
+            return col
+    candidate_set = {c.lower() for c in candidates}
+    for col in df.columns:
+        if col.lower() in candidate_set:
+            return col
+    return None
+
+
 def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> dict:
     if not bool(cfg.run_prediction_error_plot):
         _debug_log(cfg, 'Skipping prediction-error plot (run_prediction_error_plot=False).')
         return {}
-    target_col = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
+    target_col = _resolve_reference_property_column(gen_df, cfg.target_property_column)
+    conditioning_target_col = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
     pred_col = _resolve_property_column(gen_df, cfg.predicted_property_column, role='pred')
-    _debug_log(cfg, f'Prediction error columns -> target={target_col!r}, prediction={pred_col!r}')
-    if not target_col or not pred_col:
-        return {}
+    _debug_log(
+        cfg,
+        'Prediction error columns -> '
+        f'reference={target_col!r}, prediction={pred_col!r}, conditioning_target={conditioning_target_col!r}',
+    )
+    if not target_col:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+        note = (
+            f'Missing reference column: {cfg.target_property_column}.\n'
+            'Conditioning target_* is not used as ground truth.'
+        )
+        for ax in axes:
+            ax.text(0.5, 0.5, note, transform=ax.transAxes, ha='center', va='center')
+            ax.set_axis_off()
+        fig.suptitle('Absolute Error vs Reference (unavailable)', fontsize=13)
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+        _save_figure(cfg, cfg.prediction_error_plot_filename, dpi=180)
+        plt.close(fig)
 
-    gt = pd.to_numeric(gen_df[target_col], errors='coerce').to_numpy(dtype=float)
-    pred = pd.to_numeric(gen_df[pred_col], errors='coerce').to_numpy(dtype=float)
-    valid_mask = np.isfinite(gt) & np.isfinite(pred)
-    if int(np.sum(valid_mask)) == 0:
-        _debug_log(cfg, 'Skipping prediction-error plot (no finite target/prediction pairs).')
-        return {}
+        if cfg.target_property_column and conditioning_target_col is not None:
+            _debug_log(
+                cfg,
+                'Prediction-error figure saved with placeholder: only conditioning target_* column was found; '
+                'this is not treated as ground truth.',
+            )
+        return {
+            'prediction_reference_column': None,
+            'prediction_target_column': None,
+            'prediction_column': pred_col,
+            'conditioning_target_column': conditioning_target_col,
+            'prediction_error_count': 0,
+            'prediction_mse': None,
+            'prediction_mae': None,
+            'prediction_median_ae': None,
+            'prediction_std_ae': None,
+            'pred_vs_ref_count': 0,
+            'pred_vs_ref_mse': None,
+            'pred_vs_ref_mae': None,
+            'pred_vs_ref_median_ae': None,
+            'pred_vs_ref_std_ae': None,
+            'target_vs_ref_count': 0,
+            'target_vs_ref_mse': None,
+            'target_vs_ref_mae': None,
+            'target_vs_ref_median_ae': None,
+            'target_vs_ref_std_ae': None,
+        }
 
-    gt = gt[valid_mask]
-    pred = pred[valid_mask]
-    abs_err = np.abs(gt - pred)
-    mse = float(np.mean((gt - pred) ** 2))
-    mae = float(np.mean(abs_err))
-    medae = float(np.median(abs_err))
-    stdae = float(np.std(abs_err))
+    gt_all = pd.to_numeric(gen_df[target_col], errors='coerce').to_numpy(dtype=float)
+    pred_all = (
+        pd.to_numeric(gen_df[pred_col], errors='coerce').to_numpy(dtype=float)
+        if pred_col
+        else np.asarray([], dtype=float)
+    )
+    cond_all = (
+        pd.to_numeric(gen_df[conditioning_target_col], errors='coerce').to_numpy(dtype=float)
+        if conditioning_target_col
+        else np.asarray([], dtype=float)
+    )
 
-    fig = plt.figure(figsize=(10, 5))
+    pred_stats: dict = {
+        'count': 0,
+        'mse': None,
+        'mae': None,
+        'median_ae': None,
+        'std_ae': None,
+    }
+    cond_stats: dict = {
+        'count': 0,
+        'mse': None,
+        'mae': None,
+        'median_ae': None,
+        'std_ae': None,
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
-    plt.scatter(gt, abs_err, alpha=0.5, s=16, **edge_kwargs)
-    plt.xlabel(f'Ground Truth {target_col}')
-    plt.ylabel('Absolute Error')
-    plt.title(f'Absolute Error vs Ground Truth ({target_col})')
-    plt.tight_layout()
+
+    if pred_col:
+        valid_mask_pred = np.isfinite(gt_all) & np.isfinite(pred_all)
+        if int(np.sum(valid_mask_pred)) > 0:
+            gt_pred = gt_all[valid_mask_pred]
+            pred = pred_all[valid_mask_pred]
+            abs_err_pred = np.abs(gt_pred - pred)
+
+            pred_stats = {
+                'count': int(gt_pred.shape[0]),
+                'mse': float(np.mean((gt_pred - pred) ** 2)),
+                'mae': float(np.mean(abs_err_pred)),
+                'median_ae': float(np.median(abs_err_pred)),
+                'std_ae': float(np.std(abs_err_pred)),
+            }
+            axes[0].scatter(gt_pred, abs_err_pred, alpha=0.5, s=16, **edge_kwargs)
+            axes[0].set_title(
+                f'{pred_col} vs {target_col}\n'
+                f"MAE={pred_stats['mae']:.4f}, STD={pred_stats['std_ae']:.4f}, n={pred_stats['count']}"
+            )
+        else:
+            axes[0].text(0.5, 0.5, 'No finite prediction/reference pairs', transform=axes[0].transAxes, ha='center', va='center')
+            axes[0].set_title(f'{pred_col} vs {target_col}')
+    else:
+        axes[0].text(0.5, 0.5, 'Prediction column missing', transform=axes[0].transAxes, ha='center', va='center')
+        axes[0].set_title('Prediction vs Reference')
+
+    axes[0].set_xlabel(f'Reference {target_col}')
+    axes[0].set_ylabel('Absolute Error')
+    axes[0].grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
+
+    if conditioning_target_col:
+        valid_mask_cond = np.isfinite(gt_all) & np.isfinite(cond_all)
+        if int(np.sum(valid_mask_cond)) > 0:
+            gt_cond = gt_all[valid_mask_cond]
+            cond = cond_all[valid_mask_cond]
+            abs_err_cond = np.abs(gt_cond - cond)
+
+            cond_stats = {
+                'count': int(gt_cond.shape[0]),
+                'mse': float(np.mean((gt_cond - cond) ** 2)),
+                'mae': float(np.mean(abs_err_cond)),
+                'median_ae': float(np.median(abs_err_cond)),
+                'std_ae': float(np.std(abs_err_cond)),
+            }
+            axes[1].scatter(gt_cond, abs_err_cond, alpha=0.5, s=16, color='#B45309', **edge_kwargs)
+            axes[1].set_title(
+                f'{conditioning_target_col} vs {target_col}\n'
+                f"MAE={cond_stats['mae']:.4f}, STD={cond_stats['std_ae']:.4f}, n={cond_stats['count']}"
+            )
+        else:
+            axes[1].text(0.5, 0.5, 'No finite conditioning/reference pairs', transform=axes[1].transAxes, ha='center', va='center')
+            axes[1].set_title(f'{conditioning_target_col} vs {target_col}')
+    else:
+        axes[1].text(0.5, 0.5, 'Conditioning target column missing', transform=axes[1].transAxes, ha='center', va='center')
+        axes[1].set_title('Conditioning Target vs Reference')
+
+    axes[1].set_xlabel(f'Reference {target_col}')
+    axes[1].grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
+
+    fig.suptitle(f'Absolute Error vs Reference ({target_col})', fontsize=13)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
     _save_figure(cfg, cfg.prediction_error_plot_filename, dpi=180)
     plt.close(fig)
 
+    # Backward-compatible keys are kept for the prediction-vs-reference panel.
     return {
-        'prediction_error_count': int(gt.shape[0]),
+        'prediction_reference_column': target_col,
         'prediction_target_column': target_col,
         'prediction_column': pred_col,
-        'prediction_mse': mse,
-        'prediction_mae': mae,
-        'prediction_median_ae': medae,
-        'prediction_std_ae': stdae,
+        'conditioning_target_column': conditioning_target_col,
+        'prediction_error_count': int(pred_stats['count']),
+        'prediction_mse': pred_stats['mse'],
+        'prediction_mae': pred_stats['mae'],
+        'prediction_median_ae': pred_stats['median_ae'],
+        'prediction_std_ae': pred_stats['std_ae'],
+        'pred_vs_ref_count': int(pred_stats['count']),
+        'pred_vs_ref_mse': pred_stats['mse'],
+        'pred_vs_ref_mae': pred_stats['mae'],
+        'pred_vs_ref_median_ae': pred_stats['median_ae'],
+        'pred_vs_ref_std_ae': pred_stats['std_ae'],
+        'target_vs_ref_count': int(cond_stats['count']),
+        'target_vs_ref_mse': cond_stats['mse'],
+        'target_vs_ref_mae': cond_stats['mae'],
+        'target_vs_ref_median_ae': cond_stats['median_ae'],
+        'target_vs_ref_std_ae': cond_stats['std_ae'],
     }
 
 
@@ -1175,23 +1326,57 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     gen_df['tanimoto_max_to_ref'] = max_sim
 
 
-    #======================================================
-    # NOTE: Diversity is defined as 1 - mean_similarity, where:
-    # mean similarity is the avg of max Tanimoto sim of gen vs train
-    # ========================================================
-
+    # External diversity (generated vs train): 1 - mean_tanimoto(query, reference).
     diversity = float(1.0 - mean_similarity) if not np.isnan(mean_similarity) else 0.0
     gen_df['diversity_score'] = diversity
-    _debug_log(cfg, f'Similarity stats -> mean_tanimoto={mean_similarity}, diversity_score={diversity}')
+
+    # Internal diversity (generated vs generated): 1 - mean pairwise tanimoto within generated set.
+    internal_mean_similarity = float('nan')
+    internal_diversity_score: float | None = None
+    internal_pairs_used = 0
+    internal_pairs_total = 0
+    internal_mode = 'insufficient_data'
+    if bool(cfg.internal_diversity_enabled):
+        internal_mean_similarity, internal_pairs_used, internal_pairs_total, internal_mode = mean_pairwise_tanimoto(
+            query_fps,
+            max_pairs=int(cfg.internal_diversity_max_pairs),
+            random_seed=int(cfg.internal_diversity_random_seed),
+        )
+        if np.isfinite(internal_mean_similarity):
+            internal_diversity_score = float(1.0 - float(internal_mean_similarity))
+
+    gen_df['mean_tanimoto_internal'] = (
+        float(internal_mean_similarity) if np.isfinite(internal_mean_similarity) else np.nan
+    )
+    gen_df['diversity_internal_score'] = (
+        float(internal_diversity_score) if internal_diversity_score is not None else np.nan
+    )
+
+    _debug_log(
+        cfg,
+        'Similarity stats -> '
+        f'external_mean_tanimoto={mean_similarity}, external_diversity={diversity}, '
+        f'internal_mean_tanimoto={internal_mean_similarity}, internal_diversity={internal_diversity_score}, '
+        f'internal_pairs_used={internal_pairs_used}/{internal_pairs_total} ({internal_mode})',
+    )
 
     target_col = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
     pred_col = _resolve_property_column(gen_df, cfg.predicted_property_column, role='pred')
     _debug_log(cfg, f'Resolved generated columns -> target={target_col!r}, prediction={pred_col!r}')
-    if target_col and pred_col:
-        if target_col in gen_df.columns and pred_col in gen_df.columns:
-            diff = gen_df[target_col].astype(float) - gen_df[pred_col].astype(float)
+    reference_col = _resolve_reference_property_column(gen_df, cfg.target_property_column)
+    if reference_col and pred_col:
+        if reference_col in gen_df.columns and pred_col in gen_df.columns:
+            diff = gen_df[reference_col].astype(float) - gen_df[pred_col].astype(float)
             gen_df['abs_prediction_error'] = diff.abs()
             _debug_log(cfg, "Computed 'abs_prediction_error' column.")
+    elif pred_col and cfg.target_property_column:
+        target_alias = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
+        if target_alias is not None:
+            _debug_log(
+                cfg,
+                'Did not compute abs_prediction_error: target alias resolved to conditioning '
+                f'column {target_alias!r}, not a measured reference column.',
+            )
 
     processed_csv_path = os.path.join(cfg.output_dir, cfg.processed_csv_filename)
     gen_df.to_csv(processed_csv_path, index=False)
@@ -1268,6 +1453,15 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
         },
         'diversity_score': float(diversity),
         'mean_tanimoto_all_pairs': float(mean_similarity) if not np.isnan(mean_similarity) else None,
+        'diversity_external_score': float(diversity),
+        'mean_tanimoto_external_all_pairs': float(mean_similarity) if not np.isnan(mean_similarity) else None,
+        'diversity_internal_score': internal_diversity_score,
+        'mean_tanimoto_internal_all_pairs': (
+            float(internal_mean_similarity) if np.isfinite(internal_mean_similarity) else None
+        ),
+        'internal_similarity_pairs_used': int(internal_pairs_used),
+        'internal_similarity_pairs_total': int(internal_pairs_total),
+        'internal_similarity_mode': str(internal_mode),
         'unique_train_scaffolds': int(len(train_scaf_set)),
         'unique_validation_scaffolds': int(len(validation_scaf_set)),
         'unique_generated_scaffolds': int(len(gen_scaf_set)),

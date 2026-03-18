@@ -6,6 +6,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+
+
+"""
+Helper module for defining and loading analysis configuration.
+Will be used in combo with the fold_pipeline outputs to run the analysis scripts in a standardized way.
+
+"""
+
 @dataclass(frozen=True)
 class AnalysisConfig:
     profile_name: str
@@ -33,6 +41,9 @@ class AnalysisConfig:
     tanimoto_n_bits: int = 2048
     tanimoto_cache_filename: str = 'tanimoto_cache.bin'
     tanimoto_flush_every: int = 1000
+    internal_diversity_enabled: bool = True
+    internal_diversity_max_pairs: int = 200_000
+    internal_diversity_random_seed: int = 42
 
     save_distribution_plot: bool = True
     save_scaffold_plot: bool = True

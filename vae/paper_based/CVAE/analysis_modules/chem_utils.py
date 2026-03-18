@@ -77,6 +77,66 @@ def max_tanimoto_to_reference(query_fps: list, ref_fps: list) -> tuple[np.ndarra
     return out, float(mean_similarity)
 
 
+def mean_pairwise_tanimoto(
+    fps: list,
+    *,
+    max_pairs: Optional[int] = None,
+    random_seed: int = 42,
+) -> tuple[float, int, int, str]:
+    """Compute mean pairwise Tanimoto across a fingerprint list.
+
+    Returns:
+      (mean_similarity, num_pairs_used, num_pairs_total, mode)
+      - mode is one of: 'insufficient_data', 'exact', 'sampled'
+    """
+    n = int(len(fps))
+    total_pairs = int((n * (n - 1)) // 2)
+    if n < 2 or total_pairs <= 0:
+        return float('nan'), 0, total_pairs, 'insufficient_data'
+
+    # Exact path when pair count is modest or no cap is set.
+    if max_pairs is None or int(max_pairs) <= 0 or total_pairs <= int(max_pairs):
+        sim_sum = 0.0
+        count = 0
+        for i in range(n - 1):
+            sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[i + 1 :])
+            if len(sims) == 0:
+                continue
+            arr = np.asarray(sims, dtype=np.float32)
+            sim_sum += float(arr.sum(dtype=np.float64))
+            count += int(arr.size)
+        mean_similarity = (sim_sum / float(count)) if count > 0 else float('nan')
+        return float(mean_similarity), int(count), total_pairs, 'exact'
+
+    # Sampled path for very large generated sets.
+    target_pairs = min(int(max_pairs), total_pairs)
+    rng = np.random.default_rng(int(random_seed))
+
+    sampled_pairs: set[tuple[int, int]] = set()
+    sim_sum = 0.0
+    count = 0
+    max_attempts = int(target_pairs * 20)
+    attempts = 0
+
+    while count < target_pairs and attempts < max_attempts:
+        attempts += 1
+        i = int(rng.integers(0, n))
+        j = int(rng.integers(0, n))
+        if i == j:
+            continue
+        if i > j:
+            i, j = j, i
+        pair = (i, j)
+        if pair in sampled_pairs:
+            continue
+        sampled_pairs.add(pair)
+        sim_sum += float(DataStructs.TanimotoSimilarity(fps[i], fps[j]))
+        count += 1
+
+    mean_similarity = (sim_sum / float(count)) if count > 0 else float('nan')
+    return float(mean_similarity), int(count), total_pairs, 'sampled'
+
+
 def scaffold_counts(scaffolds: Sequence[Optional[str]]) -> Counter:
     return Counter(s for s in scaffolds if s is not None)
 

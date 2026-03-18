@@ -1,9 +1,9 @@
 {
-  "unique_train_scaffolds": 419,
-  "unique_validation_scaffolds": 229,
+  "unique_train_scaffolds": 425,
+  "unique_validation_scaffolds": 230,
   "unique_generated_scaffolds": 5911,
   "overlap_scaffolds": 117,
-  "overlap_train_validation_scaffolds": 28,
+  "overlap_train_validation_scaffolds": 29,
   "overlap_validation_generated_scaffolds": 21,
   "novel_generated_scaffolds": 5794,
   "novel_generated_scaffolds_vs_train_validation": 5785,
@@ -127,18 +127,6 @@
       "count": 3
     },
     {
-      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1cc(N2CCCC2=O)c2cc[nH]c2c1",
-      "count": 2
-    },
-    {
-      "scaffold": "O=C1NC=NC12CCOc1ccccc12",
-      "count": 2
-    },
-    {
-      "scaffold": "O=c1cc(C2CC2c2cccc(-c3ccccc3)c2)nc[nH]1",
-      "count": 2
-    },
-    {
       "scaffold": "O=C1NCCOCc2cccc(c2)CNC(=O)c2cccc1c2",
       "count": 2
     },
@@ -191,6 +179,10 @@
       "count": 2
     },
     {
+      "scaffold": "O=C1NC=NC1(c1ccccc1)c1cccc(-c2cncnc2)c1",
+      "count": 2
+    },
+    {
       "scaffold": "C1=NC(c2ccccc2)(c2cccc(-c3cccnc3)c2)C2=NCCCN12",
       "count": 2
     },
@@ -201,6 +193,14 @@
     {
       "scaffold": "O=S1(=O)CC(Cc2ccccc2)CC(NCc2ccccn2)C1",
       "count": 2
+    },
+    {
+      "scaffold": "O=C(NC(CCNCc1ccccc1)Cc1ccccc1)c1cccc(S(=O)(=O)c2ccccc2)c1",
+      "count": 2
+    },
+    {
+      "scaffold": "O=C1N(CC2CCCO2)C=NC1(c1ccccc1)C1CCCCC1",
+      "count": 1
     }
   ],
   "top_generated_scaffolds": [
