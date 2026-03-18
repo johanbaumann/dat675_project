@@ -314,7 +314,7 @@ class CVAE(nn.Module):
             h_last = h_n[-1]
         else:
             x_emb = self.embedding(x)
-            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1) # expand cond vec 'c' to seq_len dim
+            c_seq = c.unsqueeze(1).expand(-1, x_emb.size(1), -1) # expand cond vec 'c' to seq_len dim, so it can be concatenated with x_emb at each step.
             encoder_input = torch.cat([x_emb, c_seq], dim=-1)
             encoder_input = self.encoder_input_proj(encoder_input)
             encoder_input = self.positional_encoding(encoder_input) # positional encoding
