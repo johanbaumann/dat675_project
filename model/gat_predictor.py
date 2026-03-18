@@ -104,7 +104,7 @@ from gat_utils import run_training_pipeline
 # ==================== configuration ====================
 CONFIG = {
 	"experiment": {
-		"target_folder": ["./0%", "./33%", "./67%"],  # Can be a single path string or a list of dataset folders.
+		"target_folder": ["./67%"],  # Can be a single path string or a list of dataset folders.
 		"actual_test_file": "heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
@@ -118,7 +118,7 @@ CONFIG = {
 		"synthetic_cv": {
 			# Training uses the synthetic file matching the CV iteration index.
 			# Even if this is turned off, synthetic data can be used for pre-training
-			"include_in_training": False,
+			"include_in_training": True,
 			# Options: "matching_fold", "all", "none".
 			"train_selection": "matching_fold",
 			# Default keeps synthetic data out of validation.
@@ -135,7 +135,7 @@ CONFIG = {
 			# Uniform random row subsample after percentile filtering.
 			# Useful for reducing pseudo-label noise volume while keeping diversity.
 			# Set to None to disable row subsampling entirely.
-			"row_keep_fraction": 1.0,
+			"row_keep_fraction": 0.5,
 			# Optional cap for synthetic-to-real ratio in finetuning train folds.
 			# Example: 1.0 keeps at most as many synthetic graphs as real graphs.
 			# Set to None to disable ratio capping.
@@ -198,7 +198,7 @@ CONFIG = {
 		"ffnn_hidden_layers": [256], # and was [256,512], [256,128,64] orig was [256], but added an extra layer to increase capacity without widening too much and overfitting.
 	},
 	"optimization": {
-		"learning_rate": 7e-4, # orig 5e-4, but increased to 1e-3 after removing conv dropout and adding an extra FFNN layer; the model can now handle a higher learning rate without diverging and it trains faster.
+		"learning_rate": 5e-4, # orig 5e-4, but increased to 1e-3 after removing conv dropout and adding an extra FFNN layer; the model can now handle a higher learning rate without diverging and it trains faster.
 		"weight_decay": 1e-4,
 		"grad_clip_norm": 10.0,
 	},
@@ -218,7 +218,7 @@ CONFIG = {
 		# Stage 1 in two-stage training: synthetic-only pretraining per fold,
 		# then Stage 2 finetunes on the fold training set.
 		"synthetic_pretraining": {
-			"enabled": True,
+			"enabled": False,
 			"epochs": 35,
 			"learning_rate": 1e-4, # was 4e-4
 			"weight_decay": 1e-4,
