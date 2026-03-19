@@ -648,6 +648,122 @@ class CVAE(nn.Module):
             z, _, _ = self.encode(x_t, c_t, l_t)
         return z.detach().cpu().numpy()
 
+    def print_parameters_info(self) -> None:
+        """Print detailed parameter breakdown by layer and overall model statistics."""
+        print("\nModel Parameters Breakdown by Layer:")
+        print("-" * 80)
+        
+        total_params = 0
+        total_trainable = 0
+        
+        # Track parameters by module
+        module_params = {}
+        printed_names = set()
+        
+        for name, module in self.named_modules():
+            if len(list(module.children())) == 0:  # Leaf modules only
+                if len(list(module.parameters())) > 0:
+                    param_count = sum(p.numel() for p in module.parameters())
+                    trainable_count = sum(p.numel() for p in module.parameters() if p.requires_grad)
+                    if name:  # Skip empty name from root module
+                        module_params[name] = {
+                            'total': param_count,
+                            'trainable': trainable_count,
+                            'type': module.__class__.__name__
+                        }
+        
+        # Print by category
+        print("\nEmbedding Layers:")
+        for name, info in sorted(module_params.items()):
+            if 'embedding' in name.lower() and name not in printed_names:
+                print(f"  {name:40s} {info['type']:20s} {info['trainable']:>12,}")
+                printed_names.add(name)
+                total_params += info['total']
+                total_trainable += info['trainable']
+        
+        print("\nEncoder Layers:")
+        encoder_param_sum = 0
+        for name, info in sorted(module_params.items()):
+            if 'encoder' in name.lower() and name not in printed_names:
+                print(f"  {name:40s} {info['type']:20s} {info['trainable']:>12,}")
+                printed_names.add(name)
+                encoder_param_sum += info['trainable']
+        total_trainable += encoder_param_sum
+        total_params += encoder_param_sum
+        
+        print("\nDecoder Layers:")
+        decoder_param_sum = 0
+        for name, info in sorted(module_params.items()):
+            if 'decoder' in name.lower() and name not in printed_names and 'input_proj' not in name.lower():
+                print(f"  {name:40s} {info['type']:20s} {info['trainable']:>12,}")
+                printed_names.add(name)
+                decoder_param_sum += info['trainable']
+        # Don't double-count; decoder_input_proj is handled below
+        
+        print("\nProjection & Output Layers:")
+        for name, info in sorted(module_params.items()):
+            if any(x in name.lower() for x in ['memory_proj', 'input_proj', 'out_', 'output_layer']) and name not in printed_names:
+                print(f"  {name:40s} {info['type']:20s} {info['trainable']:>12,}")
+                printed_names.add(name)
+                total_trainable += info['trainable']
+                total_params += info['total']
+        
+        # Add decoder params that weren't already counted
+        for name in printed_names:
+            if 'decoder' in name and name != 'decoder_input_proj':
+                pass  # Already in encoder_param_sum handling
+        total_trainable += decoder_param_sum
+        total_params += decoder_param_sum
+        
+        if self.predict_labels:
+            print("\nLabel Predictor Head:")
+            label_param_sum = 0
+            for name, info in sorted(module_params.items()):
+                if 'label_head' in name.lower() and name not in printed_names:
+                    print(f"  {name:40s} {info['type']:20s} {info['trainable']:>12,}")
+                    printed_names.add(name)
+                    label_param_sum += info['trainable']
+            total_trainable += label_param_sum
+            total_params += label_param_sum
+        
+        print("\n" + "=" * 80)
+        print("OVERALL MODEL STATISTICS")
+        print("=" * 80)
+        
+        # Recalculate total from all parameters (more reliable)
+        total_all = sum(p.numel() for p in self.parameters())
+        trainable_all = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        non_trainable_all = sum(p.numel() for p in self.parameters() if not p.requires_grad)
+        
+        print(f"\nTotal Parameters:      {total_all:>12,}")
+        print(f"Trainable Parameters:  {trainable_all:>12,}")
+        print(f"Non-trainable:         {non_trainable_all:>12,}")
+        
+        # Architecture info
+        print("\nArchitecture Configuration:")
+        print(f"  Model Mode:          {self.model_mode}")
+        print(f"  Vocabulary Size:     {self.vocab_size}")
+        print(f"  Latent Size:         {self.latent_size}")
+        print(f"  Unit/Hidden Size:    {self.unit_size}")
+        print(f"  RNN Layers:          {self.n_rnn_layer}")
+        print(f"  Conditioning Props:  {self.num_prop}")
+        print(f"  Device:              {self.device}")
+        print(f"  AMP Enabled:         {self.amp_enabled}")
+        print(f"  Optimizer:           {self.optimizer_name}")
+        print(f"  Learning Rate:       {self.lr}")
+        
+        if self.model_mode == 'transformer':
+            print(f"\nTransformer Settings:")
+            print(f"  Attention Heads:     {self.transformer_heads}")
+            print(f"  FF Size:             {self.transformer_ff_size}")
+            print(f"  Dropout:             {self.transformer_dropout}")
+        
+        if self.predict_labels:
+            print(f"\nLabel Prediction Head:")
+            print(f"  Predict Labels:      {self.predict_labels}")
+            print(f"  Label Dimension:     {self.label_dim}")
+            print(f"  Loss Weight:         {self.label_loss_weight}")
+            print(f"  Condition Included:  {self.include_condition_in_label_head}")
 
     def sample(
         self,
