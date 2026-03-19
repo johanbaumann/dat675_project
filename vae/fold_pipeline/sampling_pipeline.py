@@ -40,6 +40,7 @@ from utils import (
     create_and_restore_model,
     normalize_like_training,
     sample_target_props_like_training,
+    sample_target_props_uniform_ranges,
 )
 
 
@@ -132,6 +133,92 @@ def _read_bool_config(cfg: dict, key: str, default: bool) -> bool:
             return False
         raise ValueError(f"sampling.{key} string value must be 'true' or 'false', got: {value!r}")
     raise ValueError(f'sampling.{key} must be a boolean, got type: {type(value).__name__}')
+
+
+def _resolve_target_sampling_mode(sampling_cfg: dict) -> str:
+    """Resolve target sampling mode with backward compatibility.
+
+    Priority:
+      1) sampling.target_sampling_mode
+      2) legacy sampling.run_training_dist boolean
+    """
+    explicit = sampling_cfg.get('target_sampling_mode', None)
+    if explicit is not None:
+        mode = str(explicit).strip().lower()
+    else:
+        mode = 'training_dist' if bool(sampling_cfg.get('run_training_dist', False)) else 'single_target'
+
+    aliases = {
+        'single': 'single_target',
+        'single_target': 'single_target',
+        'training': 'training_dist',
+        'training_dist': 'training_dist',
+        'uniform': 'uniform_range',
+        'uniform_range': 'uniform_range',
+        'uniform_strict': 'uniform_range_strict',
+        'uniform_range_strict': 'uniform_range_strict',
+    }
+    resolved = aliases.get(mode)
+    if resolved is None:
+        raise ValueError(
+            'sampling.target_sampling_mode must be one of: '
+            'single_target, training_dist, uniform_range, uniform_range_strict'
+        )
+    return resolved
+
+
+def _resolve_uniform_ranges(sampling_cfg: dict, *, num_prop: int) -> list[list[float]]:
+    """Resolve user-configured uniform ranges into per-property [min, max] pairs."""
+    configured = sampling_cfg.get('uniform_ranges', None)
+
+    # Convenience for 1D conditioning: "uniform_range": [min, max].
+    if configured is None and 'uniform_range' in sampling_cfg:
+        one_dim = sampling_cfg.get('uniform_range')
+        if int(num_prop) != 1:
+            raise ValueError(
+                'sampling.uniform_range is only supported when model num_prop=1. '
+                'Use sampling.uniform_ranges for multi-property conditioning.'
+            )
+        configured = [one_dim]
+
+    if not isinstance(configured, list) or len(configured) == 0:
+        raise ValueError(
+            'sampling mode uniform_range requires sampling.uniform_ranges (or sampling.uniform_range for num_prop=1).'
+        )
+
+    if len(configured) != int(num_prop):
+        raise ValueError(
+            f'sampling.uniform_ranges must have exactly {int(num_prop)} [min, max] pairs, got {len(configured)}.'
+        )
+
+    parsed: list[list[float]] = []
+    for i, pair in enumerate(configured):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError(f'sampling.uniform_ranges[{i}] must be a [min, max] pair.')
+        try:
+            lo = float(pair[0])
+            hi = float(pair[1])
+        except Exception as exc:
+            raise ValueError(f'sampling.uniform_ranges[{i}] must contain numeric min/max values.') from exc
+        parsed.append([min(lo, hi), max(lo, hi)])
+    return parsed
+
+
+def _strict_bin_index_for_value(*, value: float, lo: float, hi: float, n_bins: int) -> int:
+    """Map a scalar value to a strict uniform bin index in [0, n_bins-1]."""
+    if n_bins <= 1 or hi <= lo:
+        return 0
+    if value <= lo:
+        return 0
+    if value >= hi:
+        return int(n_bins - 1)
+    width = float(hi - lo) / float(n_bins)
+    idx = int((float(value) - float(lo)) / width)
+    if idx < 0:
+        return 0
+    if idx >= int(n_bins):
+        return int(n_bins - 1)
+    return idx
 
 
 def _scaffold_smiles_from_mol(mol: Optional[Chem.Mol], *, make_generic: bool = True) -> Optional[str]:
@@ -265,10 +352,14 @@ def run_sampling_for_iteration(
             int(model_config['num_prop']),
         )
 
-    run_training_dist = bool(sampling_cfg.get('run_training_dist', False))
-    if not run_training_dist:
+    sampling_mode = _resolve_target_sampling_mode(sampling_cfg)
+    run_training_dist = sampling_mode == 'training_dist'
+    run_uniform_range = sampling_mode == 'uniform_range'
+    run_uniform_range_strict = sampling_mode == 'uniform_range_strict'
+
+    if sampling_mode == 'single_target':
         if target_row is None:
-            raise ValueError('target_row is required when sampling.run_training_dist is false.')
+            raise ValueError('target_row is required when sampling.target_sampling_mode=single_target.')
         if len(target_row) != int(model_config['num_prop']):
             raise ValueError(
                 f'target_row has {len(target_row)} values, model expects {int(model_config["num_prop"])} properties.'
@@ -289,7 +380,7 @@ def run_sampling_for_iteration(
     model = create_and_restore_model({'save_file': ckpt_path}, model_config, len(charset))
 
     target_row_single: Optional[list[float]] = None
-    if not run_training_dist:
+    if sampling_mode == 'single_target':
         assert target_row is not None
         target_row_single = [float(v) for v in target_row]
         target_prop = _target_row_to_batch(target_row_single, int(model_config['batch_size']))
@@ -312,13 +403,53 @@ def run_sampling_for_iteration(
         raise ValueError(
             'sampling.run_training_dist=true requires model prop_norm_mean/std from training config/checkpoint.'
         )
-
-    start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
+    uniform_ranges = (
+        _resolve_uniform_ranges(sampling_cfg, num_prop=int(model_config['num_prop']))
+        if (run_uniform_range or run_uniform_range_strict)
+        else None
+    )
 
     top_k_raw = sampling_cfg.get('top_k', 20)
     top_k = None if top_k_raw is None else int(top_k_raw)
-    num_unique = int(sampling_cfg.get('num_unique', 1000))
+    num_unique_target = int(sampling_cfg.get('num_unique', 1000))
     max_batches = int(sampling_cfg.get('max_batches', 5000))
+    if num_unique_target <= 0:
+        raise ValueError('sampling.num_unique must be a positive integer.')
+    if max_batches <= 0:
+        raise ValueError('sampling.max_batches must be a positive integer.')
+
+    # Keep a single local target variable for all termination/quota logic.
+    num_unique = int(num_unique_target)
+
+    strict_uniform_dimension = int(sampling_cfg.get('uniform_strict_dimension', 0))
+    strict_uniform_bins = int(sampling_cfg.get('uniform_strict_bins', 12))
+    strict_uniform_bin_quotas: Optional[list[int]] = None
+    strict_uniform_bin_counts: Optional[list[int]] = None
+    strict_uniform_lo = None
+    strict_uniform_hi = None
+    strict_rejected_by_quota = 0
+
+    if run_uniform_range_strict:
+        assert uniform_ranges is not None
+        if strict_uniform_dimension < 0 or strict_uniform_dimension >= int(model_config['num_prop']):
+            raise ValueError(
+                f'sampling.uniform_strict_dimension={strict_uniform_dimension} is out of bounds for '
+                f'num_prop={int(model_config["num_prop"])}.'
+            )
+        if strict_uniform_bins <= 0:
+            raise ValueError('sampling.uniform_strict_bins must be a positive integer.')
+
+        strict_uniform_lo = float(uniform_ranges[strict_uniform_dimension][0])
+        strict_uniform_hi = float(uniform_ranges[strict_uniform_dimension][1])
+        if strict_uniform_hi <= strict_uniform_lo:
+            raise ValueError('Strict uniform range requires max > min for the strict dimension.')
+
+        base_quota = int(num_unique_target) // int(strict_uniform_bins)
+        remainder = int(num_unique_target) % int(strict_uniform_bins)
+        strict_uniform_bin_quotas = [base_quota + (1 if i < remainder else 0) for i in range(strict_uniform_bins)]
+        strict_uniform_bin_counts = [0 for _ in range(strict_uniform_bins)]
+
+    start_codon = np.array([np.array([vocab['X']]) for _ in range(int(model_config['batch_size']))])
 
     seen_smiles: set[str] = set()
     mol_by_smiles: dict[str, object] = {}
@@ -337,7 +468,7 @@ def run_sampling_for_iteration(
     print(f'[sampling] scaffold mode: {scaffold_mode} (scaffold_make_generic={make_generic_scaffold})')
 
     accept_predicate = None
-    if not run_training_dist:
+    if sampling_mode == 'single_target':
         assert target_row_single is not None
         accept_predicate = _build_accept_predicate(config=sampling_cfg, target_row=target_row_single)
 
@@ -384,6 +515,18 @@ def run_sampling_for_iteration(
             '[sampling] mode=training_dist '
             f'std_scale={dist_std_scale}, clip_n_std={dist_clip_n_std}, seed={dist_seed}'
         )
+    elif run_uniform_range_strict:
+        print(
+            '[sampling] mode=uniform_range_strict '
+            f'uniform_ranges={uniform_ranges}, seed={dist_seed}, '
+            f'dimension={strict_uniform_dimension}, bins={strict_uniform_bins}'
+        )
+        print(f'[sampling] strict bin quotas: {strict_uniform_bin_quotas}')
+    elif run_uniform_range:
+        print(
+            '[sampling] mode=uniform_range '
+            f'uniform_ranges={uniform_ranges}, seed={dist_seed}'
+        )
     else:
         print(f'[sampling] mode=single_target target_row={target_row_single}')
 
@@ -398,6 +541,22 @@ def run_sampling_for_iteration(
                 prop_norm_std=list(prop_norm_std),
                 std_scale=dist_std_scale,
                 clip_n_std=dist_clip_n_std,
+                rng=dist_rng,
+            )
+            batch_target_prop = normalize_like_training(batch_target_raw, prop_norm_mean, prop_norm_std)
+        elif run_uniform_range_strict:
+            assert uniform_ranges is not None
+            batch_target_raw = sample_target_props_uniform_ranges(
+                batch_size=int(model_config['batch_size']),
+                uniform_ranges=uniform_ranges,
+                rng=dist_rng,
+            )
+            batch_target_prop = normalize_like_training(batch_target_raw, prop_norm_mean, prop_norm_std)
+        elif run_uniform_range:
+            assert uniform_ranges is not None
+            batch_target_raw = sample_target_props_uniform_ranges(
+                batch_size=int(model_config['batch_size']),
+                uniform_ranges=uniform_ranges,
                 rng=dist_rng,
             )
             batch_target_prop = normalize_like_training(batch_target_raw, prop_norm_mean, prop_norm_std)
@@ -418,7 +577,7 @@ def run_sampling_for_iteration(
             top_k=top_k,
         )
 
-        if run_training_dist:
+        if run_training_dist or run_uniform_range or run_uniform_range_strict:
             accepted, stats = _collect_new_unique_from_raw_with_payloads(
                 raw_strings=raw_strings,
                 payload_a=pred_labels,
@@ -448,7 +607,7 @@ def run_sampling_for_iteration(
         _accumulate_stats(total_stats, stats)
 
         for accepted_row in accepted:
-            if run_training_dist:
+            if run_training_dist or run_uniform_range or run_uniform_range_strict:
                 can, mol, payload, payload_target_raw = accepted_row
             else:
                 can, mol, payload = accepted_row
@@ -464,6 +623,28 @@ def run_sampling_for_iteration(
                     total_stats['rejected_by_filter'] = int(total_stats.get('rejected_by_filter', 0)) + 1
                     rejected_by_heldout_scaffold += 1
                     continue
+
+            if run_uniform_range_strict:
+                if payload_target_raw is None:
+                    continue
+                assert strict_uniform_bin_quotas is not None
+                assert strict_uniform_bin_counts is not None
+                assert strict_uniform_lo is not None and strict_uniform_hi is not None
+                row_vals = np.asarray(payload_target_raw, dtype=np.float32).reshape(-1)
+                target_val = float(row_vals[int(strict_uniform_dimension)])
+                bin_idx = _strict_bin_index_for_value(
+                    value=target_val,
+                    lo=float(strict_uniform_lo),
+                    hi=float(strict_uniform_hi),
+                    n_bins=int(strict_uniform_bins),
+                )
+                if int(strict_uniform_bin_counts[bin_idx]) >= int(strict_uniform_bin_quotas[bin_idx]):
+                    strict_rejected_by_quota += 1
+                    total_stats['rejected_by_strict_bin_quota'] = int(
+                        total_stats.get('rejected_by_strict_bin_quota', 0)
+                    ) + 1
+                    continue
+
             if can not in mol_by_smiles:
                 mol_by_smiles[can] = mol
                 if payload is not None:
@@ -472,6 +653,8 @@ def run_sampling_for_iteration(
                     target_by_smiles[can] = tuple(
                         float(v) for v in np.asarray(payload_target_raw, dtype=np.float32).reshape(-1).tolist()
                     )
+                if run_uniform_range_strict:
+                    strict_uniform_bin_counts[bin_idx] = int(strict_uniform_bin_counts[bin_idx]) + 1
             if len(mol_by_smiles) >= num_unique:
                 break
 
@@ -483,6 +666,11 @@ def run_sampling_for_iteration(
                 f'rejected_validation_scaffold={rejected_by_test_scaffold}, '
                 f'rejected_heldout_scaffold={rejected_by_heldout_scaffold}'
             )
+            if run_uniform_range_strict and strict_uniform_bin_counts is not None:
+                print(
+                    f'[sampling] strict_bin_counts={strict_uniform_bin_counts}, '
+                    f'rejected_by_strict_bin_quota={strict_rejected_by_quota}'
+                )
 
         if len(mol_by_smiles) >= num_unique:
             break
@@ -501,7 +689,7 @@ def run_sampling_for_iteration(
     )
 
     default_target_row = tuple(float('nan') for _ in range(int(model_config['num_prop'])))
-    if run_training_dist:
+    if run_training_dist or run_uniform_range or run_uniform_range_strict:
         target_rows = [target_by_smiles.get(s, default_target_row) for s in smiles_out]
     else:
         assert target_row_single is not None
@@ -590,7 +778,7 @@ def run_sampling_for_iteration(
     if save_quality_summary:
         quality_summary_csv_path = _save_quality_summary_csv(
             stats=total_stats,
-            run_scope=('training_dist' if run_training_dist else 'single_target'),
+            run_scope=(sampling_mode),
             num_molecules_saved=int(len(out_df)),
             config=quality_cfg,
         )
@@ -607,7 +795,15 @@ def run_sampling_for_iteration(
             'run_dir': os.path.abspath(run_dir),
             'checkpoint_path': ckpt_path,
             'sampling_cfg': sampling_cfg,
+            'sampling_mode': sampling_mode,
             'run_training_dist': bool(run_training_dist),
+            'run_uniform_range': bool(run_uniform_range),
+            'run_uniform_range_strict': bool(run_uniform_range_strict),
+            'uniform_ranges': uniform_ranges,
+            'uniform_strict_dimension': (None if not run_uniform_range_strict else int(strict_uniform_dimension)),
+            'uniform_strict_bins': (None if not run_uniform_range_strict else int(strict_uniform_bins)),
+            'uniform_strict_bin_quotas': strict_uniform_bin_quotas,
+            'uniform_strict_bin_counts': strict_uniform_bin_counts,
             'target_row': (None if target_row_single is None else [float(v) for v in target_row_single]),
             'exclude_validation_scaffolds': bool(sampling_cfg.get('exclude_validation_scaffolds', True)),
             'exclude_heldout_scaffolds': bool(sampling_cfg.get('exclude_heldout_scaffolds', False)),

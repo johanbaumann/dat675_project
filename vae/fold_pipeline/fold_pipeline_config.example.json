@@ -86,11 +86,31 @@
   "sampling": {
     "enabled": true,
     "checkpoint_glob": "model_best.ckpt-*.pt",
-    "run_training_dist": true,
+    "_comment_target_sampling_mode": "Mode options: single_target | training_dist | uniform_range | uniform_range_strict",
+    "_comment_mode_single_target": "single_target: one fixed target_prop value for every generated molecule.",
+    "_comment_mode_training_dist": "training_dist: sample targets from a Gaussian around training mean/std (uses training_dist_* settings).",
+    "_comment_mode_uniform_range": "uniform_range: sample targets uniformly inside uniform_range/uniform_ranges.",
+    "_comment_mode_uniform_range_strict": "uniform_range_strict: same uniform range, but with strict per-bin quotas to force balanced coverage across the range.",
+    "target_sampling_mode": "uniform_range_strict",
+    "run_training_dist": false,
     "enable_prop_cache": false,
     "training_dist_std_scale": 1.0,
     "training_dist_clip_n_std": 2.5,
     "training_dist_seed": null,
+    "uniform_range": [
+      3.0,
+      9.0
+    ],
+    "uniform_ranges": [
+      [
+        3.0,
+        9.0
+      ]
+    ],
+    "_comment_uniform_strict_dimension": "Which property dimension to balance with strict bins. For pIC50-only conditioning, use 0.",
+    "uniform_strict_dimension": 0, 
+    "_comment_uniform_strict_bins": "How many bins to split [min,max] into. More bins = stricter, finer balancing but harder acceptance.",
+    "uniform_strict_bins": 40,
     "target_prop_mode": "mean_test_labels",
     "target_prop": [
       8.0
@@ -152,8 +172,8 @@
     "write_global_manifest": false
   },
   "cleanup": {
-    "purge_artifacts_before_run": true,
-    "purge_training_before_run": true,
+    "purge_artifacts_before_run": false,
+    "purge_training_before_run": false,
     "purge_python_caches_before_run": true,
     "remove_iteration_logs_after_success": false,
     "remove_iteration_data_after_success": true,

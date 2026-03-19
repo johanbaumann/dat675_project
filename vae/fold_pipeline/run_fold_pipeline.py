@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import json
 import os
 import shutil
@@ -98,6 +99,77 @@ def _safe_remove_path(path: str) -> None:
         shutil.rmtree(path)
         return
     os.remove(path)
+
+
+def _resolve_latest_checkpoint_in_run_dir(*, run_dir: str, checkpoint_glob: str) -> Optional[str]:
+    if not os.path.isdir(run_dir):
+        return None
+
+    primary_pattern = os.path.join(run_dir, str(checkpoint_glob))
+    primary_matches = [p for p in glob.glob(primary_pattern) if os.path.isfile(p)]
+    if primary_matches:
+        primary_matches.sort(key=os.path.getmtime, reverse=True)
+        return os.path.abspath(primary_matches[0])
+
+    fallback_pattern = os.path.join(run_dir, '*.pt')
+    fallback_matches = [p for p in glob.glob(fallback_pattern) if os.path.isfile(p)]
+    if fallback_matches:
+        fallback_matches.sort(key=os.path.getmtime, reverse=True)
+        return os.path.abspath(fallback_matches[0])
+
+    return None
+
+
+def _verify_training_stage_outputs(
+    *,
+    fold_name: str,
+    train_run_dir: str,
+    train_cfg_path: str,
+    checkpoint_glob: str,
+    analysis_enabled: bool,
+) -> tuple[str, Optional[str]]:
+    """Verify required artifacts after training stage completes.
+
+    Returns:
+      (checkpoint_path, prediction_eval_csv_path_or_none)
+    """
+    if not os.path.isdir(train_run_dir):
+        raise RuntimeError(
+            f'{fold_name}: training run directory does not exist after train stage: {train_run_dir}'
+        )
+
+    training_config_json = os.path.join(train_run_dir, 'training_config.json')
+    if not os.path.isfile(training_config_json):
+        raise RuntimeError(
+            f'{fold_name}: training completed but training_config.json is missing at {training_config_json}. '
+            'This usually indicates training failed before model initialization was persisted.'
+        )
+
+    checkpoint_path = _resolve_latest_checkpoint_in_run_dir(
+        run_dir=train_run_dir,
+        checkpoint_glob=checkpoint_glob,
+    )
+    if checkpoint_path is None:
+        raise RuntimeError(
+            f'{fold_name}: training stage exited but no checkpoint was written under {train_run_dir} '
+            f'(pattern={checkpoint_glob!r}). '
+            'Possible causes: early numerical failure/non-finite loss or checkpoint saving disabled.'
+        )
+
+    pred_eval_path = _resolve_prediction_eval_csv_path(
+        train_dir=train_run_dir,
+        train_cfg_path=train_cfg_path,
+    )
+    has_pred_eval = bool(pred_eval_path and os.path.isfile(pred_eval_path))
+    if analysis_enabled:
+        print(
+            f'[{fold_name}] training output check: checkpoint={checkpoint_path}, '
+            f'prediction_eval_csv_present={has_pred_eval}'
+        )
+    else:
+        print(f'[{fold_name}] training output check: checkpoint={checkpoint_path}')
+
+    return str(checkpoint_path), (str(pred_eval_path) if has_pred_eval else None)
 
 
 def _purge_python_caches(root_dir: str) -> int:
@@ -896,6 +968,33 @@ def _resolve_target_row(cfg: dict, *, train_prop_txt: str, validation_prop_txt: 
     raise ValueError("sampling.target_prop_mode must be one of: explicit, mean_train_labels, mean_test_labels")
 
 
+def _resolve_target_sampling_mode(cfg: dict) -> str:
+    """Resolve sampling target mode with legacy-flag compatibility."""
+    explicit = cfg.get('target_sampling_mode', None)
+    if explicit is not None:
+        mode = str(explicit).strip().lower()
+    else:
+        mode = 'training_dist' if bool(cfg.get('run_training_dist', False)) else 'single_target'
+
+    aliases = {
+        'single': 'single_target',
+        'single_target': 'single_target',
+        'training': 'training_dist',
+        'training_dist': 'training_dist',
+        'uniform': 'uniform_range',
+        'uniform_range': 'uniform_range',
+        'uniform_strict': 'uniform_range_strict',
+        'uniform_range_strict': 'uniform_range_strict',
+    }
+    resolved = aliases.get(mode)
+    if resolved is None:
+        raise ValueError(
+            'sampling.target_sampling_mode must be one of: '
+            'single_target, training_dist, uniform_range, uniform_range_strict'
+        )
+    return resolved
+
+
 def _run_subprocess(command: list[str], *, cwd: str, log_file: Optional[str], step_name: str) -> None:
     print(f'[{step_name}] running command: {command}')
     print(f'[{step_name}] cwd: {cwd}')
@@ -1261,6 +1360,24 @@ def main() -> None:
     write_partial_global_manifest = bool(manifests_cfg.get('write_partial_global_manifest', True))
     write_global_manifest = bool(manifests_cfg.get('write_global_manifest', True))
 
+    train_enabled = bool(cfg.get('train', {}).get('enabled', True))
+    sampling_enabled = bool(cfg.get('sampling', {}).get('enabled', True))
+    analysis_enabled_global = bool(cfg.get('analysis', {}).get('enabled', True))
+
+    if not train_enabled and sampling_enabled and purge_training_before_run:
+        raise ValueError(
+            'Invalid configuration: train.enabled=false + sampling.enabled=true + '
+            'cleanup.purge_training_before_run=true. This purges checkpoints and then tries to sample. '
+            'Set train.enabled=true, or set cleanup.purge_training_before_run=false when reusing existing checkpoints.'
+        )
+
+    if not sampling_enabled and analysis_enabled_global and purge_artifacts_before_run:
+        raise ValueError(
+            'Invalid configuration: sampling.enabled=false + analysis.enabled=true + '
+            'cleanup.purge_artifacts_before_run=true. This purges generated inputs required by analysis-only mode. '
+            'Set sampling.enabled=true, or set cleanup.purge_artifacts_before_run=false to reuse existing generated CSVs.'
+        )
+
     train_log_enabled = bool(cfg.get('train', {}).get('capture_log_file', True))
     analysis_log_enabled = bool(cfg.get('analysis', {}).get('capture_log_file', True))
 
@@ -1352,10 +1469,6 @@ def main() -> None:
         workspace_root=workspace_root,
         key_name='analysis.script',
     )
-    train_enabled = bool(cfg.get('train', {}).get('enabled', True))
-    sampling_enabled = bool(cfg.get('sampling', {}).get('enabled', True))
-    analysis_enabled_global = bool(cfg.get('analysis', {}).get('enabled', True))
-
     print('===== CV fold iteration pipeline bootstrap =====')
     print(f'config_path={config_path}')
     print(f'workspace_root={workspace_root}')
@@ -1518,6 +1631,14 @@ def main() -> None:
                 log_file=train_log_path,
                 step_name=f'{fold_name}:train',
             )
+            checkpoint_glob = str(sampling_cfg.get('checkpoint_glob', 'model_best.ckpt-*.pt'))
+            _verify_training_stage_outputs(
+                fold_name=fold_name,
+                train_run_dir=train_dir,
+                train_cfg_path=train_cfg_path,
+                checkpoint_glob=checkpoint_glob,
+                analysis_enabled=bool(run_analysis),
+            )
         else:
             print(f'[{fold_name}] training stage disabled by config (train.enabled=False)')
 
@@ -1532,11 +1653,28 @@ def main() -> None:
             fold_sampling_cfg['pred_property_names'] = list(label_columns)
 
             train_run_dir_for_sampling = train_dir
+            if not train_enabled:
+                checkpoint_glob = str(fold_sampling_cfg.get('checkpoint_glob', 'model_best.ckpt-*.pt'))
+                resolved_ckpt = _resolve_latest_checkpoint_in_run_dir(
+                    run_dir=train_run_dir_for_sampling,
+                    checkpoint_glob=checkpoint_glob,
+                )
+                if resolved_ckpt is None:
+                    raise RuntimeError(
+                        f'{fold_name}: sampling requested with train.enabled=false, but no checkpoint exists in '
+                        f'{train_run_dir_for_sampling} (pattern={checkpoint_glob!r}). '\
+                        'Either enable training for this run, or keep existing checkpoints and disable '\
+                        'cleanup.purge_training_before_run.'
+                    )
+                print(f'[{fold_name}] reusing existing checkpoint for sampling: {resolved_ckpt}')
 
-            run_training_dist = bool(fold_sampling_cfg.get('run_training_dist', False))
-            if run_training_dist:
+            target_sampling_mode = _resolve_target_sampling_mode(fold_sampling_cfg)
+            if target_sampling_mode in ('training_dist', 'uniform_range', 'uniform_range_strict'):
                 target_row = None
-                print(f'[{fold_name}] sampling mode: training_dist (per-molecule varying targets)')
+                print(
+                    f'[{fold_name}] sampling mode: {target_sampling_mode} '
+                    '(per-molecule varying targets)'
+                )
             else:
                 target_row = _resolve_target_row(
                     fold_sampling_cfg,

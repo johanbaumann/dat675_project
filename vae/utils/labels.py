@@ -696,6 +696,44 @@ def sample_target_props_like_training(
     return sampled
 
 
+def sample_target_props_uniform_ranges(
+    *,
+    batch_size: int,
+    uniform_ranges: list,
+    rng: Optional[np.random.Generator] = None,
+) -> np.ndarray:
+    """Sample conditioning targets uniformly per property over [min, max].
+
+    Args:
+      uniform_ranges: list of [min, max] pairs, one pair per property.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    if not isinstance(uniform_ranges, list) or len(uniform_ranges) == 0:
+        raise ValueError('uniform_ranges must be a non-empty list of [min, max] pairs.')
+
+    parsed_ranges: list[tuple[float, float]] = []
+    for i, pair in enumerate(uniform_ranges):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError(f'uniform_ranges[{i}] must be a [min, max] pair.')
+        try:
+            lo = float(pair[0])
+            hi = float(pair[1])
+        except Exception as exc:
+            raise ValueError(f'uniform_ranges[{i}] must contain numeric min/max values.') from exc
+        parsed_ranges.append((min(lo, hi), max(lo, hi)))
+
+    lo_arr = np.asarray([p[0] for p in parsed_ranges], dtype=np.float32).reshape(1, -1)
+    hi_arr = np.asarray([p[1] for p in parsed_ranges], dtype=np.float32).reshape(1, -1)
+    span = (hi_arr - lo_arr).astype(np.float32)
+
+    bs = int(batch_size)
+    rand = rng.random((bs, int(lo_arr.shape[1]))).astype(np.float32)
+    sampled = lo_arr + (rand * span)
+    return sampled.astype(np.float32)
+
+
 def _collect_new_unique_from_raw_with_payloads(
     *,
     raw_strings: list[str],

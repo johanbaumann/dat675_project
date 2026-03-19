@@ -157,6 +157,34 @@ Key options:
   - `true` => generic Murcko scaffold
   - `false` => specific Murcko scaffold
 
+## Sampling target modes
+
+Sampling now supports four target-conditioning modes:
+
+- `sampling.target_sampling_mode = "single_target"`
+  - Uses one fixed conditioning row for all generated molecules.
+  - Target row comes from `sampling.target_prop_mode` + `sampling.target_prop`.
+- `sampling.target_sampling_mode = "training_dist"`
+  - Samples conditioning targets from a Gaussian around training-set mean/std.
+  - Uses `sampling.training_dist_std_scale`, `sampling.training_dist_clip_n_std`, `sampling.training_dist_seed`.
+- `sampling.target_sampling_mode = "uniform_range"`
+  - Samples conditioning targets uniformly inside user-specified ranges.
+  - For 1-property conditioning (BACE pIC50), use `sampling.uniform_range: [min, max]`.
+  - For multi-property conditioning, use `sampling.uniform_ranges: [[min_0, max_0], [min_1, max_1], ...]`.
+- `sampling.target_sampling_mode = "uniform_range_strict"`
+  - Uses uniform range sampling plus strict per-bin quotas across one selected property dimension.
+  - This is intended for hole filling at distribution extremes.
+  - Configure with:
+    - `sampling.uniform_ranges` (or `sampling.uniform_range` for 1-property)
+    - `sampling.uniform_strict_dimension` (default `0`)
+    - `sampling.uniform_strict_bins` (default `12`)
+  - Bin quotas are computed from `sampling.num_unique` and enforced during acceptance.
+
+Backward compatibility:
+
+- If `sampling.target_sampling_mode` is omitted, legacy `sampling.run_training_dist=true/false` is still respected.
+- If `sampling.target_sampling_mode` is set, mode behavior is explicit and does not depend on `sampling.run_training_dist`.
+
 ## Important debug output
 
 Per iteration, logs print:
