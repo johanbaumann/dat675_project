@@ -1,0 +1,36 @@
+{
+  "iteration_index": 4,
+  "iteration_name": "cv_iteration_4",
+  "validation_fold_name": "original_fold_4",
+  "training_fold_names": [
+    "original_fold_0",
+    "original_fold_1",
+    "original_fold_2",
+    "original_fold_3"
+  ],
+  "validation_csv": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_4.csv",
+  "training_csvs": [
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv",
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_1.csv",
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_2.csv",
+    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_3.csv"
+  ],
+  "train_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\data\\cv_iteration_4_train_prop.txt",
+  "validation_prop_txt": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\data\\cv_iteration_4_validation_prop.txt",
+  "training_fold_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_4",
+  "artifacts_iteration_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4",
+  "train_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_4\\train_config.json",
+  "train_run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_4\\training",
+  "sampling_result": {
+    "run_dir": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\save\\fold_pipeline_runs\\cv_iteration_4\\training",
+    "checkpoint_path": "REUSED_EXISTING_GENERATED_CSV",
+    "generated_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\generated\\generated.csv",
+    "quality_summary_csv_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\generated\\quality_summary.csv",
+    "num_saved": 10000,
+    "stats": {}
+  },
+  "analysis_enabled": true,
+  "analysis_config_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\analysis\\analysis_config.json",
+  "analysis_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\paper_based\\cvae\\fold_pipeline_outputs\\cv_iteration_4\\analysis\\analysis_summary.json",
+  "completed_unix": 1773830945.6827962
+}
