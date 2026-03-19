@@ -191,7 +191,7 @@ python train_labels.py
   "workspace_root": ".",
   "training_output_root": "save/fold_pipeline_runs",
   "artifacts_output_root": "fold_pipeline_outputs",
-  "train_validation_folds_dir": "../../../Preprocessing/combination_1300_molecules_and_0_%_synthetic",
+  "train_validation_folds_dir": "../Preprocessing/combination_1300_molecules_and_0_%_synthetic",
   "fold_glob": "fold_*.csv",
   "smiles_column": "smiles",
   "label_columns": [
@@ -284,7 +284,7 @@ python train_labels.py
     "exclude_training": true,
     "exclude_validation_scaffolds": true,
     "exclude_heldout_scaffolds": true,
-    "heldout_smiles_csv": "../../../Preprocessing/heldout_datasets/heldout_testset.csv",
+    "heldout_smiles_csv": "../Preprocessing/heldout_datasets/heldout_testset.csv",
     "validation_smiles_column": "smiles",
     "heldout_smiles_column": "smiles",
     "scaffold_make_generic": false,

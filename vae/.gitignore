@@ -1,5 +1,8 @@
 save/
 audit_outputs/
 
+*/__pycache__/
+
+#CHANGELOG.md
 
 *.pth
