@@ -1,7 +1,0 @@
-iteration_name,pred_vs_ref_count,pred_vs_ref_mae,pred_vs_ref_std_ae,target_vs_ref_count,target_vs_ref_mae,target_vs_ref_std_ae,mae_gap_target_minus_pred
-cv_iteration_0,,,,,,,
-cv_iteration_1,,,,,,,
-cv_iteration_2,,,,,,,
-cv_iteration_3,,,,,,,
-cv_iteration_4,,,,,,,
-__weighted_mean__,,,,,,,
