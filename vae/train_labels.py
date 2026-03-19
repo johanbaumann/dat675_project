@@ -399,6 +399,147 @@ def _load_data_with_existing_vocab(prop_file: str, seq_length: int, vocab: dict)
         np.asarray(lengths, dtype=np.int64),
     )
 
+
+def _decode_smiles_batch(token_rows: np.ndarray, charset: np.ndarray) -> list[str]:
+    smiles_list: list[str] = []
+    for row in token_rows:
+        smi = convert_to_smiles(row, charset)
+        smi = str(smi).split('E', 1)[0].strip()
+        smiles_list.append(smi)
+    return smiles_list
+
+
+def _predict_label_outputs_for_split(
+    *,
+    model: CVAE,
+    x_tokens: np.ndarray,
+    cond_norm: np.ndarray,
+    lengths: np.ndarray,
+    seq_output_tokens: np.ndarray,
+    labels_raw: np.ndarray,
+    split_name: str,
+    charset: np.ndarray,
+    label_target_indices: list[int],
+    label_target_names: list[str],
+    label_target_scale_raw: bool,
+    prop_norm_mean: np.ndarray,
+    prop_norm_std: np.ndarray,
+    batch_size: int,
+) -> pd.DataFrame:
+    if x_tokens.shape[0] == 0:
+        return pd.DataFrame(columns=['split', 'smiles'])
+
+    smiles = _decode_smiles_batch(seq_output_tokens, charset)
+    pred_chunks: list[np.ndarray] = []
+    model.train(False)
+
+    with torch.no_grad():
+        for start in range(0, int(x_tokens.shape[0]), int(batch_size)):
+            end = min(int(x_tokens.shape[0]), start + int(batch_size))
+            x_b = torch.as_tensor(x_tokens[start:end], dtype=torch.long, device=model.device)
+            c_b = torch.as_tensor(cond_norm[start:end], dtype=torch.float32, device=model.device)
+            l_b = torch.as_tensor(lengths[start:end], dtype=torch.long, device=model.device)
+
+            # Use latent mean for deterministic label prediction export.
+            _z_b, mean_b, _log_sigma_b = model.encode(x_b, c_b, l_b)
+            y_hat_b = model.predict_label(mean_b, c=c_b)
+            pred_chunks.append(y_hat_b.detach().cpu().numpy().astype(np.float32))
+
+    pred_mat = np.concatenate(pred_chunks, axis=0).astype(np.float32)
+    if pred_mat.ndim == 1:
+        pred_mat = pred_mat.reshape(-1, 1)
+
+    if bool(label_target_scale_raw):
+        pred_raw = pred_mat
+    else:
+        mean_sel = prop_norm_mean[label_target_indices].astype(np.float32)
+        std_sel = prop_norm_std[label_target_indices].astype(np.float32)
+        std_sel = np.where(std_sel < 1e-8, 1.0, std_sel)
+        pred_raw = (pred_mat * std_sel.reshape(1, -1)) + mean_sel.reshape(1, -1)
+
+    out = pd.DataFrame({'split': [str(split_name)] * int(x_tokens.shape[0]), 'smiles': smiles})
+    for j, idx in enumerate(label_target_indices):
+        name = str(label_target_names[j]) if j < len(label_target_names) else f'prop_{idx}'
+        out[str(name)] = labels_raw[:, idx].astype(np.float32)
+        out[f'pred_{name}'] = pred_raw[:, j].astype(np.float32)
+    return out
+
+
+def _export_train_validation_prediction_eval_csv(
+    *,
+    model: CVAE,
+    config: dict,
+    charset: np.ndarray,
+    train_molecules_input: np.ndarray,
+    train_molecules_output: np.ndarray,
+    train_length: np.ndarray,
+    train_labels: np.ndarray,
+    train_labels_raw: np.ndarray,
+    test_molecules_input: np.ndarray,
+    test_molecules_output: np.ndarray,
+    test_length: np.ndarray,
+    test_labels: np.ndarray,
+    test_labels_raw: np.ndarray,
+    label_target_indices: Optional[list[int]],
+    label_target_names: Optional[list[str]],
+    label_targets_use_raw_scale: bool,
+    prop_mean: np.ndarray,
+    prop_std: np.ndarray,
+) -> Optional[str]:
+    if not bool(config.get('save_prediction_eval_csv', True)):
+        return None
+    if label_target_indices is None or len(label_target_indices) == 0:
+        return None
+
+    target_names = (
+        [str(x) for x in label_target_names]
+        if isinstance(label_target_names, list)
+        else [f'prop_{i}' for i in label_target_indices]
+    )
+
+    batch_size = int(config.get('batch_size', 64))
+    train_df = _predict_label_outputs_for_split(
+        model=model,
+        x_tokens=train_molecules_input,
+        cond_norm=train_labels,
+        lengths=train_length,
+        seq_output_tokens=train_molecules_output,
+        labels_raw=train_labels_raw,
+        split_name='train',
+        charset=np.asarray(charset),
+        label_target_indices=list(label_target_indices),
+        label_target_names=target_names,
+        label_target_scale_raw=bool(label_targets_use_raw_scale),
+        prop_norm_mean=np.asarray(prop_mean, dtype=np.float32),
+        prop_norm_std=np.asarray(prop_std, dtype=np.float32),
+        batch_size=batch_size,
+    )
+    validation_df = _predict_label_outputs_for_split(
+        model=model,
+        x_tokens=test_molecules_input,
+        cond_norm=test_labels,
+        lengths=test_length,
+        seq_output_tokens=test_molecules_output,
+        labels_raw=test_labels_raw,
+        split_name='validation',
+        charset=np.asarray(charset),
+        label_target_indices=list(label_target_indices),
+        label_target_names=target_names,
+        label_target_scale_raw=bool(label_targets_use_raw_scale),
+        prop_norm_mean=np.asarray(prop_mean, dtype=np.float32),
+        prop_norm_std=np.asarray(prop_std, dtype=np.float32),
+        batch_size=batch_size,
+    )
+
+    eval_df = pd.concat([train_df, validation_df], axis=0, ignore_index=True, sort=False)
+    out_name = str(config.get('prediction_eval_filename', 'train_validation_prediction_eval.csv')).strip()
+    if out_name == '':
+        out_name = 'train_validation_prediction_eval.csv'
+    out_path = os.path.abspath(os.path.join(config['save_dir'], out_name))
+    eval_df.to_csv(out_path, index=False)
+    print(f'saved train/validation prediction eval CSV: {out_path} (rows={len(eval_df)})')
+    return out_path
+
 # NOTE: compose_train_config_from_dict() may flatten/override nested config values.
 # Capture optional label-prediction settings here so they remain stable.
 predict_labels_cfg = bool(config.get('model', {}).get('predict_labels', False))
@@ -818,14 +959,16 @@ for epoch in range(config['num_epochs']):
         )
 
         # Save the current weights at early-stop epoch for traceability.
-        save_current_checkpoint(
-            epoch=epoch,
-            config=config,
-            model=model,
-            model_config=model_config,
-            suffix='_early_stop',
-        )
-        save_history_csv(config=config, history=history)
+        if bool(config.get('save_early_stop_checkpoint', True)):
+            save_current_checkpoint(
+                epoch=epoch,
+                config=config,
+                model=model,
+                model_config=model_config,
+                suffix='_early_stop',
+            )
+        if bool(config.get('save_history_csv', True)):
+            save_history_csv(config=config, history=history)
         break
     # end time for epoch
     end = time.time()  
@@ -866,15 +1009,17 @@ for epoch in range(config['num_epochs']):
     # Occaisonal_checkpointing
     if is_last_epoch:
         # Always save current weights for the last epoch if training reaches it.
-        save_current_checkpoint(
-            epoch=epoch,
-            config=config,
-            model=model,
-            model_config=model_config,
-            suffix='_final',
-        )
-        save_history_csv(config=config, history=history)
-    elif save_epoch:
+        if bool(config.get('save_final_checkpoint', True)):
+            save_current_checkpoint(
+                epoch=epoch,
+                config=config,
+                model=model,
+                model_config=model_config,
+                suffix='_final',
+            )
+        if bool(config.get('save_history_csv', True)):
+            save_history_csv(config=config, history=history)
+    elif save_epoch and bool(config.get('save_periodic_checkpoints', True)):
         # Occasional save of current epoch weights.
         save_current_checkpoint(
             epoch=epoch,
@@ -883,5 +1028,31 @@ for epoch in range(config['num_epochs']):
             model_config=model_config,
             suffix='_periodic',
         )
-        save_history_csv(config=config, history=history)
+        if bool(config.get('save_history_csv', True)):
+            save_history_csv(config=config, history=history)
+
+# Export split-level prediction-vs-ground-truth CSV for downstream residual/error plots.
+if predict_labels:
+    if bool(config.get('early_stopping_restore_best', True)) and best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+    _export_train_validation_prediction_eval_csv(
+        model=model,
+        config=config,
+        charset=np.asarray(char),
+        train_molecules_input=train_molecules_input,
+        train_molecules_output=train_molecules_output,
+        train_length=train_length,
+        train_labels=train_labels,
+        train_labels_raw=train_labels_raw,
+        test_molecules_input=test_molecules_input,
+        test_molecules_output=test_molecules_output,
+        test_length=test_length,
+        test_labels=test_labels,
+        test_labels_raw=test_labels_raw,
+        label_target_indices=label_target_indices,
+        label_target_names=label_target_names,
+        label_targets_use_raw_scale=bool(label_targets_use_raw_scale_cfg),
+        prop_mean=np.asarray(prop_mean, dtype=np.float32),
+        prop_std=np.asarray(prop_std, dtype=np.float32),
+    )
 

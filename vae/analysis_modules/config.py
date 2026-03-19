@@ -23,11 +23,13 @@ class AnalysisConfig:
     generated_data_path: str
     output_dir: str
     quality_summary_data_path: Optional[str] = None
+    prediction_eval_data_path: Optional[str] = None
 
     smiles_column: str = 'smiles'
     train_sep: Optional[str] = None
     validation_sep: Optional[str] = None
     generated_sep: str = ','
+    prediction_eval_sep: str = ','
 
     target_property_column: Optional[str] = None
     predicted_property_column: Optional[str] = None
@@ -49,6 +51,8 @@ class AnalysisConfig:
     save_scaffold_plot: bool = True
     save_scaffold_grids: bool = True
     run_prediction_error_plot: bool = True
+    run_residual_plot: bool = True
+    training_was_done_this_run: bool = True
 
     distribution_plot_filename: str = 'property_distribution.png'
     mw_distribution_diff_plot_filename: str = 'mw_distribution_diff_train_minus_generated.png'
@@ -60,6 +64,7 @@ class AnalysisConfig:
     train_loss_plot_filename: str = 'train_vs_test_loss.png'
     tanimoto_histogram_filename: str = 'tanimoto_similarity_distribution.png'
     prediction_error_plot_filename: str = 'prediction_error_vs_ground_truth.png'
+    residual_plot_filename: str = 'residual_plot.png'
     processed_csv_filename: str = 'generated_subset_with_similarity.csv'
     summary_json_filename: str = 'analysis_summary.json'
 
@@ -144,6 +149,8 @@ def _validate_analysis_config_paths(cfg: AnalysisConfig) -> None:
         missing.append(f'generated_data_path: {cfg.generated_data_path}')
     if cfg.validation_data_path and not os.path.exists(cfg.validation_data_path):
         missing.append(f'validation_data_path: {cfg.validation_data_path}')
+    if cfg.prediction_eval_data_path and not os.path.exists(cfg.prediction_eval_data_path):
+        missing.append(f'prediction_eval_data_path: {cfg.prediction_eval_data_path}')
     if missing:
         joined = '; '.join(missing)
         raise FileNotFoundError(

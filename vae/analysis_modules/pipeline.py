@@ -581,38 +581,29 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
         _debug_log(cfg, 'Skipping prediction-error plot (run_prediction_error_plot=False).')
         return {}
     target_col = _resolve_reference_property_column(gen_df, cfg.target_property_column)
-    conditioning_target_col = _resolve_property_column(gen_df, cfg.target_property_column, role='target')
     pred_col = _resolve_property_column(gen_df, cfg.predicted_property_column, role='pred')
     _debug_log(
         cfg,
         'Prediction error columns -> '
-        f'reference={target_col!r}, prediction={pred_col!r}, conditioning_target={conditioning_target_col!r}',
+        f'reference={target_col!r}, prediction={pred_col!r}',
     )
     if not target_col:
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
         note = (
             f'Missing reference column: {cfg.target_property_column}.\n'
-            'Conditioning target_* is not used as ground truth.'
+            'Prediction-error plot requires ground truth reference values.'
         )
-        for ax in axes:
-            ax.text(0.5, 0.5, note, transform=ax.transAxes, ha='center', va='center')
-            ax.set_axis_off()
+        ax.text(0.5, 0.5, note, transform=ax.transAxes, ha='center', va='center')
+        ax.set_axis_off()
         fig.suptitle('Absolute Error vs Reference (unavailable)', fontsize=13)
         fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
         _save_figure(cfg, cfg.prediction_error_plot_filename, dpi=180)
         plt.close(fig)
-
-        if cfg.target_property_column and conditioning_target_col is not None:
-            _debug_log(
-                cfg,
-                'Prediction-error figure saved with placeholder: only conditioning target_* column was found; '
-                'this is not treated as ground truth.',
-            )
         return {
             'prediction_reference_column': None,
             'prediction_target_column': None,
             'prediction_column': pred_col,
-            'conditioning_target_column': conditioning_target_col,
+            'conditioning_target_column': None,
             'prediction_error_count': 0,
             'prediction_mse': None,
             'prediction_mae': None,
@@ -636,11 +627,6 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
         if pred_col
         else np.asarray([], dtype=float)
     )
-    cond_all = (
-        pd.to_numeric(gen_df[conditioning_target_col], errors='coerce').to_numpy(dtype=float)
-        if conditioning_target_col
-        else np.asarray([], dtype=float)
-    )
 
     pred_stats: dict = {
         'count': 0,
@@ -649,15 +635,8 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
         'median_ae': None,
         'std_ae': None,
     }
-    cond_stats: dict = {
-        'count': 0,
-        'mse': None,
-        'mae': None,
-        'median_ae': None,
-        'std_ae': None,
-    }
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
 
     if pred_col:
@@ -674,50 +653,21 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
                 'median_ae': float(np.median(abs_err_pred)),
                 'std_ae': float(np.std(abs_err_pred)),
             }
-            axes[0].scatter(gt_pred, abs_err_pred, alpha=0.5, s=16, **edge_kwargs)
-            axes[0].set_title(
+            ax.scatter(gt_pred, abs_err_pred, alpha=0.5, s=16, **edge_kwargs)
+            ax.set_title(
                 f'{pred_col} vs {target_col}\n'
                 f"MAE={pred_stats['mae']:.4f}, STD={pred_stats['std_ae']:.4f}, n={pred_stats['count']}"
             )
         else:
-            axes[0].text(0.5, 0.5, 'No finite prediction/reference pairs', transform=axes[0].transAxes, ha='center', va='center')
-            axes[0].set_title(f'{pred_col} vs {target_col}')
+            ax.text(0.5, 0.5, 'No finite prediction/reference pairs', transform=ax.transAxes, ha='center', va='center')
+            ax.set_title(f'{pred_col} vs {target_col}')
     else:
-        axes[0].text(0.5, 0.5, 'Prediction column missing', transform=axes[0].transAxes, ha='center', va='center')
-        axes[0].set_title('Prediction vs Reference')
+        ax.text(0.5, 0.5, 'Prediction column missing', transform=ax.transAxes, ha='center', va='center')
+        ax.set_title('Prediction vs Reference')
 
-    axes[0].set_xlabel(f'Reference {target_col}')
-    axes[0].set_ylabel('Absolute Error')
-    axes[0].grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
-
-    if conditioning_target_col:
-        valid_mask_cond = np.isfinite(gt_all) & np.isfinite(cond_all)
-        if int(np.sum(valid_mask_cond)) > 0:
-            gt_cond = gt_all[valid_mask_cond]
-            cond = cond_all[valid_mask_cond]
-            abs_err_cond = np.abs(gt_cond - cond)
-
-            cond_stats = {
-                'count': int(gt_cond.shape[0]),
-                'mse': float(np.mean((gt_cond - cond) ** 2)),
-                'mae': float(np.mean(abs_err_cond)),
-                'median_ae': float(np.median(abs_err_cond)),
-                'std_ae': float(np.std(abs_err_cond)),
-            }
-            axes[1].scatter(gt_cond, abs_err_cond, alpha=0.5, s=16, color='#B45309', **edge_kwargs)
-            axes[1].set_title(
-                f'{conditioning_target_col} vs {target_col}\n'
-                f"MAE={cond_stats['mae']:.4f}, STD={cond_stats['std_ae']:.4f}, n={cond_stats['count']}"
-            )
-        else:
-            axes[1].text(0.5, 0.5, 'No finite conditioning/reference pairs', transform=axes[1].transAxes, ha='center', va='center')
-            axes[1].set_title(f'{conditioning_target_col} vs {target_col}')
-    else:
-        axes[1].text(0.5, 0.5, 'Conditioning target column missing', transform=axes[1].transAxes, ha='center', va='center')
-        axes[1].set_title('Conditioning Target vs Reference')
-
-    axes[1].set_xlabel(f'Reference {target_col}')
-    axes[1].grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
+    ax.set_xlabel(f'Reference {target_col}')
+    ax.set_ylabel('Absolute Error')
+    ax.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
 
     fig.suptitle(f'Absolute Error vs Reference ({target_col})', fontsize=13)
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
@@ -729,7 +679,7 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
         'prediction_reference_column': target_col,
         'prediction_target_column': target_col,
         'prediction_column': pred_col,
-        'conditioning_target_column': conditioning_target_col,
+        'conditioning_target_column': None,
         'prediction_error_count': int(pred_stats['count']),
         'prediction_mse': pred_stats['mse'],
         'prediction_mae': pred_stats['mae'],
@@ -740,11 +690,119 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
         'pred_vs_ref_mae': pred_stats['mae'],
         'pred_vs_ref_median_ae': pred_stats['median_ae'],
         'pred_vs_ref_std_ae': pred_stats['std_ae'],
-        'target_vs_ref_count': int(cond_stats['count']),
-        'target_vs_ref_mse': cond_stats['mse'],
-        'target_vs_ref_mae': cond_stats['mae'],
-        'target_vs_ref_median_ae': cond_stats['median_ae'],
-        'target_vs_ref_std_ae': cond_stats['std_ae'],
+        'target_vs_ref_count': 0,
+        'target_vs_ref_mse': None,
+        'target_vs_ref_mae': None,
+        'target_vs_ref_median_ae': None,
+        'target_vs_ref_std_ae': None,
+    }
+
+
+def _maybe_plot_residuals(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> dict:
+    """
+    Plot residuals (predicted - actual) vs ground truth.
+    
+    Residuals show signed error (positive = overprediction, negative = underprediction).
+    This helps identify if the model is biased and if performance degrades for extremes.
+    
+    Only runs if run_residual_plot=True AND training_was_done_this_run=True.
+    """
+    if not bool(cfg.run_residual_plot) or not bool(cfg.training_was_done_this_run):
+        _debug_log(cfg, 'Skipping residual plot (run_residual_plot=False or training_was_done_this_run=False).')
+        return {}
+    
+    target_col = _resolve_reference_property_column(gen_df, cfg.target_property_column)
+    pred_col = _resolve_property_column(gen_df, cfg.predicted_property_column, role='pred')
+    _debug_log(
+        cfg,
+        'Residual plot columns -> '
+        f'reference={target_col!r}, prediction={pred_col!r}',
+    )
+    
+    if not target_col:
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+        note = (
+            f'Missing reference column: {cfg.target_property_column}.\n'
+            'Residuals require ground truth.'
+        )
+        ax.text(0.5, 0.5, note, transform=ax.transAxes, ha='center', va='center')
+        ax.set_axis_off()
+        fig.suptitle('Residuals vs Reference (unavailable)', fontsize=13)
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+        _save_figure(cfg, cfg.residual_plot_filename, dpi=180)
+        plt.close(fig)
+        return {
+            'residual_reference_column': None,
+            'residual_prediction_column': pred_col,
+            'residual_count': 0,
+            'residual_mean': None,
+            'residual_std': None,
+            'residual_median': None,
+        }
+    
+    gt_all = pd.to_numeric(gen_df[target_col], errors='coerce').to_numpy(dtype=float)
+    pred_all = (
+        pd.to_numeric(gen_df[pred_col], errors='coerce').to_numpy(dtype=float)
+        if pred_col
+        else np.asarray([], dtype=float)
+    )
+
+    pred_residuals: dict = {
+        'count': 0,
+        'mean': None,
+        'std': None,
+        'median': None,
+    }
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+    edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
+
+    if pred_col:
+        valid_mask_pred = np.isfinite(gt_all) & np.isfinite(pred_all)
+        if int(np.sum(valid_mask_pred)) > 0:
+            gt_pred = gt_all[valid_mask_pred]
+            pred = pred_all[valid_mask_pred]
+            residuals_pred = pred - gt_pred  # Positive = overprediction, Negative = underprediction
+
+            pred_residuals = {
+                'count': int(gt_pred.shape[0]),
+                'mean': float(np.mean(residuals_pred)),
+                'std': float(np.std(residuals_pred)),
+                'median': float(np.median(residuals_pred)),
+            }
+            ax.scatter(gt_pred, residuals_pred, alpha=0.5, s=16, **edge_kwargs)
+            ax.axhline(y=0, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+            ax.set_title(
+                f'{pred_col} residuals vs {target_col}\n'
+                f"Mean={pred_residuals['mean']:.4f}, STD={pred_residuals['std']:.4f}, n={pred_residuals['count']}"
+            )
+        else:
+            ax.text(0.5, 0.5, 'No finite prediction/reference pairs', transform=ax.transAxes, ha='center', va='center')
+            ax.set_title(f'{pred_col} residuals vs {target_col}')
+    else:
+        ax.text(0.5, 0.5, 'Prediction column missing', transform=ax.transAxes, ha='center', va='center')
+        ax.set_title('Prediction Residuals vs Reference')
+
+    ax.set_xlabel(f'Reference {target_col}')
+    ax.set_ylabel('Residual (Pred - Ref)')
+    ax.grid(axis='y', linestyle='--', linewidth=0.6, alpha=0.35)
+
+    fig.suptitle(f'Residuals vs Reference ({target_col})', fontsize=13)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    _save_figure(cfg, cfg.residual_plot_filename, dpi=180)
+    plt.close(fig)
+
+    return {
+        'residual_reference_column': target_col,
+        'residual_prediction_column': pred_col,
+        'residual_count': int(pred_residuals['count']),
+        'residual_mean': pred_residuals['mean'],
+        'residual_std': pred_residuals['std'],
+        'residual_median': pred_residuals['median'],
+        'conditioning_residual_count': 0,
+        'conditioning_residual_mean': None,
+        'conditioning_residual_std': None,
+        'conditioning_residual_median': None,
     }
 
 
@@ -1270,11 +1328,19 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
             sep=cfg.validation_sep,
         )
     gen_df = load_generated_dataframe(cfg.generated_data_path, sep=cfg.generated_sep)
+    prediction_eval_df = None
+    if cfg.prediction_eval_data_path:
+        prediction_eval_df = load_generated_dataframe(
+            cfg.prediction_eval_data_path,
+            sep=cfg.prediction_eval_sep,
+        )
     _debug_log(
         cfg,
         f'Loaded rows -> train={len(train_df)}, '
         f'validation={(0 if validation_df is None else len(validation_df))}, generated={len(gen_df)}',
     )
+    if prediction_eval_df is not None:
+        _debug_log(cfg, f'Loaded prediction_eval rows -> {len(prediction_eval_df)} from {cfg.prediction_eval_data_path}')
 
     if cfg.smiles_column not in train_df.columns:
         raise ValueError(f"Train data is missing smiles column '{cfg.smiles_column}'")
@@ -1385,7 +1451,9 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     _maybe_plot_property_distributions(train_df, validation_df, gen_df, cfg)
     _maybe_plot_scaffold_distribution(train_scaffolds, validation_scaffolds, gen_scaffolds, cfg)
     _maybe_plot_tanimoto_histogram(gen_df, cfg)
-    pred_error_stats = _maybe_plot_prediction_errors(gen_df, cfg)
+    pred_eval_plot_df = prediction_eval_df if prediction_eval_df is not None else gen_df
+    pred_error_stats = _maybe_plot_prediction_errors(pred_eval_plot_df, cfg)
+    residual_stats = _maybe_plot_residuals(pred_eval_plot_df, cfg)
     _run_chemical_space_embedding(train_df, validation_df, gen_df, cfg)
     _run_descriptor_space_embedding(train_df, validation_df, gen_df, cfg)
 
@@ -1427,6 +1495,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
         'train_data_path': cfg.train_data_path,
         'validation_data_path': cfg.validation_data_path,
         'generated_data_path': cfg.generated_data_path,
+        'prediction_eval_data_path': cfg.prediction_eval_data_path,
         'output_dir': cfg.output_dir,
         'num_train_rows': int(len(train_df)),
         'num_train_valid': int(sum(1 for m in train_mols if m is not None)),
@@ -1434,6 +1503,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
         'num_validation_valid': int(sum(1 for m in validation_mols if m is not None)),
         'num_generated_rows': int(len(gen_df)),
         'num_generated_valid': int(int(gen_df['is_valid'].sum())),
+        'num_prediction_eval_rows': int(0 if prediction_eval_df is None else len(prediction_eval_df)),
         'vun': {
             'source': str(vun_metrics.get('source')),
             'quality_summary_csv_path': vun_metrics.get('quality_summary_csv_path'),
@@ -1477,6 +1547,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
         'novel_top_scaffold_grid': scaffold_stats.get('novel_top_scaffold_grid', {}).get('saved', False),
     }
     summary.update(pred_error_stats)
+    summary.update(residual_stats)
 
     summary_path = os.path.join(cfg.output_dir, cfg.summary_json_filename)
     with open(summary_path, 'w', encoding='utf-8') as f:

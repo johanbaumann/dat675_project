@@ -243,6 +243,7 @@ def run_sampling_for_iteration(
     smiles_column: str = 'smiles',
 ) -> SamplingResult:
     os.makedirs(output_dir, exist_ok=True)
+    enable_prop_cache = _read_bool_config(sampling_cfg, 'enable_prop_cache', True)
     _configure_rdkit_logging(
         suppress_parse_warnings=bool(sampling_cfg.get('suppress_rdkit_parse_errors', True))
     )
@@ -253,6 +254,7 @@ def run_sampling_for_iteration(
     charset, vocab, inferred_num_prop = load_sampling_metadata(
         model_config['prop_file'],
         int(model_config['seq_length']),
+        enable_cache=bool(enable_prop_cache),
     )
     model_config['num_prop'] = int(inferred_num_prop)
 
@@ -279,6 +281,7 @@ def run_sampling_for_iteration(
             strip_salts=bool(sampling_cfg.get('strip_salts', True)),
             decharge=bool(sampling_cfg.get('decharge', True)),
             canonicalize_tautomer=bool(sampling_cfg.get('canonicalize_tautomer', False)),
+            enable_cache=bool(enable_prop_cache),
         )
     else:
         training_smiles = set()
@@ -599,26 +602,27 @@ def run_sampling_for_iteration(
     if blocked_heldout_scaffolds:
         print(f'[sampling] rejected due to heldout-scaffold overlap: {rejected_by_heldout_scaffold}')
 
-    debug_payload = {
-        'run_dir': os.path.abspath(run_dir),
-        'checkpoint_path': ckpt_path,
-        'sampling_cfg': sampling_cfg,
-        'run_training_dist': bool(run_training_dist),
-        'target_row': (None if target_row_single is None else [float(v) for v in target_row_single]),
-        'exclude_validation_scaffolds': bool(sampling_cfg.get('exclude_validation_scaffolds', True)),
-        'exclude_heldout_scaffolds': bool(sampling_cfg.get('exclude_heldout_scaffolds', False)),
-        'scaffold_make_generic': bool(make_generic_scaffold),
-        'num_blocked_validation_scaffolds': int(len(blocked_test_scaffolds)),
-        'num_blocked_heldout_scaffolds': int(len(blocked_heldout_scaffolds)),
-        'rejected_by_validation_scaffold': int(rejected_by_test_scaffold),
-        'rejected_by_heldout_scaffold': int(rejected_by_heldout_scaffold),
-        'num_saved': int(len(out_df)),
-        'stats': total_stats,
-        'generated_csv_path': generated_csv_path,
-        'quality_summary_csv_path': quality_summary_csv_path,
-    }
-    with open(os.path.join(output_dir, 'sampling_debug.json'), 'w', encoding='utf-8') as f:
-        json.dump(debug_payload, f, indent=2)
+    if bool(sampling_cfg.get('save_sampling_debug', True)):
+        debug_payload = {
+            'run_dir': os.path.abspath(run_dir),
+            'checkpoint_path': ckpt_path,
+            'sampling_cfg': sampling_cfg,
+            'run_training_dist': bool(run_training_dist),
+            'target_row': (None if target_row_single is None else [float(v) for v in target_row_single]),
+            'exclude_validation_scaffolds': bool(sampling_cfg.get('exclude_validation_scaffolds', True)),
+            'exclude_heldout_scaffolds': bool(sampling_cfg.get('exclude_heldout_scaffolds', False)),
+            'scaffold_make_generic': bool(make_generic_scaffold),
+            'num_blocked_validation_scaffolds': int(len(blocked_test_scaffolds)),
+            'num_blocked_heldout_scaffolds': int(len(blocked_heldout_scaffolds)),
+            'rejected_by_validation_scaffold': int(rejected_by_test_scaffold),
+            'rejected_by_heldout_scaffold': int(rejected_by_heldout_scaffold),
+            'num_saved': int(len(out_df)),
+            'stats': total_stats,
+            'generated_csv_path': generated_csv_path,
+            'quality_summary_csv_path': quality_summary_csv_path,
+        }
+        with open(os.path.join(output_dir, 'sampling_debug.json'), 'w', encoding='utf-8') as f:
+            json.dump(debug_payload, f, indent=2)
 
     return SamplingResult(
         run_dir=os.path.abspath(run_dir),

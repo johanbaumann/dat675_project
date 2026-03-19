@@ -52,6 +52,12 @@ TRAIN_CONFIG_DEFAULTS = {
     'train_ratio': 0.75,
     'smiles_augmentation_duplicates': 0,
     'save_every': 10,
+    'save_periodic_checkpoints': True,
+    'save_final_checkpoint': True,
+    'save_early_stop_checkpoint': True,
+    'save_history_csv': True,
+    'save_prediction_eval_csv': True,
+    'prediction_eval_filename': 'train_validation_prediction_eval.csv',
     'diagnostics_every': 1,
     'kl_anneal_enabled': True,
     'kl_anneal_start_beta': 0.0,
@@ -334,6 +340,18 @@ def _flatten_grouped_train_config(config_override:dict) -> dict:
             flat['use_run_subdir'] = training['use_run_subdir']
         if 'save_every' in training:
             flat['save_every'] = training['save_every']
+        if 'save_periodic_checkpoints' in training:
+            flat['save_periodic_checkpoints'] = training['save_periodic_checkpoints']
+        if 'save_final_checkpoint' in training:
+            flat['save_final_checkpoint'] = training['save_final_checkpoint']
+        if 'save_early_stop_checkpoint' in training:
+            flat['save_early_stop_checkpoint'] = training['save_early_stop_checkpoint']
+        if 'save_history_csv' in training:
+            flat['save_history_csv'] = training['save_history_csv']
+        if 'save_prediction_eval_csv' in training:
+            flat['save_prediction_eval_csv'] = training['save_prediction_eval_csv']
+        if 'prediction_eval_filename' in training:
+            flat['prediction_eval_filename'] = training['prediction_eval_filename']
         if 'early_stopping_patience' in training:
             flat['early_stopping_patience'] = training['early_stopping_patience']
         if 'early_stopping_min_delta' in training:
@@ -420,6 +438,14 @@ def _normalize_train_config(config_override:dict) -> dict:
         config['run_name'] = run_name if run_name else None
     config['use_run_subdir'] = bool(config.get('use_run_subdir', True))
     config['save_every'] = int(config.get('save_every', 10))
+    config['save_periodic_checkpoints'] = bool(config.get('save_periodic_checkpoints', True))
+    config['save_final_checkpoint'] = bool(config.get('save_final_checkpoint', True))
+    config['save_early_stop_checkpoint'] = bool(config.get('save_early_stop_checkpoint', True))
+    config['save_history_csv'] = bool(config.get('save_history_csv', True))
+    config['save_prediction_eval_csv'] = bool(config.get('save_prediction_eval_csv', True))
+    config['prediction_eval_filename'] = str(
+        config.get('prediction_eval_filename', 'train_validation_prediction_eval.csv')
+    )
     config['weight_decay'] = float(config.get('weight_decay', 0.0))
     config['use_amp'] = bool(config.get('use_amp', True))
     config['use_reduce_lr_on_plateau'] = bool(config.get('use_reduce_lr_on_plateau', False))
@@ -524,6 +550,7 @@ def load_training_canonical_smiles(
     strip_salts: bool = True,
     decharge: bool = True,
     canonicalize_tautomer: bool = False,
+    enable_cache: bool = True,
 ) -> set:
     """Load canonical SMILES set from the training/property file.
 
@@ -541,17 +568,18 @@ def load_training_canonical_smiles(
         f"_taut{int(bool(canonicalize_tautomer))}"
         f"_seq{int(seq_length)}.pkl.gz"
     )
-    try:
-        if os.path.exists(cache_path):
-            cache_mtime = os.path.getmtime(cache_path)
-            src_mtime = os.path.getmtime(prop_file)
-            if cache_mtime >= src_mtime:
-                cached = load_pickle_gz(cache_path)
-                if isinstance(cached, set):
-                    return cached
-    except Exception:
-        # Cache is best-effort; fall back to recompute.
-        pass
+    if bool(enable_cache):
+        try:
+            if os.path.exists(cache_path):
+                cache_mtime = os.path.getmtime(cache_path)
+                src_mtime = os.path.getmtime(prop_file)
+                if cache_mtime >= src_mtime:
+                    cached = load_pickle_gz(cache_path)
+                    if isinstance(cached, set):
+                        return cached
+        except Exception:
+            # Cache is best-effort; fall back to recompute.
+            pass
 
     canonical = set()
     with open(prop_file) as f:
@@ -571,10 +599,11 @@ def load_training_canonical_smiles(
         if can is not None:
             canonical.add(can)
 
-    try:
-        save_pickle_gz(cache_path, canonical)
-    except Exception:
-        pass
+    if bool(enable_cache):
+        try:
+            save_pickle_gz(cache_path, canonical)
+        except Exception:
+            pass
     return canonical
 
 
@@ -675,26 +704,27 @@ def convert_to_smiles(vector:np.ndarray, char:np.ndarray) -> str:
     return "".join(map(lambda x: list_char[x], vector)).strip()
 
 
-def load_sampling_metadata(prop_file: str, seq_length: int) -> tuple[np.ndarray, dict, int]:
+def load_sampling_metadata(prop_file: str, seq_length: int, *, enable_cache: bool = True) -> tuple[np.ndarray, dict, int]:
     """Load charset/vocab/num_prop for sampling without building training tensors.
 
     Uses a gzip-pickle cache keyed by file + seq length to make repeated startup
     for large property files fast.
     """
     cache_path = f"{prop_file}.sample_meta_seq{int(seq_length)}.pkl.gz"
-    try:
-        if os.path.exists(cache_path):
-            cache_mtime = os.path.getmtime(cache_path)
-            src_mtime = os.path.getmtime(prop_file)
-            if cache_mtime >= src_mtime:
-                cached = load_pickle_gz(cache_path)
-                chars_cached = cached.get('charset')
-                vocab_cached = cached.get('vocab')
-                num_prop_cached = cached.get('num_prop')
-                if chars_cached is not None and vocab_cached is not None and num_prop_cached is not None:
-                    return np.array(chars_cached), dict(vocab_cached), int(num_prop_cached)
-    except Exception:
-        pass
+    if bool(enable_cache):
+        try:
+            if os.path.exists(cache_path):
+                cache_mtime = os.path.getmtime(cache_path)
+                src_mtime = os.path.getmtime(prop_file)
+                if cache_mtime >= src_mtime:
+                    cached = load_pickle_gz(cache_path)
+                    chars_cached = cached.get('charset')
+                    vocab_cached = cached.get('vocab')
+                    num_prop_cached = cached.get('num_prop')
+                    if chars_cached is not None and vocab_cached is not None and num_prop_cached is not None:
+                        return np.array(chars_cached), dict(vocab_cached), int(num_prop_cached)
+        except Exception:
+            pass
 
     import collections
 
@@ -734,10 +764,11 @@ def load_sampling_metadata(prop_file: str, seq_length: int) -> tuple[np.ndarray,
         'vocab': vocab,
         'num_prop': int(num_prop),
     }
-    try:
-        save_pickle_gz(cache_path, payload)
-    except Exception:
-        pass
+    if bool(enable_cache):
+        try:
+            save_pickle_gz(cache_path, payload)
+        except Exception:
+            pass
 
     return np.array(chars), vocab, int(num_prop)
 

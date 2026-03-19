@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -86,6 +87,32 @@ def _write_json(path: str, payload: dict) -> str:
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2)
     return path
+
+
+def _safe_remove_path(path: str) -> None:
+    if not path:
+        return
+    if not os.path.exists(path):
+        return
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+        return
+    os.remove(path)
+
+
+def _purge_python_caches(root_dir: str) -> int:
+    removed = 0
+    for dirpath, dirnames, _filenames in os.walk(root_dir):
+        for dirname in list(dirnames):
+            if dirname != '__pycache__':
+                continue
+            cache_path = os.path.join(dirpath, dirname)
+            try:
+                shutil.rmtree(cache_path)
+                removed += 1
+            except Exception:
+                pass
+    return int(removed)
 
 
 def _read_first_csv_row(path: str) -> dict:
@@ -869,14 +896,35 @@ def _resolve_target_row(cfg: dict, *, train_prop_txt: str, validation_prop_txt: 
     raise ValueError("sampling.target_prop_mode must be one of: explicit, mean_train_labels, mean_test_labels")
 
 
-def _run_subprocess(command: list[str], *, cwd: str, log_file: str, step_name: str) -> None:
+def _run_subprocess(command: list[str], *, cwd: str, log_file: Optional[str], step_name: str) -> None:
     print(f'[{step_name}] running command: {command}')
     print(f'[{step_name}] cwd: {cwd}')
     started = time.time()
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
     env = dict(os.environ)
     env['PYTHONUNBUFFERED'] = '1'
+
+    if not log_file:
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                print(f'[{step_name}] {line}', end='')
+        proc.wait()
+        duration = time.time() - started
+        print(f'[{step_name}] exit_code={proc.returncode}, duration={duration:.1f}s, log=DISABLED')
+        if proc.returncode != 0:
+            raise RuntimeError(f'{step_name} failed.')
+        return
+
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
     with open(log_file, 'w', encoding='utf-8') as f:
         f.write(f'command: {command}\n')
@@ -990,18 +1038,27 @@ def _build_analysis_config_for_iteration(
     train_data_csv_path: str,
     validation_csv_path: str,
     generated_csv_path: str,
+    prediction_eval_csv_path: Optional[str],
     quality_summary_csv_path: Optional[str],
     has_pred_labels: bool,
+    has_pred_eval_labels: bool,
     label_column: str,
+    training_was_done_this_run: bool,
 ) -> dict:
     profile = str(analysis_cfg.get('profile', 'bace_pic50_10k'))
     overrides = dict(analysis_cfg.get('overrides', {}) or {})
+    
+    # Conditionally enable prediction error and residual plots only if training was done.
+    # These plots require ground truth which is only available when training runs.
+    should_run_groundtruth_plots = bool(training_was_done_this_run and has_pred_eval_labels)
+    
     overrides = _deep_update_dict(
         {
             'train_folder': train_run_dir,
             'train_data_path': train_data_csv_path,
             'validation_data_path': validation_csv_path,
             'generated_data_path': generated_csv_path,
+            'prediction_eval_data_path': prediction_eval_csv_path,
             'quality_summary_data_path': quality_summary_csv_path,
             'output_dir': os.path.join(fold_dir, 'analysis'),
             'smiles_column': 'smiles',
@@ -1010,7 +1067,9 @@ def _build_analysis_config_for_iteration(
             'generated_sep': ',',
             'target_property_column': str(label_column),
             'predicted_property_column': f'pred_{label_column}' if has_pred_labels else None,
-            'run_prediction_error_plot': bool(has_pred_labels),
+            'run_prediction_error_plot': should_run_groundtruth_plots,
+            'run_residual_plot': should_run_groundtruth_plots,
+            'training_was_done_this_run': bool(training_was_done_this_run),
             'debug': True,
         },
         overrides,
@@ -1028,6 +1087,19 @@ def _contains_predicted_column(generated_csv_path: str, label_column: str) -> bo
     return f'pred_{label_column}' in cols
 
 
+def _resolve_prediction_eval_csv_path(*, train_dir: str, train_cfg_path: str) -> Optional[str]:
+    try:
+        payload = _read_json(train_cfg_path)
+    except Exception:
+        return None
+
+    training_cfg = dict(payload.get('training', {}) or {})
+    filename = str(training_cfg.get('prediction_eval_filename', 'train_validation_prediction_eval.csv')).strip()
+    if filename == '':
+        filename = 'train_validation_prediction_eval.csv'
+    return os.path.abspath(os.path.join(train_dir, filename))
+
+
 def _print_iteration_start_summary(
     *,
     fold_name: str,
@@ -1042,6 +1114,8 @@ def _print_iteration_start_summary(
     train_enabled: bool,
     sampling_enabled: bool,
     analysis_enabled: bool,
+    train_log_enabled: bool,
+    analysis_log_enabled: bool,
     total_folds: int,
     validation_fold_index: int,
 ) -> None:
@@ -1051,6 +1125,12 @@ def _print_iteration_start_summary(
     )
     expected_quality_csv = os.path.abspath(
         os.path.join(sample_dir, str(sampling_cfg.get('quality_summary_filename', 'quality_summary.csv')))
+    )
+    expected_train_log = (
+        os.path.join(logs_dir, 'train.log') if bool(train_log_enabled) else 'DISABLED_BY_CONFIG'
+    )
+    expected_analysis_log = (
+        os.path.join(logs_dir, 'analysis.log') if bool(analysis_log_enabled) else 'DISABLED_BY_CONFIG'
     )
 
     print('')
@@ -1073,8 +1153,8 @@ def _print_iteration_start_summary(
     print(f'[{fold_name}] write.logs_dir             : {logs_dir}')
     print(f'[{fold_name}] expected.generated_csv     : {expected_generated_csv}')
     print(f'[{fold_name}] expected.quality_summary   : {expected_quality_csv}')
-    print(f'[{fold_name}] expected.train_log         : {os.path.join(logs_dir, "train.log")}')
-    print(f'[{fold_name}] expected.analysis_log      : {os.path.join(logs_dir, "analysis.log")}')
+    print(f'[{fold_name}] expected.train_log         : {expected_train_log}')
+    print(f'[{fold_name}] expected.analysis_log      : {expected_analysis_log}')
     print(f'[{fold_name}] train.enabled              : {bool(train_enabled)}')
     print(f'[{fold_name}] sampling.enabled           : {bool(sampling_enabled)}')
     print(f'[{fold_name}] analysis.enabled           : {bool(analysis_enabled)}')
@@ -1093,10 +1173,16 @@ def _print_iteration_end_summary(
     logs_dir: str,
     sampling_result,
     analysis_enabled: bool,
+    train_log_enabled: bool,
+    analysis_log_enabled: bool,
     analysis_config_path: Optional[str],
     analysis_summary_path: Optional[str],
     iteration_manifest_path: str,
 ) -> None:
+    output_train_log = os.path.join(logs_dir, 'train.log') if bool(train_log_enabled) else 'DISABLED_BY_CONFIG'
+    output_analysis_log = (
+        os.path.join(logs_dir, 'analysis.log') if bool(analysis_log_enabled) else 'DISABLED_BY_CONFIG'
+    )
     print('')
     print('=' * 90)
     print(f'[{fold_name}] iteration-end summary')
@@ -1112,8 +1198,8 @@ def _print_iteration_end_summary(
     print(f'[{fold_name}] output.generated_csv        : {sampling_result.generated_csv_path}')
     print(f'[{fold_name}] output.quality_summary_csv  : {sampling_result.quality_summary_csv_path}')
     print(f'[{fold_name}] output.num_generated_saved  : {sampling_result.num_saved}')
-    print(f'[{fold_name}] output.train_log            : {os.path.join(logs_dir, "train.log")}')
-    print(f'[{fold_name}] output.analysis_log         : {os.path.join(logs_dir, "analysis.log")}')
+    print(f'[{fold_name}] output.train_log            : {output_train_log}')
+    print(f'[{fold_name}] output.analysis_log         : {output_analysis_log}')
     print(f'[{fold_name}] output.analysis_enabled     : {bool(analysis_enabled)}')
     print(f'[{fold_name}] output.analysis_config_json : {analysis_config_path}')
     print(f'[{fold_name}] output.analysis_summary_json: {analysis_summary_path}')
@@ -1154,6 +1240,37 @@ def main() -> None:
         cv_combo_cfg.get('cross_fold_summary_path'),
         base_dir=workspace_root,
     )
+
+    cleanup_cfg = dict(cfg.get('cleanup', {}) or {})
+    purge_artifacts_before_run = bool(cleanup_cfg.get('purge_artifacts_before_run', False))
+    purge_training_before_run = bool(cleanup_cfg.get('purge_training_before_run', False))
+    purge_python_caches_before_run = bool(cleanup_cfg.get('purge_python_caches_before_run', False))
+    remove_iteration_logs_after_success = bool(cleanup_cfg.get('remove_iteration_logs_after_success', False))
+    remove_iteration_data_after_success = bool(cleanup_cfg.get('remove_iteration_data_after_success', False))
+    remove_sampling_debug_after_success = bool(cleanup_cfg.get('remove_sampling_debug_after_success', False))
+    remove_analysis_config_after_success = bool(cleanup_cfg.get('remove_analysis_config_after_success', False))
+    remove_iteration_manifest_after_success = bool(
+        cleanup_cfg.get('remove_iteration_manifest_after_success', False)
+    )
+    remove_partial_global_manifest_after_success = bool(
+        cleanup_cfg.get('remove_partial_global_manifest_after_success', False)
+    )
+
+    manifests_cfg = dict(cfg.get('manifests', {}) or {})
+    write_iteration_manifest = bool(manifests_cfg.get('write_iteration_manifest', True))
+    write_partial_global_manifest = bool(manifests_cfg.get('write_partial_global_manifest', True))
+    write_global_manifest = bool(manifests_cfg.get('write_global_manifest', True))
+
+    train_log_enabled = bool(cfg.get('train', {}).get('capture_log_file', True))
+    analysis_log_enabled = bool(cfg.get('analysis', {}).get('capture_log_file', True))
+
+    if purge_artifacts_before_run:
+        _safe_remove_path(artifacts_root)
+    if purge_training_before_run:
+        _safe_remove_path(training_root)
+    if purge_python_caches_before_run:
+        removed_cache_dirs = _purge_python_caches(workspace_root)
+        print(f'cleanup: removed __pycache__ directories before run: {removed_cache_dirs}')
 
     os.makedirs(training_root, exist_ok=True)
     os.makedirs(artifacts_root, exist_ok=True)
@@ -1250,6 +1367,29 @@ def main() -> None:
     print(f'label_columns={label_columns}')
     print(f'stage toggles: train={train_enabled}, sampling={sampling_enabled}, analysis={analysis_enabled_global}')
     print(f'cv_combo toggles: enabled={cv_combo_enabled}, only={cv_combo_only}')
+    print(
+        'log file toggles: '
+        f'train.capture_log_file={train_log_enabled}, '
+        f'analysis.capture_log_file={analysis_log_enabled}'
+    )
+    print(
+        'cleanup toggles: '
+        f'purge_artifacts_before_run={purge_artifacts_before_run}, '
+        f'purge_training_before_run={purge_training_before_run}, '
+        f'purge_python_caches_before_run={purge_python_caches_before_run}, '
+        f'remove_iteration_logs_after_success={remove_iteration_logs_after_success}, '
+        f'remove_iteration_data_after_success={remove_iteration_data_after_success}, '
+        f'remove_sampling_debug_after_success={remove_sampling_debug_after_success}, '
+        f'remove_analysis_config_after_success={remove_analysis_config_after_success}, '
+        f'remove_iteration_manifest_after_success={remove_iteration_manifest_after_success}, '
+        f'remove_partial_global_manifest_after_success={remove_partial_global_manifest_after_success}'
+    )
+    print(
+        'manifest toggles: '
+        f'write_iteration_manifest={write_iteration_manifest}, '
+        f'write_partial_global_manifest={write_partial_global_manifest}, '
+        f'write_global_manifest={write_global_manifest}'
+    )
 
     fold_pairs = discover_cv_fold_iterations(
         train_validation_folds_dir=train_validation_folds_dir,
@@ -1356,6 +1496,8 @@ def main() -> None:
             train_enabled=train_enabled,
             sampling_enabled=sampling_enabled,
             analysis_enabled=run_analysis,
+            train_log_enabled=train_log_enabled,
+            analysis_log_enabled=analysis_log_enabled,
             total_folds=total_folds,
             validation_fold_index=int(pair.validation_fold.fold_index),
         )
@@ -1369,10 +1511,11 @@ def main() -> None:
         )
 
         if train_enabled:
+            train_log_path = os.path.join(logs_dir, 'train.log') if bool(train_log_enabled) else None
             _run_subprocess(
                 [python_exe, train_script, '--config-json', train_cfg_path],
                 cwd=workspace_root,
-                log_file=os.path.join(logs_dir, 'train.log'),
+                log_file=train_log_path,
                 step_name=f'{fold_name}:train',
             )
         else:
@@ -1448,6 +1591,15 @@ def main() -> None:
 
             label_for_analysis = label_columns[0] if len(label_columns) > 0 else 'prop_0'
             has_pred_labels = _contains_predicted_column(sampling_result.generated_csv_path, label_for_analysis)
+            prediction_eval_csv_path = _resolve_prediction_eval_csv_path(
+                train_dir=train_run_dir_for_sampling,
+                train_cfg_path=train_cfg_path,
+            )
+            has_pred_eval_labels = bool(
+                prediction_eval_csv_path
+                and os.path.isfile(prediction_eval_csv_path)
+                and _contains_predicted_column(prediction_eval_csv_path, label_for_analysis)
+            )
             merged_train_csv_for_analysis = _merge_csv_files_for_analysis(
                 csv_paths=list(converted.training_csvs),
                 out_csv_path=os.path.join(data_dir, f'{fold_name}_train_merged.csv'),
@@ -1459,9 +1611,12 @@ def main() -> None:
                 train_data_csv_path=merged_train_csv_for_analysis,
                 validation_csv_path=converted.validation_csv,
                 generated_csv_path=sampling_result.generated_csv_path,
+                prediction_eval_csv_path=prediction_eval_csv_path,
                 quality_summary_csv_path=sampling_result.quality_summary_csv_path,
                 has_pred_labels=has_pred_labels,
+                has_pred_eval_labels=has_pred_eval_labels,
                 label_column=label_for_analysis,
+                training_was_done_this_run=train_enabled,
             )
             analysis_config_path = _write_json(os.path.join(analysis_dir, 'analysis_config.json'), fold_analysis_cfg)
             analysis_summary_path = os.path.join(
@@ -1473,7 +1628,7 @@ def main() -> None:
             _run_subprocess(
                 [python_exe, analysis_script, '--config', analysis_config_path],
                 cwd=workspace_root,
-                log_file=os.path.join(logs_dir, 'analysis.log'),
+                log_file=(os.path.join(logs_dir, 'analysis.log') if bool(analysis_log_enabled) else None),
                 step_name=f'{fold_name}:analysis',
             )
         else:
@@ -1498,10 +1653,14 @@ def main() -> None:
             'analysis_summary_path': analysis_summary_path,
             'completed_unix': time.time(),
         }
-        iteration_manifest_path = _write_json(os.path.join(fold_dir, 'iteration_manifest.json'), fold_manifest)
+        if write_iteration_manifest:
+            iteration_manifest_path = _write_json(os.path.join(fold_dir, 'iteration_manifest.json'), fold_manifest)
+        else:
+            iteration_manifest_path = 'DISABLED_BY_CONFIG'
         global_manifest['iterations'].append(fold_manifest)
 
-        _write_json(os.path.join(artifacts_root, 'global_manifest.partial.json'), global_manifest)
+        if write_partial_global_manifest:
+            _write_json(os.path.join(artifacts_root, 'global_manifest.partial.json'), global_manifest)
         _print_iteration_end_summary(
             fold_name=fold_name,
             converted=converted,
@@ -1512,10 +1671,24 @@ def main() -> None:
             logs_dir=logs_dir,
             sampling_result=sampling_result,
             analysis_enabled=run_analysis,
+            train_log_enabled=train_log_enabled,
+            analysis_log_enabled=analysis_log_enabled,
             analysis_config_path=analysis_config_path,
             analysis_summary_path=analysis_summary_path,
             iteration_manifest_path=iteration_manifest_path,
         )
+
+        if remove_sampling_debug_after_success:
+            _safe_remove_path(os.path.join(sample_dir, 'sampling_debug.json'))
+        if remove_analysis_config_after_success:
+            _safe_remove_path(os.path.join(analysis_dir, 'analysis_config.json'))
+        if remove_iteration_logs_after_success:
+            _safe_remove_path(logs_dir)
+        if remove_iteration_data_after_success:
+            _safe_remove_path(data_dir)
+        if remove_iteration_manifest_after_success and iteration_manifest_path != 'DISABLED_BY_CONFIG':
+            _safe_remove_path(iteration_manifest_path)
+
         print(f'[{fold_name}] CV iteration complete and manifest saved')
 
     cross_fold_summary_path = None
@@ -1542,7 +1715,13 @@ def main() -> None:
     global_manifest['cv_combo_metrics_boxplot_path'] = cv_combo_outputs.get('boxplot_path')
     global_manifest['cv_combo_metrics_stats_path'] = cv_combo_outputs.get('stats_path')
     global_manifest['cv_combo_error_summary_csv_path'] = cv_combo_outputs.get('error_summary_csv_path')
-    final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
+    if remove_partial_global_manifest_after_success:
+        _safe_remove_path(os.path.join(artifacts_root, 'global_manifest.partial.json'))
+
+    if write_global_manifest:
+        final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
+    else:
+        final_manifest_path = 'DISABLED_BY_CONFIG'
 
     print('\n' + '=' * 90)
     print('All requested CV iterations completed successfully.')

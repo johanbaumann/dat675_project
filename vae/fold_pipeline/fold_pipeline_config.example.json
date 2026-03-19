@@ -11,6 +11,7 @@
   "python_executable": null,
   "train": {
     "enabled": true,
+    "capture_log_file": true,
     "script": "train_labels.py",
     "base_config": {
       "training_preset": "custom",
@@ -53,6 +54,12 @@
         "run_name": null,
         "use_run_subdir": true,
         "save_every": 30,
+        "save_periodic_checkpoints": false,
+        "save_final_checkpoint": true,
+        "save_early_stop_checkpoint": false,
+        "save_history_csv": true,
+        "save_prediction_eval_csv": true,
+        "prediction_eval_filename": "train_validation_prediction_eval.csv",
         "early_stopping_patience": 10,
         "early_stopping_min_delta": 0.001,
         "early_stopping_restore_best": true
@@ -80,6 +87,7 @@
     "enabled": true,
     "checkpoint_glob": "model_best.ckpt-*.pt",
     "run_training_dist": true,
+    "enable_prop_cache": false,
     "training_dist_std_scale": 1.0,
     "training_dist_clip_n_std": 2.5,
     "training_dist_seed": null,
@@ -116,24 +124,43 @@
     ],
     "save_generated_csv": true,
     "save_quality_summary": true,
+    "save_sampling_debug": false,
     "result_filename": "generated.csv",
     "quality_summary_filename": "quality_summary.csv"
   },
   "analysis": {
     "enabled": true,
+    "capture_log_file": false,
     "script": "run_viz_pipeline.py",
     "profile": "bace_pic50_10k",
     "overrides": {
       "save_distribution_plot": true,
-      "save_scaffold_plot": true,
-      "save_scaffold_grids": true,
+      "save_scaffold_plot": false,
+      "save_scaffold_grids": false,
       "run_prediction_error_plot": true,
+      "run_residual_plot": true,
       "run_train_loss_plot": true,
-      "run_tanimoto_histogram": true,
+      "run_tanimoto_histogram": false,
       "run_chemical_space": false,
       "run_descriptor_space": false,
       "debug": true
     }
+  },
+  "manifests": {
+    "write_iteration_manifest": false,
+    "write_partial_global_manifest": false,
+    "write_global_manifest": false
+  },
+  "cleanup": {
+    "purge_artifacts_before_run": true,
+    "purge_training_before_run": true,
+    "purge_python_caches_before_run": true,
+    "remove_iteration_logs_after_success": false,
+    "remove_iteration_data_after_success": true,
+    "remove_sampling_debug_after_success": true,
+    "remove_analysis_config_after_success": true,
+    "remove_iteration_manifest_after_success": false,
+    "remove_partial_global_manifest_after_success": true
   },
   "cv_combo": {
     "enabled": true,
