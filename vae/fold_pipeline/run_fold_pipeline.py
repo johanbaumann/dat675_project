@@ -21,7 +21,7 @@ from fold_pipeline.fold_data import convert_cv_iteration_to_prop_files, discover
 from fold_pipeline.sampling_pipeline import SamplingResult, run_sampling_for_iteration
 
 
-DEFAULT_CONFIG_PATH = os.path.join('fold_pipeline', 'fold_pipeline_config.example.json')
+DEFAULT_CONFIG_PATH = os.path.join(_THIS_DIR, 'fold_pipeline_config.example.json')
 
 
 def _deep_update_dict(base: dict, override: dict) -> dict:
@@ -51,6 +51,34 @@ def _resolve_optional_path(path_value: Optional[str], *, base_dir: str) -> Optio
     if os.path.isabs(raw):
         return os.path.abspath(raw)
     return os.path.abspath(os.path.join(base_dir, raw))
+
+
+def _resolve_required_path(path_value: Optional[str], *, base_dir: str, key_name: str) -> str:
+    resolved = _resolve_optional_path(path_value, base_dir=base_dir)
+    if resolved is None:
+        raise KeyError(f'Config key is required and cannot be empty: {key_name}')
+    return str(resolved)
+
+
+def _resolve_python_executable(value: Optional[str], *, workspace_root: str) -> str:
+    if value is None:
+        return str(sys.executable)
+    raw = str(value).strip()
+    if raw == '':
+        return str(sys.executable)
+
+    # Keep command-name executables (e.g., "python", "python3") intact;
+    # resolve path-like values relative to workspace_root.
+    if os.path.sep in raw or '/' in raw:
+        return _resolve_required_path(raw, base_dir=workspace_root, key_name='python_executable')
+    return raw
+
+
+def _resolve_script_path(value: Optional[str], *, workspace_root: str, key_name: str) -> str:
+    script_path = _resolve_required_path(value, base_dir=workspace_root, key_name=key_name)
+    if not os.path.isfile(script_path):
+        raise FileNotFoundError(f'Configured script for {key_name} was not found: {script_path}')
+    return script_path
 
 
 def _write_json(path: str, payload: dict) -> str:
@@ -936,34 +964,6 @@ def _print_iteration_assignment(
     print('')
 
 
-def _glob_has_any(path_pattern: str) -> bool:
-    try:
-        import glob
-
-        return any(os.path.isfile(p) for p in glob.glob(str(path_pattern)))
-    except Exception:
-        return False
-
-
-def _resolve_training_run_dir_for_iteration_sampling(
-    *,
-    expected_train_dir: str,
-    artifacts_iteration_dir: str,
-    checkpoint_glob: str,
-) -> str:
-    """Return the run dir that actually contains checkpoints.
-
-    Required layout:
-      training_output_root/fold_k/training/
-    """
-    expected_train_dir = str(expected_train_dir)
-    if _glob_has_any(os.path.join(expected_train_dir, checkpoint_glob)) or _glob_has_any(
-        os.path.join(expected_train_dir, '*.pt')
-    ):
-        return expected_train_dir
-    return expected_train_dir
-
-
 def _merge_csv_files_for_analysis(*, csv_paths: list[str], out_csv_path: str) -> str:
     if len(csv_paths) == 0:
         raise ValueError('Cannot merge zero CSV files for analysis train_data_path.')
@@ -1124,37 +1124,28 @@ def _print_iteration_end_summary(
 
 def main() -> None:
     args = _parse_args()
-    cfg = _read_json(args.config)
+    config_path = _resolve_required_path(args.config, base_dir=os.getcwd(), key_name='--config')
+    cfg = _read_json(config_path)
 
-    workspace_root_cfg = cfg.get('workspace_root', _ROOT_DIR)
-    workspace_root = _resolve_optional_path(str(workspace_root_cfg), base_dir=_ROOT_DIR)
-    if workspace_root is None:
-        workspace_root = os.path.abspath(_ROOT_DIR)
+    workspace_root = _resolve_required_path(
+        cfg.get('workspace_root', '.'),
+        base_dir=_ROOT_DIR,
+        key_name='workspace_root',
+    )
+    if not os.path.isdir(workspace_root):
+        raise FileNotFoundError(f'workspace_root does not exist or is not a directory: {workspace_root}')
     os.chdir(workspace_root)
 
-    # Output roots:
-    # - training_output_root: checkpoints/history/training config (ideally under save/)
-    # - artifacts_output_root: fold data, sampling outputs, analysis outputs, logs (outside save/)
-    # Backward compatibility:
-    # - output_root is treated as artifacts_output_root when artifacts_output_root is not provided.
-    output_root_cfg = cfg.get('output_root', None)
-    artifacts_root_cfg = cfg.get('artifacts_output_root', None)
-    training_root_cfg = cfg.get('training_output_root', None)
-
-    if artifacts_root_cfg is None:
-        artifacts_root_cfg = output_root_cfg
-    if training_root_cfg is None:
-        training_root_cfg = output_root_cfg
-
-    if artifacts_root_cfg is None:
-        artifacts_root_cfg = os.path.join('fold_pipeline_outputs')
-    if training_root_cfg is None:
-        training_root_cfg = os.path.join('save', 'fold_pipeline_runs')
-
-    # Keep the printed/output_root key aligned with where fold manifests live.
-    output_root = os.path.abspath(str(artifacts_root_cfg))
-    training_root = os.path.abspath(str(training_root_cfg))
-    artifacts_root = os.path.abspath(str(artifacts_root_cfg))
+    artifacts_root = _resolve_required_path(
+        cfg.get('artifacts_output_root'),
+        base_dir=workspace_root,
+        key_name='artifacts_output_root',
+    )
+    training_root = _resolve_required_path(
+        cfg.get('training_output_root'),
+        base_dir=workspace_root,
+        key_name='training_output_root',
+    )
 
     cv_combo_cfg = dict(cfg.get('cv_combo', {}) or {})
     cv_combo_enabled = bool(cv_combo_cfg.get('enabled', True))
@@ -1164,7 +1155,6 @@ def main() -> None:
         base_dir=workspace_root,
     )
 
-    os.makedirs(output_root, exist_ok=True)
     os.makedirs(training_root, exist_ok=True)
     os.makedirs(artifacts_root, exist_ok=True)
 
@@ -1183,6 +1173,7 @@ def main() -> None:
             )
 
         print('===== CV combo-only mode =====')
+        print(f'config_path={config_path}')
         print(f'workspace_root={workspace_root}')
         print(f'artifacts_output_root={artifacts_root}')
         print(f'cross_fold_summary_path={cross_fold_summary_path}')
@@ -1204,7 +1195,7 @@ def main() -> None:
             except Exception:
                 existing_manifest = {}
 
-        existing_manifest['config_path'] = os.path.abspath(args.config)
+        existing_manifest['config_path'] = config_path
         existing_manifest['workspace_root'] = workspace_root
         existing_manifest['training_output_root'] = training_root
         existing_manifest['artifacts_output_root'] = artifacts_root
@@ -1223,27 +1214,36 @@ def main() -> None:
         print('=' * 90)
         return
 
-    folds_dir_raw = cfg.get('train_validation_folds_dir', cfg.get('train_validation_folds'))
-    if folds_dir_raw is None:
-        raise KeyError('Config is missing required key: train_validation_folds_dir')
-    train_validation_folds_dir = os.path.abspath(str(folds_dir_raw))
+    train_validation_folds_dir = _resolve_required_path(
+        cfg.get('train_validation_folds_dir'),
+        base_dir=workspace_root,
+        key_name='train_validation_folds_dir',
+    )
 
     smiles_column = str(cfg.get('smiles_column', 'smiles'))
     label_columns = [str(x) for x in cfg.get('label_columns', [cfg.get('label_column', 'pIC50')])]
     fold_glob = str(cfg.get('fold_glob', 'fold_*.csv'))
 
-    python_exe = str(cfg.get('python_executable') or sys.executable)
-    train_script = str(cfg.get('train', {}).get('script', 'train_labels.py'))
-    analysis_script = str(cfg.get('analysis', {}).get('script', 'run_viz_pipeline.py'))
+    python_exe = _resolve_python_executable(cfg.get('python_executable'), workspace_root=workspace_root)
+    train_script = _resolve_script_path(
+        cfg.get('train', {}).get('script', 'train_labels.py'),
+        workspace_root=workspace_root,
+        key_name='train.script',
+    )
+    analysis_script = _resolve_script_path(
+        cfg.get('analysis', {}).get('script', 'run_viz_pipeline.py'),
+        workspace_root=workspace_root,
+        key_name='analysis.script',
+    )
     train_enabled = bool(cfg.get('train', {}).get('enabled', True))
     sampling_enabled = bool(cfg.get('sampling', {}).get('enabled', True))
     analysis_enabled_global = bool(cfg.get('analysis', {}).get('enabled', True))
 
     print('===== CV fold iteration pipeline bootstrap =====')
+    print(f'config_path={config_path}')
     print(f'workspace_root={workspace_root}')
     print(f'train_validation_folds_dir={train_validation_folds_dir}')
     print(f'fold_glob={fold_glob}')
-    print(f'output_root={output_root}')
     print(f'training_output_root={training_root}')
     print(f'artifacts_output_root={artifacts_root}')
     print(f'python_executable={python_exe}')
@@ -1264,7 +1264,7 @@ def main() -> None:
         print(f'filtered to single CV iteration: {args.only_fold}')
 
     global_manifest = {
-        'config_path': os.path.abspath(args.config),
+        'config_path': config_path,
         'workspace_root': workspace_root,
         'train_validation_folds_dir': train_validation_folds_dir,
         'training_output_root': training_root,
@@ -1388,12 +1388,7 @@ def main() -> None:
             # Fallback naming used when checkpoint metadata lacks label_target_names.
             fold_sampling_cfg['pred_property_names'] = list(label_columns)
 
-            checkpoint_glob = str(fold_sampling_cfg.get('checkpoint_glob', 'model_best.ckpt-*.pt'))
-            train_run_dir_for_sampling = _resolve_training_run_dir_for_iteration_sampling(
-                expected_train_dir=train_dir,
-                artifacts_iteration_dir=artifacts_iteration_dir,
-                checkpoint_glob=checkpoint_glob,
-            )
+            train_run_dir_for_sampling = train_dir
 
             run_training_dist = bool(fold_sampling_cfg.get('run_training_dist', False))
             if run_training_dist:

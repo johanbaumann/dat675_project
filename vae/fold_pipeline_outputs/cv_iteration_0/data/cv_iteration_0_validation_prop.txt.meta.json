@@ -1,6 +1,6 @@
 {
   "source_csvs": [
-    "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv"
+    "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_0.csv"
   ],
   "smiles_column": "smiles",
   "property_names": [

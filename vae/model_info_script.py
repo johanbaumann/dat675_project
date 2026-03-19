@@ -11,12 +11,32 @@ This script:
 import json
 import sys
 import os
+import argparse
 import torch
 import torch.nn as nn
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from model_labels import CVAE
+
+
+_THIS_DIR = os.path.abspath(os.path.dirname(__file__))
+_DEFAULT_FOLD_CONFIG = os.path.join(_THIS_DIR, 'fold_pipeline', 'fold_pipeline_config.example.json')
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Print CVAE model parameter breakdown from fold pipeline config.')
+    parser.add_argument('--config', type=str, default=_DEFAULT_FOLD_CONFIG)
+    return parser.parse_args()
+
+
+def _resolve_required_path(path_value: str, *, base_dir: str, key_name: str) -> str:
+    raw = str(path_value).strip()
+    if raw == '':
+        raise ValueError(f'{key_name} cannot be empty')
+    if os.path.isabs(raw):
+        return os.path.abspath(raw)
+    return os.path.abspath(os.path.join(base_dir, raw))
 
 
 def load_config(config_path: str) -> dict:
@@ -79,7 +99,8 @@ def build_model_config(fold_config: dict) -> dict:
 
 
 def main():
-    config_path = 'fold_pipeline/fold_pipeline_config.example.json'
+    args = _parse_args()
+    config_path = _resolve_required_path(args.config, base_dir=os.getcwd(), key_name='--config')
     
     if not os.path.isfile(config_path):
         print(f"Error: Config file not found: {config_path}")
