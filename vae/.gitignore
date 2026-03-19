@@ -3,6 +3,6 @@ audit_outputs/
 
 */__pycache__/
 
-#CHANGELOG.md
+CHANGELOG.md
 
 *.pth
