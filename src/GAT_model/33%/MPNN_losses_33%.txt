@@ -1,0 +1,20 @@
+fold_0:
+   train      val  monitor     lr
+2.794783 2.048453 1.431242 0.0005
+
+fold_1:
+   train      val  monitor     lr
+2.648534 1.450493 1.204364 0.0005
+
+fold_2:
+   train      val  monitor     lr
+3.096775 1.620486 1.272983 0.0005
+
+fold_3:
+   train      val  monitor     lr
+2.787786 2.138181 1.462252 0.0005
+
+fold_4:
+   train      val  monitor     lr
+2.712951 1.824714  1.35082 0.0005
+
