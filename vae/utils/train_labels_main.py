@@ -18,6 +18,14 @@ CHANGELOG
     base `model.py` implementation.
 """
 
+import os
+import sys
+
+_THIS_DIR = os.path.abspath(os.path.dirname(__file__))
+_ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
 from models.model_labels import CVAE
 from utils.core import (
     build_train_run_save_dir,
@@ -38,27 +46,16 @@ from utils.labels import (
     save_current_checkpoint,
     save_history_csv,
 )
+from utils.pipeline_helpers import deep_update_dict
 import argparse
 import json
-import os
 from typing import Optional
 import numpy as np
 import time
 import pandas as pd
 import torch
-from rdkit import Chem
 from copy import deepcopy
-
-
-def _deep_update_dict(base: dict, override: dict) -> dict:
-    """Recursively update nested dict values while keeping unspecified defaults."""
-    out = deepcopy(base)
-    for key, value in (override or {}).items():
-        if isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = _deep_update_dict(out[key], value)
-        else:
-            out[key] = value
-    return out
+from rdkit import Chem
 
 
 def _parse_config_override_path_from_argv() -> str:
@@ -239,7 +236,7 @@ config = {
 }
 
 runtime_config_override = _load_runtime_config_override()
-config = _deep_update_dict(config, runtime_config_override)
+config = deep_update_dict(config, runtime_config_override)
 print('applied runtime config from --config-json on top of in-file baseline config')
 
 

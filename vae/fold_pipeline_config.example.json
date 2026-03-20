@@ -12,7 +12,7 @@
   "train": {
     "enabled": true,
     "capture_log_file": true,
-    "script": "train_labels.py",
+    "script": "scripts/train_labels.py",
     "base_config": {
       "training_preset": "custom",
       "data": {

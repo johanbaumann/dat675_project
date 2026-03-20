@@ -168,8 +168,8 @@ python run_fold_pipeline.py --config fold_pipeline_config.example.json --only-fo
 
 1. Use one fold CSV as validation.
 2. Merge remaining fold CSVs as training data.
-3. Train one model (`train_labels.py`) if `train.enabled=true`.
-4. Sample generated molecules (`sampling_pipeline.py`) if `sampling.enabled=true`.
+3. Train one model (`scripts/train_labels.py`) if `train.enabled=true`.
+4. Sample generated molecules (`pipeline/sampling_pipeline.py`) if `sampling.enabled=true`.
 5. Run analysis in-process from `run_fold_pipeline.py` if `analysis.enabled=true`.
 
 This means training, sampling, and analysis are controlled from one script and one config.

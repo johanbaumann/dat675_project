@@ -12,7 +12,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-_ROOT_DIR = _THIS_DIR
+_ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
@@ -27,6 +27,7 @@ from utils.core import (
     load_training_canonical_smiles,
     resolve_checkpoint_path,
 )
+from utils.pipeline_helpers import resolve_target_sampling_mode
 from utils.labels import (
     _accumulate_stats,
     _build_accept_predicate,
@@ -133,38 +134,6 @@ def _read_bool_config(cfg: dict, key: str, default: bool) -> bool:
             return False
         raise ValueError(f"sampling.{key} string value must be 'true' or 'false', got: {value!r}")
     raise ValueError(f'sampling.{key} must be a boolean, got type: {type(value).__name__}')
-
-
-def _resolve_target_sampling_mode(sampling_cfg: dict) -> str:
-    """Resolve target sampling mode with backward compatibility.
-
-    Priority:
-      1) sampling.target_sampling_mode
-      2) legacy sampling.run_training_dist boolean
-    """
-    explicit = sampling_cfg.get('target_sampling_mode', None)
-    if explicit is not None:
-        mode = str(explicit).strip().lower()
-    else:
-        mode = 'training_dist' if bool(sampling_cfg.get('run_training_dist', False)) else 'single_target'
-
-    aliases = {
-        'single': 'single_target',
-        'single_target': 'single_target',
-        'training': 'training_dist',
-        'training_dist': 'training_dist',
-        'uniform': 'uniform_range',
-        'uniform_range': 'uniform_range',
-        'uniform_strict': 'uniform_range_strict',
-        'uniform_range_strict': 'uniform_range_strict',
-    }
-    resolved = aliases.get(mode)
-    if resolved is None:
-        raise ValueError(
-            'sampling.target_sampling_mode must be one of: '
-            'single_target, training_dist, uniform_range, uniform_range_strict'
-        )
-    return resolved
 
 
 def _resolve_uniform_ranges(sampling_cfg: dict, *, num_prop: int) -> list[list[float]]:
@@ -352,7 +321,7 @@ def run_sampling_for_iteration(
             int(model_config['num_prop']),
         )
 
-    sampling_mode = _resolve_target_sampling_mode(sampling_cfg)
+    sampling_mode = resolve_target_sampling_mode(sampling_cfg)
     run_training_dist = sampling_mode == 'training_dist'
     run_uniform_range = sampling_mode == 'uniform_range'
     run_uniform_range_strict = sampling_mode == 'uniform_range_strict'
@@ -657,6 +626,7 @@ def run_sampling_for_iteration(
                 if run_uniform_range_strict:
                     if bin_idx is None:
                         continue
+                    assert strict_uniform_bin_counts is not None
                     strict_uniform_bin_counts[bin_idx] = int(strict_uniform_bin_counts[bin_idx]) + 1
             if len(mol_by_smiles) >= num_unique:
                 break

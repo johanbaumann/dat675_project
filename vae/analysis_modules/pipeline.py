@@ -14,6 +14,7 @@ from rdkit.Chem import Descriptors
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
+from utils.pipeline_helpers import coerce_float, coerce_int_or_none
 
 from .chem_utils import (
     canonicalize_smiles,
@@ -98,30 +99,6 @@ def _extract_numeric_series(df: pd.DataFrame, col: str | None) -> np.ndarray:
     return vals if vals.size > 0 else np.asarray([], dtype=float)
 
 
-def _coerce_int(value) -> int | None:
-    if value is None:
-        return None
-    try:
-        raw = str(value).strip()
-        if raw == '':
-            return None
-        return int(float(raw))
-    except Exception:
-        return None
-
-
-def _coerce_float(value) -> float | None:
-    if value is None:
-        return None
-    try:
-        raw = str(value).strip()
-        if raw == '':
-            return None
-        return float(raw)
-    except Exception:
-        return None
-
-
 def _compute_vun_from_counts(
     *,
     total_generated: int,
@@ -174,15 +151,15 @@ def _try_read_vun_from_quality_summary_csv(path: str | None) -> dict | None:
 
     row = quality_df.iloc[0].to_dict()
     counts = {
-        'total_generated': _coerce_int(row.get('total_generated')),
-        'invalid_or_empty': _coerce_int(row.get('invalid_or_empty')),
-        'discarded_cleanup': _coerce_int(row.get('discarded_cleanup')),
-        'in_training': _coerce_int(row.get('in_training')),
-        'duplicate': _coerce_int(row.get('duplicate')),
-        'accepted': _coerce_int(row.get('accepted')),
-        'rejected_by_filter': _coerce_int(row.get('rejected_by_filter')),
-        'salt_stripped': _coerce_int(row.get('salt_stripped')),
-        'tautomer_canonicalized': _coerce_int(row.get('tautomer_canonicalized')),
+        'total_generated': coerce_int_or_none(row.get('total_generated')),
+        'invalid_or_empty': coerce_int_or_none(row.get('invalid_or_empty')),
+        'discarded_cleanup': coerce_int_or_none(row.get('discarded_cleanup')),
+        'in_training': coerce_int_or_none(row.get('in_training')),
+        'duplicate': coerce_int_or_none(row.get('duplicate')),
+        'accepted': coerce_int_or_none(row.get('accepted')),
+        'rejected_by_filter': coerce_int_or_none(row.get('rejected_by_filter')),
+        'salt_stripped': coerce_int_or_none(row.get('salt_stripped')),
+        'tautomer_canonicalized': coerce_int_or_none(row.get('tautomer_canonicalized')),
     }
     required = ('total_generated', 'invalid_or_empty', 'discarded_cleanup', 'in_training', 'duplicate', 'accepted')
     has_required_counts = all(counts.get(k) is not None for k in required)
@@ -212,10 +189,10 @@ def _try_read_vun_from_quality_summary_csv(path: str | None) -> dict | None:
             **vun,
         }
 
-    validity = _coerce_float(row.get('validity'))
-    uniqueness = _coerce_float(row.get('uniqueness'))
-    novelty = _coerce_float(row.get('novelty'))
-    acceptance_rate = _coerce_float(row.get('acceptance_rate'))
+    validity = coerce_float(row.get('validity'))
+    uniqueness = coerce_float(row.get('uniqueness'))
+    novelty = coerce_float(row.get('novelty'))
+    acceptance_rate = coerce_float(row.get('acceptance_rate'))
     if validity is None or uniqueness is None or novelty is None:
         return None
 
@@ -228,9 +205,9 @@ def _try_read_vun_from_quality_summary_csv(path: str | None) -> dict | None:
         'uniqueness': float(uniqueness),
         'novelty': float(novelty),
         'acceptance_rate': (None if acceptance_rate is None else float(acceptance_rate)),
-        'valid_count': _coerce_int(row.get('valid_count')),
-        'unique_count': _coerce_int(row.get('unique_count')),
-        'novel_count': _coerce_int(row.get('novel_count')),
+        'valid_count': coerce_int_or_none(row.get('valid_count')),
+        'unique_count': coerce_int_or_none(row.get('unique_count')),
+        'novel_count': coerce_int_or_none(row.get('novel_count')),
     }
 
 
