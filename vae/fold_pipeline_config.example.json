@@ -92,7 +92,7 @@
     "_comment_mode_uniform_range": "uniform_range: sample targets uniformly inside uniform_range/uniform_ranges.",
     "_comment_mode_uniform_range_strict": "uniform_range_strict: same uniform range, but with strict per-bin quotas to force balanced coverage across the range.",
     "target_sampling_mode": "training_dist",
-    "run_training_dist": false,
+    "run_training_dist": true,
     "enable_prop_cache": false,
     "training_dist_std_scale": 1.0,
     "training_dist_clip_n_std": 2.5,
@@ -110,12 +110,12 @@
     "_comment_uniform_strict_dimension": "Which property dimension to balance with strict bins. For pIC50-only conditioning, use 0.",
     "uniform_strict_dimension": 0, 
     "_comment_uniform_strict_bins": "How many bins to split [min,max] into. More bins = stricter, finer balancing but harder acceptance.",
-    "uniform_strict_bins": 40,
+    "uniform_strict_bins": 20,
     "target_prop_mode": "mean_test_labels",
     "target_prop": [
       8.0
     ],
-    "num_unique": 1000,
+    "num_unique": 10000,
     "max_batches": 5000,
     "do_sample": true,
     "temperature": 0.9,

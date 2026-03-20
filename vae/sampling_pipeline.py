@@ -12,11 +12,11 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-_ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
+_ROOT_DIR = _THIS_DIR
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
-from utils import (
+from utils.core import (
     canonicalize_for_filtering,
     compose_train_config_from_dict,
     infer_training_config_path,
@@ -27,7 +27,7 @@ from utils import (
     load_training_canonical_smiles,
     resolve_checkpoint_path,
 )
-from utils import (
+from utils.labels import (
     _accumulate_stats,
     _build_accept_predicate,
     _collect_new_unique_from_raw_with_payload,
@@ -612,6 +612,7 @@ def run_sampling_for_iteration(
             else:
                 can, mol, payload = accepted_row
                 payload_target_raw = None
+            bin_idx: int | None = None
 
             if blocked_test_scaffolds or blocked_heldout_scaffolds:
                 scaffold = _scaffold_smiles_from_mol(mol, make_generic=make_generic_scaffold)
@@ -654,6 +655,8 @@ def run_sampling_for_iteration(
                         float(v) for v in np.asarray(payload_target_raw, dtype=np.float32).reshape(-1).tolist()
                     )
                 if run_uniform_range_strict:
+                    if bin_idx is None:
+                        continue
                     strict_uniform_bin_counts[bin_idx] = int(strict_uniform_bin_counts[bin_idx]) + 1
             if len(mol_by_smiles) >= num_unique:
                 break

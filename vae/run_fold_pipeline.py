@@ -16,12 +16,12 @@ from typing import Optional
 import numpy as np
 
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-_ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
+_ROOT_DIR = _THIS_DIR
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
-from fold_pipeline.fold_data import convert_cv_iteration_to_prop_files, discover_cv_fold_iterations
-from fold_pipeline.sampling_pipeline import SamplingResult, run_sampling_for_iteration
+from fold_data import convert_cv_iteration_to_prop_files, discover_cv_fold_iterations
+from sampling_pipeline import SamplingResult, run_sampling_for_iteration
 from analysis_modules import load_analysis_config_from_file, run_analysis_pipeline
 
 

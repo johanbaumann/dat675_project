@@ -145,45 +145,36 @@ The labels will be sampeled from latent space: $f(z)$. This head is separate fro
 
 ## BACE baseline workflow (pIC50-only conditioning)
 
-This repo now uses a single pipeline entrypoint and a single user-facing config file.
+This repo now runs a single top-level CV pipeline with one main config file.
 
 ### Single entrypoint + single config
 
-- Entrypoint: `fold_pipeline/run_fold_pipeline.py`
-- Config file: `fold_pipeline/fold_pipeline_config.example.json`
+- Entrypoint: `run_fold_pipeline.py`
+- Config file: `fold_pipeline_config.example.json`
 
 Run full CV pipeline from workspace root:
 
 ```powershell
-python fold_pipeline/run_fold_pipeline.py --config fold_pipeline/fold_pipeline_config.example.json
+python run_fold_pipeline.py --config fold_pipeline_config.example.json
 ```
 
 Run one CV iteration only:
 
 ```powershell
-python fold_pipeline/run_fold_pipeline.py --config fold_pipeline/fold_pipeline_config.example.json --only-fold 0
+python run_fold_pipeline.py --config fold_pipeline_config.example.json --only-fold 0
 ```
 
-### What the pipeline controls
+### What the pipeline does per CV iteration
 
-Per CV iteration the runner controls all stages:
+1. Use one fold CSV as validation.
+2. Merge remaining fold CSVs as training data.
+3. Train one model (`train_labels.py`) if `train.enabled=true`.
+4. Sample generated molecules (`sampling_pipeline.py`) if `sampling.enabled=true`.
+5. Run analysis in-process from `run_fold_pipeline.py` if `analysis.enabled=true`.
 
-1. Build train/validation split from fold CSVs.
-2. Train model (`train_labels.py`) when `train.enabled=true`.
-3. Sample generated molecules (`fold_pipeline/sampling_pipeline.py`) when `sampling.enabled=true`.
-4. Run analysis in-process from `run_fold_pipeline.py` when `analysis.enabled=true`.
+This means training, sampling, and analysis are controlled from one script and one config.
 
-No standalone sampling or standalone analysis config flow is required.
-
-### Keep and edit this config
-
-Use and keep:
-
-```text
-fold_pipeline/fold_pipeline_config.example.json
-```
-
-Key fields:
+### Required/important config keys
 
 - `train_validation_folds_dir`
 - `fold_glob`
@@ -194,38 +185,93 @@ Key fields:
 - `train.base_config`
 - `sampling.*`
 - `analysis.*`
+- `cleanup.*`
+- `cv_combo.*`
 
-### Sampling target modes (pipeline config)
+### Analysis-only mode (no re-training, no re-sampling)
 
-Set `sampling.target_sampling_mode` to one of:
+Set:
+
+- `train.enabled=false`
+- `sampling.enabled=false`
+- `analysis.enabled=true`
+
+In this mode, the pipeline reuses:
+
+- `artifacts_output_root/cv_iteration_<k>/generated/generated.csv`
+- `artifacts_output_root/cv_iteration_<k>/generated/quality_summary.csv`
+
+Behavior:
+
+- Per-fold analysis still runs for each detected CV iteration.
+- Missing/empty `generated.csv` hard-fails that iteration.
+- Missing `quality_summary.csv` allows analysis to continue, but cross-fold V.U.N aggregation for that fold is skipped.
+
+### CV combo-only mode
+
+Set:
+
+- `cv_combo.enabled=true`
+- `cv_combo.only=true`
+
+Optional:
+
+- `cv_combo.cross_fold_summary_path` to use a specific summary JSON.
+
+Outputs under `artifacts_output_root/cv_combo/`:
+
+- `cv_combo_metrics_summary.png`
+- `cv_combo_metrics_boxplots.png`
+- `cv_combo_metrics_stats.json`
+- `cv_combo_error_stats.csv`
+
+### Sampling target modes
+
+Use `sampling.target_sampling_mode`:
 
 - `single_target`
 - `training_dist`
 - `uniform_range`
 - `uniform_range_strict`
 
-For pIC50-only workflows, use one-dimensional target ranges/targets in the sampling block.
+For pIC50-only conditioning (`num_prop=1`), use one-dimensional targets/ranges.
 
-### Analysis-only and CV-combo modes
+### Heldout and scaffold exclusion
 
-Analysis only (reuse generated outputs):
+Heldout data is used for scaffold filtering (not training):
 
-- `train.enabled=false`
-- `sampling.enabled=false`
-- `analysis.enabled=true`
+- `sampling.exclude_training`
+- `sampling.exclude_validation_scaffolds`
+- `sampling.exclude_heldout_scaffolds`
+- `sampling.heldout_smiles_csv`
+- `sampling.validation_smiles_column`
+- `sampling.heldout_smiles_column`
+- `sampling.scaffold_make_generic`
 
-CV-combo-only plots:
+### Output layout
 
-- `cv_combo.enabled=true`
-- `cv_combo.only=true`
+Per iteration under `artifacts_output_root/cv_iteration_<k>/`:
+
+- `data/`
+- `generated/`
+- `analysis/`
+- `logs/`
+- `iteration_manifest.json` (if enabled)
+
+Training artifacts under `training_output_root/cv_iteration_<k>/training/`.
+
+Global outputs:
+
+- `artifacts_output_root/global_manifest.json` (if enabled)
+- `artifacts_output_root/cross_fold_analysis_summary.json`
 
 ### Numerical stability notes
 
-- Transformer encoder/decoder blocks run in fp32 under selective autocast when configured, which helps avoid fp16 attention NaNs.
+- Transformer attention blocks can be sensitive with AMP in some settings.
 - Reconstruction loss is length-masked so padded tokens do not contribute.
-- If Transformer training becomes unstable, set `optimization.use_amp=false` and re-check.
+- If training gets unstable, set `optimization.use_amp=false` and re-test.
 
 ### Notes
 
 - This codebase uses PyTorch checkpoints (`.pt`).
-- Keep pipeline orchestration and configuration under `fold_pipeline/` as the primary execution path.
+- Keep using `run_fold_pipeline.py` + `fold_pipeline_config.example.json` as the primary interface.
