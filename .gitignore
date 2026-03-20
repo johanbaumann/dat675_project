@@ -215,4 +215,7 @@ __marimo__/
 # Model save folders
 vae/paper_based/CVAE/save/
 
+# Model save folders
+results/*
+
 
