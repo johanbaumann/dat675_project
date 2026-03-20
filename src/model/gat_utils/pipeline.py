@@ -40,6 +40,7 @@ from .training_helpers import (
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = WORKSPACE_ROOT.parent.parent / "data"
 
 
 def _resolve_optional(
@@ -190,7 +191,7 @@ def _run_single_dataset_training(
 			scheduler_mode = expected_scheduler_mode
 
 	print(f"\nLoading holdout test set: {actual_test_file}")
-	raw_test_data = load_dataset(actual_test_file, config, feature_context)
+	raw_test_data = load_dataset(DATA_ROOT / actual_test_file, config, feature_context)
 	if len(raw_test_data) == 0:
 		raise RuntimeError(
 			"Holdout test set produced 0 valid graphs. "
@@ -320,7 +321,7 @@ def run_training_pipeline(config: dict[str, Any], model_class) -> None:
 	):
 		data_folder_path = Path(target_folder)
 		if not data_folder_path.is_absolute():
-			data_folder_path = (WORKSPACE_ROOT / data_folder_path).resolve()
+			data_folder_path = (DATA_ROOT / data_folder_path).resolve()
 		data_folder = str(data_folder_path)
 
 		dataset_config = copy.deepcopy(config)

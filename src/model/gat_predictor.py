@@ -105,12 +105,12 @@ from gat_utils import run_training_pipeline
 CONFIG = {
 	"experiment": {
 		"target_folder": [
-			"../data/combination_1300_molecules_and_0_%_synthetic",
-			"../data/combination_1950_molecules_and_33_%_synthetic",
-			"../data/combination_3900_molecules_and_67_%_synthetic",
+			"./combination_1300_molecules_and_0_%_synthetic",
+			"./combination_1950_molecules_and_33_%_synthetic",
+			"./combination_3900_molecules_and_67_%_synthetic",
 		],  # Can be a single path string or a list of dataset folders.
 		"artifact_folder": ["./0%", "./33%", "./67%"],
-		"actual_test_file": "heldout_testset.csv",
+		"actual_test_file": "./heldout_datasets/heldout_testset.csv",
 		"total_folds": 5,
 		"seed": 42,
 	},
@@ -223,7 +223,7 @@ CONFIG = {
 		# Stage 1 in two-stage training: synthetic-only pretraining per fold,
 		# then Stage 2 finetunes on the fold training set.
 		"synthetic_pretraining": {
-			"enabled": False,
+			"enabled": True,
 			"epochs": 35,
 			"learning_rate": 1e-4, # was 4e-4
 			"weight_decay": 1e-4,

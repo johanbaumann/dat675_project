@@ -60,7 +60,8 @@ from gat_utils.features import apply_feature_scalers, fit_feature_scalers, prepa
 from gat_utils.training_helpers import evaluate, predict
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
-DATA_ROOT = WORKSPACE_ROOT.parent / "data"
+DATA_ROOT = WORKSPACE_ROOT.parent.parent / "data"
+RESULTS_ROOT = WORKSPACE_ROOT.parent.parent / "results"
 
 DATASET_ALIAS_TO_FOLDER = {
     "0%": "combination_1300_molecules_and_0_%_synthetic",
@@ -206,7 +207,7 @@ def _resolve_mode_output_dir(config: dict[str, Any]) -> Path:
         if _is_synthetic_pretraining_enabled(config)
         else NO_PRETRAIN_OUTPUT_FOLDER
     )
-    return (WORKSPACE_ROOT / folder_name).resolve()
+    return (RESULTS_ROOT / folder_name).resolve()
 
 
 def _resolve_results_output_path(args_output: str | None, mode_output_dir: Path) -> Path:
@@ -541,7 +542,7 @@ def main() -> None:
     test_path = (
         Path(args.test_file)
         if args.test_file
-        else WORKSPACE_ROOT / CONFIG["experiment"]["actual_test_file"]
+        else DATA_ROOT / CONFIG["experiment"]["actual_test_file"]
     )
     if not test_path.exists():
         raise FileNotFoundError(f"Holdout test file not found: {test_path}")
