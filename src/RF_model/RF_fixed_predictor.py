@@ -188,7 +188,6 @@ def evaluate_models(models : list[RandomForestRegressor], fold_iterations : list
 print(f"--- Evaluating the data set {GROUP_FOLDER} ---")
 
 
-# read fold data
 folds_X, folds_y, syn_X, syn_y = load_and_process_data(os.path.join(DATA_ROOT, GROUP_FOLDER), USE_SYNTHETIC)
 
 print("starting 5-Fold CV (using fixed parameters)...")

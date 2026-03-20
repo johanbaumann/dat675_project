@@ -15,6 +15,9 @@ from rdkit import RDLogger
 RDLogger.DisableLog('rdApp.*')
 
 
+WORKSPACE_ROOT = os.path.dirname(__file__)
+DATA_ROOT = os.path.join(os.path.dirname(WORKSPACE_ROOT), "data")
+
 
 # Standard de-salting and de-duplication.
 # De-duplication is done using a dictionary, which in python is a hash set and so very efficient.
@@ -88,17 +91,17 @@ def split_data_by_scaffolds_dataset(scaffold_sorted_dataset : dict, mol_count : 
 
 
 
-bace_df = pd.read_csv("data/bace.csv").sample(frac=1)
+bace_df = pd.read_csv(os.path.join(DATA_ROOT, "bace.csv")).sample(frac=1)
 clean_dataset = clean_and_process_dataframe(bace_df, "mol", "pIC50")
 sorted_dataset = sort_dataset_by_scaffolds(clean_dataset)
 holdout_set, data_folds = split_data_by_scaffolds_dataset(sorted_dataset, len(clean_dataset), 200, 5)
 
-directory = f"data/heldout_datasets"
+directory = os.path.join(DATA_ROOT, "heldout_datasets")
 if not os.path.exists(directory): os.makedirs(directory)
 saving_df = pd.DataFrame(data=holdout_set, columns=["smiles", "pIC50"])
 saving_df.to_csv(f"{directory}/heldout_testset.csv")
 
-directory = f"data/combination_1300_molecules_and_0_%_synthetic"
+directory = os.path.join(DATA_ROOT, "combination_1300_molecules_and_0_%_synthetic")
 if not os.path.exists(directory): os.makedirs(directory)
 for fold_index in range(len(data_folds)):
     saving_df = pd.DataFrame(data=data_folds[fold_index], columns=["smiles", "pIC50"])
