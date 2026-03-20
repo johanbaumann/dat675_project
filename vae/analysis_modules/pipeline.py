@@ -81,6 +81,11 @@ def _save_figure(cfg: AnalysisConfig, filename: str, *, dpi: int = 180) -> str:
     return out_path
 
 
+def _default_scatter_size(cfg: AnalysisConfig) -> int:
+    """Use configured embedding point size as the default scatter marker size."""
+    return int(cfg.embedding_point_size_generated)
+
+
 def _resolve_by_aliases(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
     lower_map = {c.lower(): c for c in df.columns}
     for alias in aliases:
@@ -281,6 +286,7 @@ def _maybe_plot_property_distributions(
     gen_df: pd.DataFrame,
     cfg: AnalysisConfig,
 ) -> None:
+    """Plot train/validation/generated property distributions on one shared axis."""
     if not bool(cfg.save_distribution_plot):
         _debug_log(cfg, 'Skipping property distribution plots (save_distribution_plot=False).')
         return
@@ -307,85 +313,42 @@ def _maybe_plot_property_distributions(
         f'validation_target={val_target_col!r}, generated_property={gen_prop_col_used!r}',
     )
 
-    all_vals = np.concatenate(
-        [vals for vals in (train_prop_vals, val_prop_vals, gen_prop_vals) if vals.size > 0],
-        axis=0,
-    ) if (train_prop_vals.size > 0 or val_prop_vals.size > 0 or gen_prop_vals.size > 0) else np.asarray([], dtype=float)
+    # Build one shared value range so all histograms use identical bins.
+    has_any_vals = train_prop_vals.size > 0 or val_prop_vals.size > 0 or gen_prop_vals.size > 0
+    all_vals = (
+        np.concatenate([vals for vals in (train_prop_vals, val_prop_vals, gen_prop_vals) if vals.size > 0], axis=0)
+        if has_any_vals
+        else np.asarray([], dtype=float)
+    )
 
     if all_vals.size == 0:
         _debug_log(cfg, 'Skipping property distribution plot (no numeric property values found).')
         plt.close(fig)
         return
 
-    bins = np.linspace(float(np.min(all_vals)), float(np.max(all_vals)), num=70)
-    if np.allclose(bins[0], bins[-1]):
-        bins = 40
+    bins_arr = np.linspace(float(np.min(all_vals)), float(np.max(all_vals)), num=70)
+    # Use int bins for near-constant ranges, otherwise explicit bin edges.
+    bins_hist: int | list[float]
+    if np.allclose(bins_arr[0], bins_arr[-1]):
+        bins_hist = 40
+    else:
+        bins_hist = bins_arr.tolist()
 
-    # Draw generated first with partial transparency; overlay train/validation as
-    # high-contrast outlines so they remain visible even when generated dominates.
+    # Draw generated first, then overlay train/validation outlines for contrast.
+    if gen_prop_vals.size > 0:
+        ax.hist(gen_prop_vals, bins=bins_hist, histtype='stepfilled', alpha=0.30, linewidth=1.0,
+                edgecolor='#8A1C0F', color='#E8751A', label=f'Generated ({gen_prop_col_used or "predicted"})', zorder=1)
+        ax.hist(gen_prop_vals, bins=bins_hist, histtype='step', alpha=0.95, linewidth=1.6,
+                color='#B45309', zorder=2)
 
-    only_train_vals = False
-    if not only_train_vals:
-        if gen_prop_vals.size > 0:
-            ax.hist(
-                gen_prop_vals,
-                bins=bins,
-                histtype='stepfilled',
-                alpha=0.30,
-                linewidth=1.0,
-                edgecolor='#8A1C0F',
-                color='#E8751A',
-                label=f'Generated ({gen_prop_col_used or "predicted"})',
-                zorder=1,
-            )
-            ax.hist(
-                gen_prop_vals,
-                bins=bins,
-                histtype='step',
-                alpha=0.95,
-                linewidth=1.6,
-                color='#B45309',
-                zorder=2,
-            )
-            if train_prop_vals.size > 0:
-                ax.hist(
-                    train_prop_vals,
-                    bins=bins,
-                    histtype='step',
-                    alpha=0.98,
-                    linewidth=2.0,
-                    color='#1E3A8A',
-                    label=f'Train ({train_target_col or "target"})',
-                    zorder=4,
-                )
-
-    if only_train_vals:
-        # in case of only 
-        ax.hist(
-            train_prop_vals,
-            bins=bins,
-            histtype='stepfilled',
-            alpha=0.3,
-            linewidth=1.0,
-            edgecolor="#FF1515",
-            color='#FF1515',
-            label=f'Train ({train_target_col or "target"})',
-            zorder=4,
-        )
-        ax.hist(
-            train_prop_vals,
-            bins=bins,
-            histtype='step',
-            alpha=0.98,
-            linewidth=2.0,
-            color='#FF1515',
-            zorder=4,
-        )
+    if train_prop_vals.size > 0:
+        ax.hist(train_prop_vals, bins=bins_hist, histtype='step', alpha=0.98, linewidth=2.0,
+                color='#1E3A8A', label=f'Train ({train_target_col or "target"})', zorder=4)
 
     if val_prop_vals.size > 0:
         ax.hist(
             val_prop_vals,
-            bins=bins,
+            bins=bins_hist,
             histtype='step',
             alpha=0.98,
             linewidth=2.0,
@@ -396,16 +359,7 @@ def _maybe_plot_property_distributions(
 
     x_label = gen_prop_col_used or train_target_col or 'Property value'
     title_label = 'pIC50' if 'pic50' in str(x_label).lower() else str(x_label)
-    
-    title_lab = f'{title_label} distribution: train/val'
-    if not only_train_vals:
-        title_lab += '/generated'
-    
-    
-    ax.set_title(title_lab)
-    
-    
-    
+    ax.set_title(f'{title_label} distribution: train/val/generated')
     ax.set_xlabel(x_label)
     ax.set_ylabel('Count')
     ax.grid(axis='y', linestyle='--', linewidth=0.7, alpha=0.35)
@@ -417,6 +371,7 @@ def _maybe_plot_property_distributions(
 
 
 def _maybe_plot_train_loss(cfg: AnalysisConfig) -> None:
+    """Plot train and validation loss from history.csv."""
     if not bool(cfg.run_train_loss_plot):
         _debug_log(cfg, 'Skipping train-loss plot (run_train_loss_plot=False).')
         return
@@ -430,6 +385,7 @@ def _maybe_plot_train_loss(cfg: AnalysisConfig) -> None:
         _debug_log(cfg, 'Skipping train-loss plot (train_loss/test_loss columns missing in history.csv).')
         return
 
+    # Epoch index on x-axis, metric values on y-axis.
     x = np.arange(len(df), dtype=np.int32)
     train_loss = pd.to_numeric(df['train_loss'], errors='coerce').to_numpy(dtype=float)
     test_loss = pd.to_numeric(df['test_loss'], errors='coerce').to_numpy(dtype=float)
@@ -446,6 +402,7 @@ def _maybe_plot_train_loss(cfg: AnalysisConfig) -> None:
 
 
 def _maybe_plot_tanimoto_histogram(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> None:
+    """Plot histogram of generated max tanimoto-to-train values."""
     if not bool(cfg.run_tanimoto_histogram):
         _debug_log(cfg, 'Skipping Tanimoto histogram (run_tanimoto_histogram=False).')
         return
@@ -517,6 +474,7 @@ def _resolve_reference_property_column(df: pd.DataFrame, requested: str | None) 
 
 
 def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> dict:
+    """Plot absolute prediction error against ground-truth reference values."""
     if not bool(cfg.run_prediction_error_plot):
         _debug_log(cfg, 'Skipping prediction-error plot (run_prediction_error_plot=False).')
         return {}
@@ -578,6 +536,7 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
+    point_size = _default_scatter_size(cfg)
 
     if pred_col:
         valid_mask_pred = np.isfinite(gt_all) & np.isfinite(pred_all)
@@ -593,7 +552,8 @@ def _maybe_plot_prediction_errors(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> 
                 'median_ae': float(np.median(abs_err_pred)),
                 'std_ae': float(np.std(abs_err_pred)),
             }
-            ax.scatter(gt_pred, abs_err_pred, alpha=0.5, s=16, **edge_kwargs)
+            # Dot size is tied to the global visualization marker-size settings.
+            ax.scatter(gt_pred, abs_err_pred, alpha=0.5, s=point_size, **edge_kwargs)
             ax.set_title(
                 f'{pred_col} vs {target_col}\n'
                 f"MAE={pred_stats['mae']:.4f}, STD={pred_stats['std_ae']:.4f}, n={pred_stats['count']}"
@@ -696,6 +656,7 @@ def _maybe_plot_residuals(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> dict:
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
+    point_size = _default_scatter_size(cfg)
 
     if pred_col:
         valid_mask_pred = np.isfinite(gt_all) & np.isfinite(pred_all)
@@ -710,7 +671,8 @@ def _maybe_plot_residuals(gen_df: pd.DataFrame, cfg: AnalysisConfig) -> dict:
                 'std': float(np.std(residuals_pred)),
                 'median': float(np.median(residuals_pred)),
             }
-            ax.scatter(gt_pred, residuals_pred, alpha=0.5, s=16, **edge_kwargs)
+            # Dot size is tied to the global visualization marker-size settings.
+            ax.scatter(gt_pred, residuals_pred, alpha=0.5, s=point_size, **edge_kwargs)
             ax.axhline(y=0, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
             ax.set_title(
                 f'{pred_col} residuals vs {target_col}\n'
@@ -789,47 +751,63 @@ def _run_chemical_space_embedding(
     gen_df: pd.DataFrame,
     cfg: AnalysisConfig,
 ) -> None:
+    """
+    Create PCA and t-SNE chemical-space plots from Morgan fingerprints.
+    These are Morgan fingerprints (2048 bits, radius 2 by default) computed from SMILES strings in the train/validation/generated sets.
+    Rdkit-morgan fingerprints. 
+    
+    
+    """
     if not bool(cfg.run_chemical_space):
         _debug_log(cfg, 'Skipping chemical-space embedding (run_chemical_space=False).')
         return
 
-    train_smiles, validation_smiles, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(
-        train_df,
-        validation_df,
-        gen_df,
-        cfg,
-    )
-    fp_gen = morgan_fp_generator(radius=cfg.tanimoto_radius, n_bits=cfg.tanimoto_n_bits)
+    # 1) Sample a manageable subset from each split and grab optional tanimoto values.
+    train_smiles, validation_smiles, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(train_df,validation_df, gen_df,cfg)
+    fp_generator = morgan_fp_generator(radius=cfg.tanimoto_radius, n_bits=cfg.tanimoto_n_bits)
 
-    x_train, _ = smiles_list_to_fp_matrix(fp_gen, train_smiles, dtype=np.int8)
+    # 2) Convert SMILES to Morgan fingerprint matrices.
+    x_train, _ = smiles_list_to_fp_matrix(fp_generator, train_smiles, dtype=np.int8)
     x_validation = np.zeros((0, int(cfg.tanimoto_n_bits)), dtype=np.int8)
     if len(validation_smiles) > 0:
-        x_validation, _ = smiles_list_to_fp_matrix(fp_gen, validation_smiles, dtype=np.int8)
-    x_gen, gen_valid_mask = smiles_list_to_fp_matrix(fp_gen, gen_smiles, dtype=np.int8)
-    if x_train.shape[0] == 0 or x_gen.shape[0] == 0:
+        x_validation, _ = smiles_list_to_fp_matrix(fp_generator, validation_smiles, dtype=np.int8)
+    x_generated, generated_valid_mask = smiles_list_to_fp_matrix(
+        fp_generator,
+        gen_smiles,
+        dtype=np.int8,
+    )
+
+    # We need both train and generated fingerprints for meaningful comparison plots.
+    if x_train.shape[0] == 0 or x_generated.shape[0] == 0:
         _debug_log(cfg, 'Skipping chemical-space embedding (no valid fingerprint rows in train or generated sample).')
         return
 
     _debug_log(
         cfg,
         f'Chemical-space molecules -> train_valid={x_train.shape[0]}, '
-        f'validation_valid={x_validation.shape[0]}, generated_valid={x_gen.shape[0]}',
+        f'validation_valid={x_validation.shape[0]}, generated_valid={x_generated.shape[0]}',
     )
 
+    # Keep tanimoto vector aligned with valid generated fingerprints only.
     if gen_tanimoto is not None:
-        gen_tanimoto = gen_tanimoto[gen_valid_mask]
+        gen_tanimoto = gen_tanimoto[generated_valid_mask]
 
+    # 3) Stack train/validation/generated blocks and keep boundaries for slicing later.
     blocks = [x_train]
     if x_validation.shape[0] > 0:
         blocks.append(x_validation)
-    blocks.append(x_gen)
-    x_all = np.vstack(blocks)
-
+    blocks.append(x_generated)
+    x_all_fps = np.vstack(blocks)
+    # Slicing boundary indices for train/validation/generated splits in the combined fingerprint matrix.
     idx_train_end = int(x_train.shape[0])
     idx_validation_end = int(idx_train_end + x_validation.shape[0])
 
-    pca_vis = PCA(n_components=2, random_state=int(cfg.random_seed))
-    x_pca_2d = pca_vis.fit_transform(x_all)
+
+
+
+    # 4) Quick overview plot: 2D PCA directly on fingerprints.
+    pca_2d = PCA(n_components=2, random_state=int(cfg.random_seed))
+    x_pca_2d = pca_2d.fit_transform(x_all_fps)
     fig = plt.figure(figsize=(8, 6))
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
     plt.scatter(
@@ -841,19 +819,13 @@ def _run_chemical_space_embedding(
         **edge_kwargs,
     )
     if x_validation.shape[0] > 0:
-        plt.scatter(
-            x_pca_2d[idx_train_end:idx_validation_end, 0],
-            x_pca_2d[idx_train_end:idx_validation_end, 1],
-            s=int(cfg.embedding_point_size_validation),
-            alpha=0.70,
-            label='Validation',
-            **edge_kwargs,
-        )
+        plt.scatter(x_pca_2d[idx_train_end:idx_validation_end, 0], x_pca_2d[idx_train_end:idx_validation_end, 1],
+                    s=int(cfg.embedding_point_size_validation), alpha=0.90, label='Validation', **edge_kwargs)
     plt.scatter(
         x_pca_2d[idx_validation_end:, 0],
         x_pca_2d[idx_validation_end:, 1],
         s=int(cfg.embedding_point_size_generated),
-        alpha=0.70,
+        alpha=0.65,
         label='Generated',
         **edge_kwargs,
     )
@@ -863,13 +835,16 @@ def _run_chemical_space_embedding(
     _save_figure(cfg, cfg.chemical_pca_plot_filename, dpi=180)
     plt.close(fig)
 
+    # 5) Optional dimensionality reduction before t-SNE (commonly PCA-50).
     pre_dim = int(cfg.chemical_pca_pre_dim)
-    if pre_dim > 0 and pre_dim < x_all.shape[1] and pre_dim < x_all.shape[0]:
-        x_pre = PCA(n_components=pre_dim, random_state=int(cfg.random_seed)).fit_transform(x_all)
+    if pre_dim > 0 and pre_dim < x_all_fps.shape[1] and pre_dim < x_all_fps.shape[0]:
+        x_tsne_input = PCA(n_components=pre_dim, random_state=int(cfg.random_seed)).fit_transform(x_all_fps)
     else:
-        x_pre = x_all
+        x_tsne_input = x_all_fps
 
-    perpl = _safe_tsne_perplexity(cfg.chemical_tsne_perplexity, x_pre.shape[0])
+    # 6) Run t-SNE on either PCA-preprojected data or raw fingerprint vectors.
+    # fingerprints are Morgan-2048, radius 2 by default, so 50 is a common PCA preprojection dimension for t-SNE.
+    perpl = _safe_tsne_perplexity(cfg.chemical_tsne_perplexity, x_tsne_input.shape[0])
     tsne = TSNE(
         n_components=2,
         random_state=int(cfg.random_seed),
@@ -877,14 +852,16 @@ def _run_chemical_space_embedding(
         init='random',
         learning_rate='auto',
     )
-    x_tsne = tsne.fit_transform(x_pre)
+    x_tsne = tsne.fit_transform(x_tsne_input)
     train_tsne = x_tsne[:idx_train_end]
     validation_tsne = x_tsne[idx_train_end:idx_validation_end]
-    gen_tsne = x_tsne[idx_validation_end:]
+    generated_tsne = x_tsne[idx_validation_end:]
 
+    # 7) Save t-SNE scatter plot for train/validation/generated points.
     fig = plt.figure(figsize=(8, 6))
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
-    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size_train), alpha=float(cfg.embedding_alpha), label='Train', **edge_kwargs)
+    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size_train),
+                alpha=float(cfg.embedding_alpha), label='Train', **edge_kwargs)
     if validation_tsne.shape[0] > 0:
         plt.scatter(
             validation_tsne[:, 0],
@@ -894,20 +871,22 @@ def _run_chemical_space_embedding(
             label='Validation',
             **edge_kwargs,
         )
-    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size_generated), alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
+    plt.scatter(generated_tsne[:, 0], generated_tsne[:, 1], s=int(cfg.embedding_point_size_generated),
+                alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
     plt.legend()
     plt.title(f't-SNE on Morgan-fps (train/val/gen PCA-{pre_dim} preprojection)')
     plt.tight_layout()
     _save_figure(cfg, cfg.chemical_tsne_plot_filename, dpi=300)
     plt.close(fig)
 
-    if gen_tanimoto is not None and gen_tanimoto.shape[0] == gen_tsne.shape[0]:
+    # 8) Optional t-SNE for generated-only points colored by max tanimoto to train.
+    if gen_tanimoto is not None and gen_tanimoto.shape[0] == generated_tsne.shape[0]:
         cmap = LinearSegmentedColormap.from_list('custom', ['red', 'yellow', 'green'], N=256)
         fig = plt.figure(figsize=(8, 6))
         edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
         sc2 = plt.scatter(
-            gen_tsne[:, 0],
-            gen_tsne[:, 1],
+            generated_tsne[:, 0],
+            generated_tsne[:, 1],
             s=int(cfg.embedding_point_size_generated),
             alpha=0.85,
             c=gen_tanimoto,
@@ -929,22 +908,25 @@ def _run_descriptor_space_embedding(
     gen_df: pd.DataFrame,
     cfg: AnalysisConfig,
 ) -> None:
+    """
+    Create PCA and t-SNE descriptor-space plots from scaled RDKit descriptors.
+    
+    """
     if not bool(cfg.run_descriptor_space):
         _debug_log(cfg, 'Skipping descriptor-space embedding (run_descriptor_space=False).')
         return
 
-    train_smiles, validation_smiles, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(
-        train_df,
-        validation_df,
-        gen_df,
-        cfg,
-    )
+    # 1) Subsample rows and prepare descriptor matrices for each split.
+    train_smiles, validation_smiles, gen_smiles, gen_tanimoto = _sample_smiles_for_embeddings(train_df, validation_df, gen_df, cfg)
 
     x_train_desc, _ = smiles_list_to_descriptor_matrix(train_smiles, cfg.descriptor_names)
     x_validation_desc = np.zeros((0, len(cfg.descriptor_names)), dtype=np.float32)
+    
     if len(validation_smiles) > 0:
         x_validation_desc, _ = smiles_list_to_descriptor_matrix(validation_smiles, cfg.descriptor_names)
     x_gen_desc, gen_desc_valid_mask = smiles_list_to_descriptor_matrix(gen_smiles, cfg.descriptor_names)
+    
+    
     if x_train_desc.shape[0] == 0 or x_gen_desc.shape[0] == 0:
         _debug_log(cfg, 'Skipping descriptor-space embedding (no valid descriptor rows in train or generated sample).')
         return
@@ -958,6 +940,7 @@ def _run_descriptor_space_embedding(
     if gen_tanimoto is not None:
         gen_tanimoto = gen_tanimoto[gen_desc_valid_mask]
 
+    # 2) Build one stacked matrix and standardize descriptor columns.
     blocks = [x_train_desc]
     if x_validation_desc.shape[0] > 0:
         blocks.append(x_validation_desc)
@@ -967,6 +950,7 @@ def _run_descriptor_space_embedding(
     idx_train_end = int(x_train_desc.shape[0])
     idx_validation_end = int(idx_train_end + x_validation_desc.shape[0])
 
+    # 3) Quick PCA(2D) view for train/validation/generated separation.
     pca2 = PCA(n_components=2, random_state=int(cfg.random_seed)).fit_transform(x_all_scaled)
     fig = plt.figure(figsize=(8, 6))
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
@@ -1001,12 +985,14 @@ def _run_descriptor_space_embedding(
     _save_figure(cfg, cfg.descriptor_pca_plot_filename, dpi=300)
     plt.close(fig)
 
+    # 4) Optional pre-projection before t-SNE.
     pre_dim = int(cfg.descriptor_pca_pre_dim)
     if pre_dim > 0 and pre_dim < x_all_scaled.shape[1] and pre_dim < x_all_scaled.shape[0]:
         x_pre = PCA(n_components=pre_dim, random_state=int(cfg.random_seed)).fit_transform(x_all_scaled)
     else:
         x_pre = x_all_scaled
 
+    # 5) t-SNE embedding for descriptor-space geometry.
     perpl = _safe_tsne_perplexity(cfg.descriptor_tsne_perplexity, x_pre.shape[0])
     x_tsne = TSNE(
         n_components=2,
@@ -1021,7 +1007,8 @@ def _run_descriptor_space_embedding(
 
     fig = plt.figure(figsize=(8, 6))
     edge_kwargs = _get_scatter_edgecolor_kwargs(cfg)
-    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size_train), alpha=float(cfg.embedding_alpha), label='Train', **edge_kwargs)
+    plt.scatter(train_tsne[:, 0], train_tsne[:, 1], s=int(cfg.embedding_point_size_train),
+                alpha=float(cfg.embedding_alpha), label='Train', **edge_kwargs)
     if validation_tsne.shape[0] > 0:
         plt.scatter(
             validation_tsne[:, 0],
@@ -1031,7 +1018,8 @@ def _run_descriptor_space_embedding(
             label='Validation',
             **edge_kwargs,
         )
-    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size_generated), alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
+    plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size_generated),
+                alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
     plt.legend()
     plt.title('t-SNE on RDKit descriptors (scaled): train vs validation vs generated')
     plt.tight_layout()
@@ -1066,6 +1054,7 @@ def _maybe_plot_scaffold_distribution(
     gen_scaffolds: list,
     cfg: AnalysisConfig,
 ) -> None:
+    """Plot top scaffold frequencies side-by-side for train, validation, and generated."""
     if not bool(cfg.save_scaffold_plot):
         _debug_log(cfg, 'Skipping scaffold distribution plot (save_scaffold_plot=False).')
         return
@@ -1106,6 +1095,7 @@ def _maybe_plot_scaffold_distribution(
 
 
 def _draw_scaffold_grid(scaffold_counts_dict: dict[str, int], out_path: str, n_top: int, n_cols: int, title: str, cfg: AnalysisConfig) -> dict:
+    """Render molecule images for the most frequent scaffolds in a grid."""
     items = sorted(scaffold_counts_dict.items(), key=lambda x: x[1], reverse=True)[: max(0, int(n_top))]
     mols = []
     legends = []
@@ -1251,8 +1241,7 @@ def _subset_df(df: pd.DataFrame, max_rows: int, seed: int) -> pd.DataFrame:
 def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     os.makedirs(cfg.output_dir, exist_ok=True)
     _debug_log(cfg, f'Output directory ready: {cfg.output_dir}')
-    _debug_log(
-        cfg,
+    _debug_log(cfg,
         f'Inputs -> train_data_path={cfg.train_data_path}, '
         f'validation_data_path={cfg.validation_data_path}, generated_data_path={cfg.generated_data_path}',
     )
@@ -1270,10 +1259,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     gen_df = load_generated_dataframe(cfg.generated_data_path, sep=cfg.generated_sep)
     prediction_eval_df = None
     if cfg.prediction_eval_data_path:
-        prediction_eval_df = load_generated_dataframe(
-            cfg.prediction_eval_data_path,
-            sep=cfg.prediction_eval_sep,
-        )
+        prediction_eval_df = load_generated_dataframe(cfg.prediction_eval_data_path,sep=cfg.prediction_eval_sep)
     _debug_log(
         cfg,
         f'Loaded rows -> train={len(train_df)}, '
@@ -1301,9 +1287,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
     )
 
     train_smiles = train_df[cfg.smiles_column].astype(str).tolist()
-    validation_smiles = (
-        validation_df[cfg.smiles_column].astype(str).tolist() if validation_df is not None else []
-    )
+    validation_smiles = (validation_df[cfg.smiles_column].astype(str).tolist() if validation_df is not None else [])
     gen_smiles = gen_df[cfg.smiles_column].astype(str).tolist()
 
     train_mols = [safe_mol_from_smiles(s) for s in train_smiles]
@@ -1427,7 +1411,9 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
         f"uniqueness={vun_metrics.get('uniqueness')}, "
         f"novelty={vun_metrics.get('novelty')}",
     )
-    #first part of the needle. 
+
+    acceptance_rate_raw = vun_metrics.get('acceptance_rate')
+    acceptance_rate_value = None if acceptance_rate_raw is None else float(acceptance_rate_raw)
 
     summary = {
         'profile_name': cfg.profile_name,
@@ -1452,11 +1438,7 @@ def run_analysis_pipeline(cfg: AnalysisConfig) -> dict:
             'validity': float(vun_metrics.get('validity', 0.0)),
             'uniqueness': float(vun_metrics.get('uniqueness', 0.0)),
             'novelty': float(vun_metrics.get('novelty', 0.0)),
-            'acceptance_rate': (
-                None
-                if vun_metrics.get('acceptance_rate') is None
-                else float(vun_metrics.get('acceptance_rate'))
-            ),
+            'acceptance_rate': acceptance_rate_value,
             'valid_count': int(vun_metrics.get('valid_count', 0)),
             'unique_count': int(vun_metrics.get('unique_count', 0)),
             'novel_count': int(vun_metrics.get('novel_count', 0)),

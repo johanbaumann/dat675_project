@@ -26,20 +26,19 @@ train:
     training_preset: custom
 
     data:
-      # Set by fold pipeline for each iteration.
-      prop_file: bace_pic50.txt
       seq_length: 120
-      # Ignored when external split file is injected by fold pipeline.
-      train_ratio: 0.8
       # Number of randomized SMILES strings generated per original train sample.
       # 0 disables augmentation.
       smiles_augmentation_duplicates: 10
 
     model:
+      # Options: lstm | transformer
       mode: transformer
-      latent_size: 128
+      latent_size: 200
       unit_size: 256
-      n_rnn_layer: 2
+      n_rnn_layer: 3
+      # For property conditioning, we normalize to mean=0, stddev=1 based on training data stats.
+      # This is the same as the study by Gómez-Bombarelli et al. (2018) and helps with training stability.
       mean: 0.0
       stddev: 1.0
       num_prop: null
@@ -50,29 +49,30 @@ train:
       label_target_indices: null
       label_dim: null
       label_loss_weight: 1.0
-      include_condition_in_label_head: false
+      include_condition_in_label_head: true
       # False => train/eval on normalized labels; True => raw property scale.
       label_targets_use_raw_scale: false
 
     transformer:
-      heads: 4
+      heads: 8
       ff_size: 512
-      dropout: 0.1
+      dropout: 0.2
 
     optimization:
       # adam for lstm, adamw for transformer
       optimizer: adamw
-      lr: 5.0e-5
+      lr: 1.0e-3
       weight_decay: 0.001
       use_amp: false
       amp_dtype: float16
       # Avoid over-aggressive clipping.
-      grad_clip_norm: 2.0
+      grad_clip_norm: 6.0
 
     training:
       batch_size: 64
       num_epochs: 120
       # Overridden per iteration to save/.../cv_iteration_k/training
+      # save folder i
       save_dir: save/
       run_name: null
       use_run_subdir: true
@@ -114,6 +114,10 @@ sampling:
   checkpoint_glob: model_best.ckpt-*.pt
 
   # Mode options: single_target | training_dist | uniform_range | uniform_range_strict
+  # single_target: one fixed target_prop value for every generated molecule.
+  # training_dist: sample targets from a Gaussian around training mean/std.
+  # uniform_range: sample targets uniformly inside uniform_range/uniform_ranges.
+  # uniform_range_strict: same uniform range with strict per-bin quotas.
   target_sampling_mode: training_dist
 
   # training_dist: sample targets from Gaussian around train mean/std.
@@ -128,10 +132,11 @@ sampling:
   uniform_ranges:
     - [3.0, 9.0]
 
-  # Which property dimension to balance in strict mode.
+  # Which property dimension to balance with strict bins.
   # For pIC50-only conditioning, use 0.
   uniform_strict_dimension: 0
-  # Number of bins for strict balancing.
+  # How many bins to split [min,max] into.
+  # More bins = stricter/finer balancing but harder acceptance.
   uniform_strict_bins: 20
 
   # Used for single_target mode.

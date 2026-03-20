@@ -12,6 +12,13 @@ from typing import Optional
 Helper module for defining and loading analysis configuration.
 Will be used in combo with the fold_pipeline outputs to run the analysis scripts in a standardized way.
 
+
+THis is really important, since for example diversity calculations and typical tanimoto distance varies heavily -
+based on fingerprint type, radius and n_bits. 
+
+
+
+
 """
 
 @dataclass(frozen=True)
@@ -83,9 +90,9 @@ class AnalysisConfig:
     descriptor_tsne_perplexity: float = 30.0
     descriptor_pca_pre_dim: int = 0
     embedding_point_size: int = 6
-    embedding_point_size_train: int = 14
-    embedding_point_size_validation: int = 14
-    embedding_point_size_generated: int = 14
+    embedding_point_size_train: int = 18
+    embedding_point_size_validation: int = 18
+    embedding_point_size_generated: int = 10
     embedding_point_edgecolors_enabled: bool = True
     embedding_edge_color: str = 'black'
     embedding_edge_width: float = 0.5
