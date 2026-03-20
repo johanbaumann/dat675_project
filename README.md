@@ -4,6 +4,8 @@
 
 See if we could expand the BACE dataset from [MoleculeNet-BACE](https://moleculenet.org/datasets-1), using *synthethic data augmentation.*
 
+An  $\beta$-CVAE was constructed. The CVAE parts was verry loosley based on work by Jaechang, Lim ([link to github](https://github.com/jaechanglim/CVAE)). Link to the [paper ](https://arxiv.org/abs/1806.05805)(Molecular generative model based on conditional variational autoencoder for de novo molecular design).
+
 ### Structure of the project:
 
 The project is divided into three distinct, but chained parts (which has its own more detailed READMEs).  The three parts are:
