@@ -16,7 +16,7 @@ label_columns:
 python_executable: null
 
 train:
-  enabled: true
+  enabled: false
   capture_log_file: true
   script: scripts/train_labels.py
 
@@ -110,7 +110,7 @@ train:
       every: 1
 
 sampling:
-  enabled: true
+  enabled: false
   checkpoint_glob: model_best.ckpt-*.pt
 
   # Mode options: single_target | training_dist | uniform_range | uniform_range_strict
@@ -191,8 +191,8 @@ analysis:
     run_prediction_error_plot: true
     run_residual_plot: true
     run_train_loss_plot: true
-    run_tanimoto_histogram: false
-    run_chemical_space: false
+    run_tanimoto_histogram: true
+    run_chemical_space: true
     run_descriptor_space: false
     debug: true
 

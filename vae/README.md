@@ -288,6 +288,58 @@ vae/
 
 ---
 
+## Environment Setup (Conda)
+
+This project is designed to run with the Conda environment defined in `environment.yml`.
+
+### 1. Create the environment
+
+From the project root (`vae/`):
+
+```powershell
+conda env create -f environment.yml
+```
+
+If you already have it and want to update packages from the file:
+
+```powershell
+conda env update -f environment.yml --prune
+```
+
+### 2. Activate the environment
+
+```powershell
+conda activate rdkit_draw
+```
+
+If activation fails in PowerShell, initialize conda for your shell and restart terminal:
+
+```powershell
+conda init powershell
+```
+
+Alternatively, run commands from Anaconda Prompt.
+
+### 3. Verify key packages
+
+```powershell
+python -c "import torch, rdkit, sklearn, pandas, matplotlib; print('ENV_OK')"
+```
+
+### 4. Run the pipeline
+
+```powershell
+python run_fold_pipeline.py --config fold_pipeline_config.example.yaml
+```
+
+### 5. Run a single fold (faster smoke run)
+
+```powershell
+python run_fold_pipeline.py --config fold_pipeline_config.example.yaml --only-fold 0
+```
+
+---
+
 ## How to Run
 
 ### 1. Full CV Pipeline (Train + Sample + Analyze)
@@ -592,7 +644,7 @@ When `predict_labels=true`, the model trains a separate **label prediction head*
 
 ### Beta Annealing for Disentanglement
 
-The **β-CVAE** optimization gradually increases β during training ([`start_beta` → `max_beta`](#2-training-configuration)):
+The **β-CVAE** optimization gradually increases β during training ([`start_beta` -&gt; `max_beta`](#2-training-configuration)):
 
 - **Low β** (early epochs): Allow model to reconstruct with flexible latent space
 - **High β** (later epochs): Constrain latent space toward standard normal prior (disentanglement)

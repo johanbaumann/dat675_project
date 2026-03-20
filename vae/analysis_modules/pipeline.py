@@ -86,6 +86,45 @@ def _default_scatter_size(cfg: AnalysisConfig) -> int:
     return int(cfg.embedding_point_size_generated)
 
 
+def _apply_scatter_legend_sizes(
+    legend,
+    *,
+    train_size: int,
+    validation_size: int,
+    generated_size: int,
+    offset: float = 24.0,
+) -> None:
+    """Scale legend marker circles from data marker sizes plus a visual offset."""
+    if legend is None:
+        return
+
+    handles = getattr(legend, 'legend_handles', None)
+    if handles is None:
+        handles = getattr(legend, 'legendHandles', [])
+    texts = legend.get_texts() if hasattr(legend, 'get_texts') else []
+
+    size_by_label = {
+        'Train': float(train_size),
+        'Validation': float(validation_size),
+        'Generated': float(generated_size),
+    }
+
+    for handle, text in zip(handles, texts):
+        label = str(text.get_text())
+        base_size = size_by_label.get(label)
+        if base_size is None:
+            continue
+
+        marker_area = max(1.0, base_size + float(offset))
+        set_sizes = getattr(handle, 'set_sizes', None)
+        if callable(set_sizes):
+            set_sizes([marker_area])
+
+        set_alpha = getattr(handle, 'set_alpha', None)
+        if callable(set_alpha):
+            set_alpha(1.0)
+
+
 def _resolve_by_aliases(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
     lower_map = {c.lower(): c for c in df.columns}
     for alias in aliases:
@@ -829,7 +868,13 @@ def _run_chemical_space_embedding(
         label='Generated',
         **edge_kwargs,
     )
-    plt.legend()
+    legend = plt.legend()
+    _apply_scatter_legend_sizes(
+        legend,
+        train_size=int(cfg.embedding_point_size_train),
+        validation_size=int(cfg.embedding_point_size_validation),
+        generated_size=int(cfg.embedding_point_size_generated),
+    )
     plt.title('PCA (2D) on Morgan fingerprints: train/val/generated')
     plt.tight_layout()
     _save_figure(cfg, cfg.chemical_pca_plot_filename, dpi=180)
@@ -873,7 +918,13 @@ def _run_chemical_space_embedding(
         )
     plt.scatter(generated_tsne[:, 0], generated_tsne[:, 1], s=int(cfg.embedding_point_size_generated),
                 alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
-    plt.legend()
+    legend = plt.legend()
+    _apply_scatter_legend_sizes(
+        legend,
+        train_size=int(cfg.embedding_point_size_train),
+        validation_size=int(cfg.embedding_point_size_validation),
+        generated_size=int(cfg.embedding_point_size_generated),
+    )
     plt.title(f't-SNE on Morgan-fps (train/val/gen PCA-{pre_dim} preprojection)')
     plt.tight_layout()
     _save_figure(cfg, cfg.chemical_tsne_plot_filename, dpi=300)
@@ -979,7 +1030,13 @@ def _run_descriptor_space_embedding(
         label='Generated',
         **edge_kwargs,
     )
-    plt.legend()
+    legend = plt.legend()
+    _apply_scatter_legend_sizes(
+        legend,
+        train_size=int(cfg.embedding_point_size_train),
+        validation_size=int(cfg.embedding_point_size_validation),
+        generated_size=int(cfg.embedding_point_size_generated),
+    )
     plt.title('PCA (2D) on RDKit descriptors: train vs validation vs generated')
     plt.tight_layout()
     _save_figure(cfg, cfg.descriptor_pca_plot_filename, dpi=300)
@@ -1020,7 +1077,13 @@ def _run_descriptor_space_embedding(
         )
     plt.scatter(gen_tsne[:, 0], gen_tsne[:, 1], s=int(cfg.embedding_point_size_generated),
                 alpha=float(cfg.embedding_alpha), label='Generated', **edge_kwargs)
-    plt.legend()
+    legend = plt.legend()
+    _apply_scatter_legend_sizes(
+        legend,
+        train_size=int(cfg.embedding_point_size_train),
+        validation_size=int(cfg.embedding_point_size_validation),
+        generated_size=int(cfg.embedding_point_size_generated),
+    )
     plt.title('t-SNE on RDKit descriptors (scaled): train vs validation vs generated')
     plt.tight_layout()
     _save_figure(cfg, cfg.descriptor_tsne_plot_filename, dpi=180)

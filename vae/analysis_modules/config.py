@@ -90,8 +90,8 @@ class AnalysisConfig:
     descriptor_tsne_perplexity: float = 30.0
     descriptor_pca_pre_dim: int = 0
     embedding_point_size: int = 6
-    embedding_point_size_train: int = 18
-    embedding_point_size_validation: int = 18
+    embedding_point_size_train: int = 24
+    embedding_point_size_validation: int = 24
     embedding_point_size_generated: int = 10
     embedding_point_edgecolors_enabled: bool = True
     embedding_edge_color: str = 'black'
