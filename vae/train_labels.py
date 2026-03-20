@@ -3,7 +3,7 @@
 Train script for CVAE with property conditioning.
 
 This script now optionally trains an auxiliary label predictor head (see
-`model_labels.py`) that predicts molecular labels from the latent vector `z`.
+`models/model_labels.py`) that predicts molecular labels from the latent vector `z`.
 
 Important invariants (kept):
 - `load_data()` signature and output semantics are unchanged.
@@ -14,11 +14,11 @@ CHANGELOG
 ---------
 2026-02-23
 - Added optional label predictor training via `predict_labels` config knobs.
-- Uses `model_labels.CVAE` so the new head can be trained without changing the
+- Uses `models.model_labels.CVAE` so the new head can be trained without changing the
     base `model.py` implementation.
 """
 
-from model_labels import CVAE
+from models.model_labels import CVAE
 from utils import *
 from utils import (
     apply_training_preset,

@@ -902,10 +902,10 @@ def converts_sweep_to_list_with_targets(
 def create_and_restore_model(config: dict, model_config: dict, vocab_size: int):
     """Create model instance matching checkpoint config, then restore weights.
 
-    The project now standardizes on `model_labels.CVAE` for both plain CVAE and
+    The project now standardizes on `models.model_labels.CVAE` for both plain CVAE and
     CVAE+label-head checkpoints.
     """
-    from model_labels import CVAE as CVAEWithLabels
+    from models.model_labels import CVAE as CVAEWithLabels
 
     model = CVAEWithLabels(vocab_size=vocab_size, args=model_config)
     model.restore(config['save_file'])

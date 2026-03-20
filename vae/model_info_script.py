@@ -17,7 +17,7 @@ import torch.nn as nn
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from model_labels import CVAE
+from models.model_labels import CVAE
 
 
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))

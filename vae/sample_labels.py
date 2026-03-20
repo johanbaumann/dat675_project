@@ -13,7 +13,7 @@ from rdkit import RDLogger
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
 if TYPE_CHECKING:
-    import model_labels
+    from models import model_labels
 
 from utils import (
     canonicalize_for_filtering,

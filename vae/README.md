@@ -364,7 +364,7 @@ Set input/output filenames in the `args` dict at the top of `cal_prop.py`.
 
 ### Sampling with predicted labels (`sample_labels.py`)
 
-If you trained a checkpoint with the optional label head (`train_labels.py` / `model_labels.py`), you can sample with `sample_labels.py`.
+If you trained a checkpoint with the optional label head (`train_labels.py` / `models/model_labels.py`), you can sample with `sample_labels.py`.
 
 It writes the usual RDKit descriptors (MW/LogP/TPSA) plus:
 
