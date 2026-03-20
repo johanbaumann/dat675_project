@@ -7,33 +7,8 @@ import numpy as np
 from rdkit import Chem, DataStructs
 from rdkit.Chem import Descriptors
 from rdkit.Chem import rdFingerprintGenerator
-from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from utils import canonicalize_for_filtering
-
-
-def safe_mol_from_smiles(smiles: str) -> Optional[Chem.Mol]:
-    if smiles is None:
-        return None
-    s = str(smiles).strip()
-    if len(s) == 0:
-        return None
-    try:
-        return Chem.MolFromSmiles(s, sanitize=True)
-    except Exception:
-        return None
-
-
-def safe_murcko_scaffold_smiles(mol: Chem.Mol) -> Optional[str]:
-    if mol is None:
-        return None
-    try:
-        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
-        if scaffold is None:
-            return None
-        return Chem.MolToSmiles(scaffold, isomericSmiles=False, canonical=True)
-    except Exception:
-        return None
+from utils import canonicalize_for_filtering, safe_mol_from_smiles, safe_murcko_scaffold_smiles
 
 
 def canonicalize_smiles(smiles: str, *, strip_salts: bool = True, decharge: bool = True, canonicalize_tautomer: bool = False) -> Optional[str]:

@@ -22,6 +22,8 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
+from .pipeline_helpers import compute_vun_from_counts, create_sampling_stats
+
 
 # -----------------------------------------------------------------------------
 # Training helpers
@@ -253,26 +255,49 @@ def _collect_new_unique_from_raw_with_payload(
     canonicalize_tautomer: bool = False,
 ):
     """Like `utils.collect_new_unique_from_raw()`, but carries an aligned payload."""
-    from .core import canonicalize_for_filtering
-
-    accepted = []
-    stats = {
-        'total_generated': 0,
-        'accepted': 0,
-        'invalid_or_empty': 0,
-        'discarded_cleanup': 0,
-        'in_training': 0,
-        'duplicate': 0,
-        'rejected_by_filter': 0,
-        'salt_stripped': 0,
-        'tautomer_canonicalized': 0,
-    }
-
-    if training_smiles is None:
-        training_smiles = set()
+    accepted_core, stats = _collect_new_unique_from_raw_core(
+        raw_strings=raw_strings,
+        seen_smiles=seen_smiles,
+        training_smiles=training_smiles,
+        eos_token=eos_token,
+        accept_predicate=accept_predicate,
+        require_neutral=require_neutral,
+        strip_salts=strip_salts,
+        decharge=decharge,
+        canonicalize_tautomer=canonicalize_tautomer,
+    )
 
     if payload is not None and len(payload) != len(raw_strings):
         raise ValueError('payload must be None or have same length as raw_strings')
+
+    accepted = []
+    for can, mol, raw_idx in accepted_core:
+        y_row = None if payload is None else payload[int(raw_idx)]
+        accepted.append((can, mol, y_row))
+
+    return accepted, stats
+
+
+def _collect_new_unique_from_raw_core(
+    *,
+    raw_strings: list[str],
+    seen_smiles: set,
+    training_smiles: Optional[set] = None,
+    eos_token: str = 'E',
+    accept_predicate: Optional[Callable[[str, object], bool]] = None,
+    require_neutral: bool = False,
+    strip_salts: bool = True,
+    decharge: bool = True,
+    canonicalize_tautomer: bool = False,
+) -> tuple[list[tuple[str, object, int]], dict]:
+    """Shared canonical accept/filter loop for sampling payload collectors."""
+    from .core import canonicalize_for_filtering
+
+    accepted_core: list[tuple[str, object, int]] = []
+    stats = create_sampling_stats()
+
+    if training_smiles is None:
+        training_smiles = set()
 
     for i, s in enumerate(raw_strings):
         stats['total_generated'] += 1
@@ -326,27 +351,10 @@ def _collect_new_unique_from_raw_with_payload(
                 continue
 
         seen_smiles.add(can)
-        y_row = None
-        if payload is not None:
-            y_row = payload[i]
-        accepted.append((can, mol, y_row))
+        accepted_core.append((can, mol, int(i)))
         stats['accepted'] += 1
 
-    return accepted, stats
-
-
-def _new_stats() -> dict:
-    return {
-        'total_generated': 0,
-        'accepted': 0,
-        'invalid_or_empty': 0,
-        'discarded_cleanup': 0,
-        'in_training': 0,
-        'duplicate': 0,
-        'rejected_by_filter': 0,
-        'salt_stripped': 0,
-        'tautomer_canonicalized': 0,
-    }
+    return accepted_core, stats
 
 
 def _accumulate_stats(total: dict, inc: dict) -> None:
@@ -358,55 +366,38 @@ def _compute_quality_metrics(
     stats: dict,
     extra_metric_fns: Optional[dict[str, Callable[[dict, dict], float]]] = None,
 ) -> dict:
-    total_generated = int(stats.get('total_generated', 0))
-    invalid_or_empty = int(stats.get('invalid_or_empty', 0))
-    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
-    in_training = int(stats.get('in_training', 0))
-    duplicate = int(stats.get('duplicate', 0))
-    accepted = int(stats.get('accepted', 0))
-    rejected_by_filter = int(stats.get('rejected_by_filter', 0))
-    salt_stripped = int(stats.get('salt_stripped', 0))
-    tautomer_canonicalized = int(stats.get('tautomer_canonicalized', 0))
+    (
+        total_generated,
+        invalid_or_empty,
+        discarded_cleanup,
+        in_training,
+        duplicate,
+        accepted,
+        rejected_by_filter,
+        salt_stripped,
+        tautomer_canonicalized,
+    ) = _unpack_sampling_stats(stats)
 
-    if total_generated <= 0:
-        metrics = {
-            'validity': 0.0,
-            'uniqueness': 0.0,
-            'novelty': 0.0,
-            'acceptance_rate': 0.0,
-            'valid_count': 0,
-            'novel_count': 0,
-            'unique_count': 0,
+    metrics = compute_vun_from_counts(
+        total_generated=total_generated,
+        invalid_or_empty=invalid_or_empty,
+        discarded_cleanup=discarded_cleanup,
+        in_training=in_training,
+        duplicate=duplicate,
+        accepted=accepted,
+    )
+    metrics.update(
+        {
             'rejected_by_filter': rejected_by_filter,
             'discarded_cleanup': discarded_cleanup,
             'salt_stripped': salt_stripped,
             'tautomer_canonicalized': tautomer_canonicalized,
         }
-        if extra_metric_fns:
-            for metric_name, metric_fn in extra_metric_fns.items():
-                try:
-                    metrics[metric_name] = float(metric_fn(stats, metrics))
-                except Exception:
-                    metrics[metric_name] = np.nan
-        return metrics
+    )
 
-    valid_count = total_generated - invalid_or_empty - discarded_cleanup
-    unique_count = total_generated - duplicate
-    novel_count = total_generated - in_training
+    # Maintain legacy key ordering/availability for downstream consumers.
+    metrics['novel_count'] = int(metrics['novel_count'])
 
-    metrics = {
-        'validity': float(valid_count) / float(total_generated),
-        'uniqueness': float(unique_count) / float(total_generated),
-        'novelty': float(novel_count) / float(total_generated),
-        'acceptance_rate': float(accepted) / float(total_generated),
-        'valid_count': int(valid_count),
-        'novel_count': int(novel_count),
-        'unique_count': int(unique_count),
-        'rejected_by_filter': rejected_by_filter,
-        'discarded_cleanup': discarded_cleanup,
-        'salt_stripped': salt_stripped,
-        'tautomer_canonicalized': tautomer_canonicalized,
-    }
     if extra_metric_fns:
         for metric_name, metric_fn in extra_metric_fns.items():
             try:
@@ -438,7 +429,7 @@ def _print_metric_lines(metrics: dict, metric_labels: Optional[dict[str, str]] =
 
 
 def _aggregate_stats_from_sweep_results(sweep_results: pd.DataFrame) -> dict:
-    totals = _new_stats()
+    totals = create_sampling_stats()
     if sweep_results is None or len(sweep_results) == 0:
         return totals
 
@@ -504,15 +495,17 @@ def _default_quality_summary_output_path(result_filename: str) -> str:
 
 
 def _build_quality_summary_row(*, stats: dict, run_scope: str, num_molecules_saved: int, config: dict) -> dict:
-    total_generated = int(stats.get('total_generated', 0))
-    accepted = int(stats.get('accepted', 0))
-    invalid_or_empty = int(stats.get('invalid_or_empty', 0))
-    discarded_cleanup = int(stats.get('discarded_cleanup', 0))
-    in_training = int(stats.get('in_training', 0))
-    duplicate = int(stats.get('duplicate', 0))
-    rejected_by_filter = int(stats.get('rejected_by_filter', 0))
-    salt_stripped = int(stats.get('salt_stripped', 0))
-    tautomer_canonicalized = int(stats.get('tautomer_canonicalized', 0))
+    (
+        total_generated,
+        invalid_or_empty,
+        discarded_cleanup,
+        in_training,
+        duplicate,
+        accepted,
+        rejected_by_filter,
+        salt_stripped,
+        tautomer_canonicalized,
+    ) = _unpack_sampling_stats(stats)
 
     not_ok_count = invalid_or_empty + discarded_cleanup + in_training + duplicate
 
@@ -748,87 +741,46 @@ def _collect_new_unique_from_raw_with_payloads(
     decharge: bool = True,
     canonicalize_tautomer: bool = False,
 ):
-    from .core import canonicalize_for_filtering
-
-    accepted = []
-    stats = {
-        'total_generated': 0,
-        'accepted': 0,
-        'invalid_or_empty': 0,
-        'discarded_cleanup': 0,
-        'in_training': 0,
-        'duplicate': 0,
-        'rejected_by_filter': 0,
-        'salt_stripped': 0,
-        'tautomer_canonicalized': 0,
-    }
-
-    if training_smiles is None:
-        training_smiles = set()
+    accepted_core, stats = _collect_new_unique_from_raw_core(
+        raw_strings=raw_strings,
+        seen_smiles=seen_smiles,
+        training_smiles=training_smiles,
+        eos_token=eos_token,
+        accept_predicate=accept_predicate,
+        require_neutral=require_neutral,
+        strip_salts=strip_salts,
+        decharge=decharge,
+        canonicalize_tautomer=canonicalize_tautomer,
+    )
 
     if payload_a is not None and len(payload_a) != len(raw_strings):
         raise ValueError('payload_a must be None or have same length as raw_strings')
     if payload_b is not None and len(payload_b) != len(raw_strings):
         raise ValueError('payload_b must be None or have same length as raw_strings')
 
-    for i, s in enumerate(raw_strings):
-        stats['total_generated'] += 1
-        s = s.split(eos_token)[0].strip()
-        if not s:
-            stats['invalid_or_empty'] += 1
-            continue
-
-        can, mol, can_info = canonicalize_for_filtering(
-            s,
-            strip_salts=strip_salts,
-            decharge=decharge,
-            canonicalize_tautomer=canonicalize_tautomer,
-        )
-        if can is None or mol is None:
-            if int(can_info.get('cleanup_failed', 0)):
-                stats['discarded_cleanup'] += 1
-            else:
-                stats['invalid_or_empty'] += 1
-            continue
-
-        stats['salt_stripped'] += int(can_info.get('salt_stripped', 0))
-        stats['tautomer_canonicalized'] += int(can_info.get('tautomer_canonicalized', 0))
-
-        if can in training_smiles:
-            stats['in_training'] += 1
-            continue
-
-        if can in seen_smiles:
-            stats['duplicate'] += 1
-            continue
-
-        if require_neutral:
-            from rdkit import Chem
-
-            try:
-                if int(Chem.GetFormalCharge(mol)) != 0:
-                    stats['rejected_by_filter'] += 1
-                    continue
-            except Exception:
-                stats['rejected_by_filter'] += 1
-                continue
-
-        if accept_predicate is not None:
-            try:
-                ok = bool(accept_predicate(can, mol))
-            except Exception:
-                ok = False
-            if not ok:
-                stats['rejected_by_filter'] += 1
-                continue
-
-        seen_smiles.add(can)
-        a_row = None if payload_a is None else payload_a[i]
-        b_row = None if payload_b is None else payload_b[i]
+    accepted = []
+    for can, mol, raw_idx in accepted_core:
+        idx = int(raw_idx)
+        a_row = None if payload_a is None else payload_a[idx]
+        b_row = None if payload_b is None else payload_b[idx]
         accepted.append((can, mol, a_row, b_row))
-        stats['accepted'] += 1
 
     return accepted, stats
+
+
+def _unpack_sampling_stats(stats: dict) -> tuple[int, int, int, int, int, int, int, int, int]:
+    """Return canonical sampling stats in a stable key order."""
+    return (
+        int(stats.get('total_generated', 0)),
+        int(stats.get('invalid_or_empty', 0)),
+        int(stats.get('discarded_cleanup', 0)),
+        int(stats.get('in_training', 0)),
+        int(stats.get('duplicate', 0)),
+        int(stats.get('accepted', 0)),
+        int(stats.get('rejected_by_filter', 0)),
+        int(stats.get('salt_stripped', 0)),
+        int(stats.get('tautomer_canonicalized', 0)),
+    )
 
 
 def converts_sweep_to_list(df: pd.DataFrame):

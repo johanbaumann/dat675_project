@@ -1,0 +1,214 @@
+# Single source-of-truth config for the full CV pipeline:
+# train -> sample -> analysis -> optional cross-fold combo stats.
+
+workspace_root: .
+training_output_root: save/fold_pipeline_runs
+artifacts_output_root: fold_pipeline_outputs
+
+# Folder that contains pre-split fold CSV files.
+train_validation_folds_dir: ../data/combination_1300_molecules_and_0_%_synthetic
+fold_glob: "*fold_*.csv"
+smiles_column: smiles
+label_columns:
+  - pIC50
+
+# Null => use the Python executable running run_fold_pipeline.py.
+python_executable: null
+
+train:
+  enabled: true
+  capture_log_file: true
+  script: scripts/train_labels.py
+
+  # This block is merged with per-iteration overrides and written to each
+  # generated training runtime file: save/fold_pipeline_runs/cv_iteration_k/train_config.json
+  base_config:
+    training_preset: custom
+
+    data:
+      # Set by fold pipeline for each iteration.
+      prop_file: bace_pic50.txt
+      seq_length: 120
+      # Ignored when external split file is injected by fold pipeline.
+      train_ratio: 0.8
+      # Number of randomized SMILES strings generated per original train sample.
+      # 0 disables augmentation.
+      smiles_augmentation_duplicates: 10
+
+    model:
+      mode: transformer
+      latent_size: 128
+      unit_size: 256
+      n_rnn_layer: 2
+      mean: 0.0
+      stddev: 1.0
+      num_prop: null
+
+      # Optional multi-task label head.
+      predict_labels: true
+      # Null => infer defaults in train_labels_main.py
+      label_target_indices: null
+      label_dim: null
+      label_loss_weight: 1.0
+      include_condition_in_label_head: false
+      # False => train/eval on normalized labels; True => raw property scale.
+      label_targets_use_raw_scale: false
+
+    transformer:
+      heads: 4
+      ff_size: 512
+      dropout: 0.1
+
+    optimization:
+      # adam for lstm, adamw for transformer
+      optimizer: adamw
+      lr: 5.0e-5
+      weight_decay: 0.001
+      use_amp: false
+      amp_dtype: float16
+      # Avoid over-aggressive clipping.
+      grad_clip_norm: 2.0
+
+    training:
+      batch_size: 64
+      num_epochs: 120
+      # Overridden per iteration to save/.../cv_iteration_k/training
+      save_dir: save/
+      run_name: null
+      use_run_subdir: true
+      save_every: 30
+
+      save_periodic_checkpoints: false
+      save_final_checkpoint: true
+      save_early_stop_checkpoint: false
+      save_history_csv: true
+      save_prediction_eval_csv: true
+      prediction_eval_filename: train_validation_prediction_eval.csv
+
+      early_stopping_patience: 10
+      early_stopping_min_delta: 0.001
+      early_stopping_restore_best: true
+
+    scheduler:
+      enabled: true
+      # Reduce LR by this factor when validation loss plateaus.
+      factor: 0.5
+      # Number of epochs with no improvement before LR reduction.
+      patience: 2
+      # Minimum delta for considering validation loss improvement.
+      threshold: 0.001
+      min_lr: 1.0e-6
+
+    kl:
+      enabled: true
+      start_beta: 1.0
+      max_beta: 4.0
+      hold_epochs: 0
+      warmup_epochs: 8
+
+    diagnostics:
+      every: 1
+
+sampling:
+  enabled: true
+  checkpoint_glob: model_best.ckpt-*.pt
+
+  # Mode options: single_target | training_dist | uniform_range | uniform_range_strict
+  target_sampling_mode: training_dist
+
+  # training_dist: sample targets from Gaussian around train mean/std.
+  run_training_dist: true
+  enable_prop_cache: false
+  training_dist_std_scale: 1.0
+  training_dist_clip_n_std: 2.5
+  training_dist_seed: null
+
+  # uniform_range / uniform_range_strict settings
+  uniform_range: [3.0, 9.0]
+  uniform_ranges:
+    - [3.0, 9.0]
+
+  # Which property dimension to balance in strict mode.
+  # For pIC50-only conditioning, use 0.
+  uniform_strict_dimension: 0
+  # Number of bins for strict balancing.
+  uniform_strict_bins: 20
+
+  # Used for single_target mode.
+  target_prop_mode: mean_test_labels
+  target_prop: [8.0]
+
+  num_unique: 10000
+  max_batches: 5000
+  do_sample: true
+  temperature: 0.9
+  top_k: 20
+
+  exclude_training: true
+  exclude_validation_scaffolds: true
+  exclude_heldout_scaffolds: true
+  heldout_smiles_csv: ../data/heldout_datasets/heldout_testset.csv
+  validation_smiles_column: smiles
+  heldout_smiles_column: smiles
+  scaffold_make_generic: false
+
+  strip_salts: true
+  decharge: true
+  canonicalize_tautomer: true
+  suppress_rdkit_parse_errors: true
+  require_neutral: true
+
+  mw_tolerance: null
+  logp_tolerance: null
+  min_tpsa: null
+  max_heavy_atoms: 60
+  max_canonical_smiles_len: null
+
+  generated_outputs:
+    - smiles
+    - pred_pIC50
+    - target_pIC50
+
+  save_generated_csv: true
+  save_quality_summary: true
+  save_sampling_debug: false
+  result_filename: generated.csv
+  quality_summary_filename: quality_summary.csv
+
+analysis:
+  enabled: true
+  capture_log_file: false
+  profile: bace_pic50_10k
+  overrides:
+    save_distribution_plot: true
+    save_scaffold_plot: false
+    save_scaffold_grids: false
+    run_prediction_error_plot: true
+    run_residual_plot: true
+    run_train_loss_plot: true
+    run_tanimoto_histogram: false
+    run_chemical_space: false
+    run_descriptor_space: false
+    debug: true
+
+manifests:
+  write_iteration_manifest: false
+  write_partial_global_manifest: false
+  write_global_manifest: false
+
+cleanup:
+  purge_artifacts_before_run: false
+  purge_training_before_run: false
+  purge_python_caches_before_run: true
+
+  remove_iteration_logs_after_success: false
+  remove_iteration_data_after_success: true
+  remove_sampling_debug_after_success: true
+  remove_analysis_config_after_success: true
+  remove_iteration_manifest_after_success: false
+  remove_partial_global_manifest_after_success: true
+
+cv_combo:
+  enabled: true
+  only: false
+  cross_fold_summary_path: null

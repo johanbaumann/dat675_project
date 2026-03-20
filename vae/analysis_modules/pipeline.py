@@ -14,7 +14,7 @@ from rdkit.Chem import Descriptors
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
-from utils.pipeline_helpers import coerce_float, coerce_int_or_none
+from utils.pipeline_helpers import coerce_float, coerce_int_or_none, compute_vun_from_counts
 
 from .chem_utils import (
     canonicalize_smiles,
@@ -99,43 +99,6 @@ def _extract_numeric_series(df: pd.DataFrame, col: str | None) -> np.ndarray:
     return vals if vals.size > 0 else np.asarray([], dtype=float)
 
 
-def _compute_vun_from_counts(
-    *,
-    total_generated: int,
-    invalid_or_empty: int,
-    discarded_cleanup: int,
-    in_training: int,
-    duplicate: int,
-    accepted: int,
-) -> dict:
-    total = total_generated
-    if total <= 0:
-        return {
-            'validity': 0.0,
-            'uniqueness': 0.0,
-            'novelty': 0.0,
-            'acceptance_rate': 0.0,
-            'valid_count': 0,
-            'unique_count': 0,
-            'novel_count': 0,
-        }
-
-    valid_count = total - invalid_or_empty - discarded_cleanup
-    unique_count = total - duplicate
-    novel_count = total - in_training
-    accepted_count = accepted
-
-    return {
-        'validity': float(valid_count) / float(total),
-        'uniqueness': float(unique_count) / float(total),
-        'novelty': float(novel_count) / float(total),
-        'acceptance_rate': float(accepted_count) / float(total),
-        'valid_count': valid_count,
-        'unique_count': unique_count,
-        'novel_count': novel_count,
-    }
-
-
 def _try_read_vun_from_quality_summary_csv(path: str | None) -> dict | None:
     if not path:
         return None
@@ -173,7 +136,7 @@ def _try_read_vun_from_quality_summary_csv(path: str | None) -> dict | None:
         duplicate: int = counts['duplicate']  # type: ignore
         accepted: int = counts['accepted']  # type: ignore
         
-        vun = _compute_vun_from_counts(
+        vun = compute_vun_from_counts(
             total_generated=total_generated,
             invalid_or_empty=invalid_or_empty,
             discarded_cleanup=discarded_cleanup,
@@ -264,14 +227,14 @@ def _compute_vun_from_loaded_data(
     unique_count = int(len(unique_generated))
     novel_count = int(len(novel_generated))
 
-    if total <= 0:
-        validity = 0.0
-        uniqueness = 0.0
-        novelty = 0.0
-    else:
-        validity = float(valid_count) / float(total) # validity = valid_count / total_generated
-        uniqueness = float(unique_count) / float(total) # uniqueness = unique_count / total_generated
-        novelty = float(novel_count) / float(total) # novelty = novel_count / total_generated
+    vun = compute_vun_from_counts(
+        total_generated=int(total),
+        invalid_or_empty=int(max(0, total - valid_count)),
+        discarded_cleanup=0,
+        in_training=int(max(0, total - novel_count)),
+        duplicate=int(max(0, total - unique_count)),
+        accepted=int(valid_count),
+    )
 
     return {
         'source': 'computed_from_analysis_inputs',
@@ -285,13 +248,13 @@ def _compute_vun_from_loaded_data(
             'duplicate': int(max(0, total - unique_count)),
             'accepted': int(valid_count),
         },
-        'validity': float(validity),
-        'uniqueness': float(uniqueness),
-        'novelty': float(novelty),
-        'acceptance_rate': float(validity),
-        'valid_count': int(valid_count),
-        'unique_count': int(unique_count),
-        'novel_count': int(novel_count),
+        'validity': float(vun['validity']),
+        'uniqueness': float(vun['uniqueness']),
+        'novelty': float(vun['novelty']),
+        'acceptance_rate': float(vun['acceptance_rate']),
+        'valid_count': int(vun['valid_count']),
+        'unique_count': int(vun['unique_count']),
+        'novel_count': int(vun['novel_count']),
     }
 
 

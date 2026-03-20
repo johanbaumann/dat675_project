@@ -1,4 +1,4 @@
-from pipeline.run_fold_pipeline_main import main
+from utils.run_fold_pipeline_main import main
 
 
 if __name__ == '__main__':

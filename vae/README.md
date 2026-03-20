@@ -150,18 +150,18 @@ This repo now runs a single top-level CV pipeline with one main config file.
 ### Single entrypoint + single config
 
 - Entrypoint: `run_fold_pipeline.py`
-- Config file: `fold_pipeline_config.example.json`
+- Config file: `fold_pipeline_config.example.yaml`
 
 Run full CV pipeline from workspace root:
 
 ```powershell
-python run_fold_pipeline.py --config fold_pipeline_config.example.json
+python run_fold_pipeline.py --config fold_pipeline_config.example.yaml
 ```
 
 Run one CV iteration only:
 
 ```powershell
-python run_fold_pipeline.py --config fold_pipeline_config.example.json --only-fold 0
+python run_fold_pipeline.py --config fold_pipeline_config.example.yaml --only-fold 0
 ```
 
 ### What the pipeline does per CV iteration
@@ -169,7 +169,7 @@ python run_fold_pipeline.py --config fold_pipeline_config.example.json --only-fo
 1. Use one fold CSV as validation.
 2. Merge remaining fold CSVs as training data.
 3. Train one model (`scripts/train_labels.py`) if `train.enabled=true`.
-4. Sample generated molecules (`pipeline/sampling_pipeline.py`) if `sampling.enabled=true`.
+4. Sample generated molecules (`utils/sampling_pipeline_main.py`) if `sampling.enabled=true`.
 5. Run analysis in-process from `run_fold_pipeline.py` if `analysis.enabled=true`.
 
 This means training, sampling, and analysis are controlled from one script and one config.
@@ -274,4 +274,4 @@ Global outputs:
 ### Notes
 
 - This codebase uses PyTorch checkpoints (`.pt`).
-- Keep using `run_fold_pipeline.py` + `fold_pipeline_config.example.json` as the primary interface.
+- Keep using `run_fold_pipeline.py` + `fold_pipeline_config.example.yaml` as the primary interface.

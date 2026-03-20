@@ -1,144 +1,64 @@
 {
-  "cross_fold_summary_path": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\fold_pipeline_outputs\\cross_fold_analysis_summary.json",
-  "num_folds": 5,
+  "cross_fold_summary_path": "C:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\fold_pipeline_outputs\\cross_fold_analysis_summary.json",
+  "num_folds": 1,
   "metrics": {
     "validity": {
-      "count": 5,
-      "mean": 0.40877849480805867,
-      "std": 0.05527130697892095,
-      "stderr": 0.024718079922025155,
+      "count": 1,
+      "mean": 0.4555210583153348,
+      "std": 0.0,
+      "stderr": 0.0,
       "per_fold": [
         {
           "iteration_name": "cv_iteration_0",
-          "value": 0.437868265993266
-        },
-        {
-          "iteration_name": "cv_iteration_1",
-          "value": 0.3584624553039333
-        },
-        {
-          "iteration_name": "cv_iteration_2",
-          "value": 0.42049084327086883
-        },
-        {
-          "iteration_name": "cv_iteration_3",
-          "value": 0.3477353238866397
-        },
-        {
-          "iteration_name": "cv_iteration_4",
-          "value": 0.4793355855855856
+          "value": 0.4555210583153348
         }
       ]
     },
     "uniqueness": {
-      "count": 5,
-      "mean": 0.9496290746861158,
-      "std": 0.01365261071317601,
-      "stderr": 0.006105633125000689,
+      "count": 1,
+      "mean": 0.9285232181425486,
+      "std": 0.0,
+      "stderr": 0.0,
       "per_fold": [
         {
           "iteration_name": "cv_iteration_0",
-          "value": 0.9455492424242424
-        },
-        {
-          "iteration_name": "cv_iteration_1",
-          "value": 0.961449642431466
-        },
-        {
-          "iteration_name": "cv_iteration_2",
-          "value": 0.9483603066439523
-        },
-        {
-          "iteration_name": "cv_iteration_3",
-          "value": 0.963225371120108
-        },
-        {
-          "iteration_name": "cv_iteration_4",
-          "value": 0.9295608108108108
+          "value": 0.9285232181425486
         }
       ]
     },
     "novelty": {
-      "count": 5,
-      "mean": 0.9759392682826867,
-      "std": 0.012019305828767313,
-      "stderr": 0.0053751969750966315,
+      "count": 1,
+      "mean": 0.9655777537796977,
+      "std": 0.0,
+      "stderr": 0.0,
       "per_fold": [
         {
           "iteration_name": "cv_iteration_0",
-          "value": 0.9752209595959596
-        },
-        {
-          "iteration_name": "cv_iteration_1",
-          "value": 0.9866470500595947
-        },
-        {
-          "iteration_name": "cv_iteration_2",
-          "value": 0.9743132453151618
-        },
-        {
-          "iteration_name": "cv_iteration_3",
-          "value": 0.986336032388664
-        },
-        {
-          "iteration_name": "cv_iteration_4",
-          "value": 0.957179054054054
+          "value": 0.9655777537796977
         }
       ]
     },
     "diversity_score": {
-      "count": 5,
-      "mean": 0.8408044892285773,
-      "std": 0.0009714624905724006,
-      "stderr": 0.00043445123330222723,
+      "count": 1,
+      "mean": 0.8373802144574137,
+      "std": 0.0,
+      "stderr": 0.0,
       "per_fold": [
         {
           "iteration_name": "cv_iteration_0",
-          "value": 0.8413979042860572
-        },
-        {
-          "iteration_name": "cv_iteration_1",
-          "value": 0.8401796905210497
-        },
-        {
-          "iteration_name": "cv_iteration_2",
-          "value": 0.8412312333785918
-        },
-        {
-          "iteration_name": "cv_iteration_3",
-          "value": 0.8417841315968563
-        },
-        {
-          "iteration_name": "cv_iteration_4",
-          "value": 0.839429486360331
+          "value": 0.8373802144574137
         }
       ]
     },
     "diversity_internal_score": {
-      "count": 5,
-      "mean": 0.8415097212210126,
-      "std": 0.0010132174280147066,
-      "stderr": 0.00045312460900567673,
+      "count": 1,
+      "mean": 0.8320999467885629,
+      "std": 0.0,
+      "stderr": 0.0,
       "per_fold": [
         {
           "iteration_name": "cv_iteration_0",
-          "value": 0.8408782808419498
-        },
-        {
-          "iteration_name": "cv_iteration_1",
-          "value": 0.8404020718951577
-        },
-        {
-          "iteration_name": "cv_iteration_2",
-          "value": 0.8425994178946292
-        },
-        {
-          "iteration_name": "cv_iteration_3",
-          "value": 0.8425701281923829
-        },
-        {
-          "iteration_name": "cv_iteration_4",
-          "value": 0.8410987072809432
+          "value": 0.8320999467885629
         }
       ]
     }

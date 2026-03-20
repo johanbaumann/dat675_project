@@ -1,6 +1,7 @@
 #import h5py
 import numpy as np
 from rdkit import Chem
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from typing import Any, Callable, Optional
 import json
 import os
@@ -9,6 +10,8 @@ import pickle
 import glob
 import re
 import time
+
+from .pipeline_helpers import create_sampling_stats
 
 try:
     from rdkit.Chem.MolStandardize import rdMolStandardize
@@ -236,6 +239,52 @@ def canonicalize_for_filtering(
         canonicalize_tautomer=bool(canonicalize_tautomer),
         canonical=True,
     )
+
+
+def safe_mol_from_smiles(smiles: str) -> Optional[Chem.Mol]:
+    """Best-effort SMILES parser that never raises."""
+    if smiles is None:
+        return None
+    raw = str(smiles).strip()
+    if raw == '':
+        return None
+    try:
+        return Chem.MolFromSmiles(raw, sanitize=True)
+    except Exception:
+        return None
+
+
+def safe_murcko_scaffold_smiles(
+    mol: Optional[Chem.Mol],
+    *,
+    make_generic: bool = False,
+    isomeric_smiles: bool = False,
+) -> Optional[str]:
+    """Return canonical Murcko scaffold SMILES, or None on any failure."""
+    if mol is None:
+        return None
+    try:
+        scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+    except Exception:
+        return None
+
+    if scaffold is None or scaffold.GetNumAtoms() == 0:
+        return None
+
+    if bool(make_generic):
+        try:
+            scaffold = MurckoScaffold.MakeScaffoldGeneric(scaffold)
+        except Chem.AtomValenceException:
+            return None
+        except Exception:
+            return None
+        if scaffold is None or scaffold.GetNumAtoms() == 0:
+            return None
+
+    try:
+        return Chem.MolToSmiles(scaffold, isomericSmiles=bool(isomeric_smiles), canonical=True)
+    except Exception:
+        return None
 
 
 def save_pickle(
@@ -624,17 +673,7 @@ def collect_new_unique_from_raw(
       - stats: dict with counters for quality reporting
     """
     accepted = []
-    stats = {
-        'total_generated': 0,
-        'accepted': 0,
-        'invalid_or_empty': 0,
-        'discarded_cleanup': 0,
-        'in_training': 0,
-        'duplicate': 0,
-        'rejected_by_filter': 0,
-        'salt_stripped': 0,
-        'tautomer_canonicalized': 0,
-    }
+    stats = create_sampling_stats()
 
     if training_smiles is None:
         training_smiles = set()

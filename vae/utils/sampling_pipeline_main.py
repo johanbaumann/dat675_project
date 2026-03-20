@@ -2,19 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import asdict, dataclass
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from rdkit import Chem, RDLogger
-from rdkit.Chem.Scaffolds import MurckoScaffold
-
-_THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-_ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
-if _ROOT_DIR not in sys.path:
-    sys.path.insert(0, _ROOT_DIR)
 
 from utils.core import (
     canonicalize_for_filtering,
@@ -26,15 +19,16 @@ from utils.core import (
     load_sampling_metadata,
     load_training_canonical_smiles,
     resolve_checkpoint_path,
+    safe_mol_from_smiles,
+    safe_murcko_scaffold_smiles,
 )
-from utils.pipeline_helpers import resolve_target_sampling_mode
+from utils.pipeline_helpers import create_sampling_stats, resolve_target_sampling_mode
 from utils.labels import (
     _accumulate_stats,
     _build_accept_predicate,
     _collect_new_unique_from_raw_with_payload,
     _collect_new_unique_from_raw_with_payloads,
     _compute_rdkit_descriptors,
-    _new_stats,
     _print_quality_stats,
     _sample_batch_strings,
     _save_quality_summary_csv,
@@ -105,16 +99,6 @@ def _configure_rdkit_logging(*, suppress_parse_warnings: bool) -> None:
             RDLogger.logger().setLevel(rdkit_level)
     except Exception:
         pass
-
-
-def _safe_mol_from_smiles(smiles: str) -> Optional[Chem.Mol]:
-    raw = str(smiles).strip()
-    if raw == '':
-        return None
-    try:
-        return Chem.MolFromSmiles(raw)
-    except Exception:
-        return None
 
 
 def _read_bool_config(cfg: dict, key: str, default: bool) -> bool:
@@ -190,45 +174,6 @@ def _strict_bin_index_for_value(*, value: float, lo: float, hi: float, n_bins: i
     return idx
 
 
-def _scaffold_smiles_from_mol(mol: Optional[Chem.Mol], *, make_generic: bool = True) -> Optional[str]:
-    if mol is None:
-        return None
-    try:
-        scaf_mol = MurckoScaffold.GetScaffoldForMol(mol)
-    except Exception:
-        return None
-
-    if scaf_mol is None or scaf_mol.GetNumAtoms() == 0:
-        return None
-
-    if make_generic:
-        try:
-            scaf_mol = MurckoScaffold.MakeScaffoldGeneric(scaf_mol)
-        except Chem.AtomValenceException:
-            return None
-        except Exception:
-            return None
-
-    if scaf_mol is None or scaf_mol.GetNumAtoms() == 0:
-        return None
-
-    try:
-        return Chem.MolToSmiles(scaf_mol, canonical=True)
-    except Exception:
-        return None
-
-
-def _scaffold_smiles_from_smiles(smiles: str, make_generic: bool = True) -> Optional[str]:
-    """Compute Murcko scaffold SMILES from a molecule SMILES.
-
-    Returns None if parsing or scaffold extraction fails.
-    """
-    mol = _safe_mol_from_smiles(smiles)
-    if mol is None:
-        return None
-    return _scaffold_smiles_from_mol(mol, make_generic=make_generic)
-
-
 def _load_blocked_scaffolds_from_csv(
     *,
     csv_path: str,
@@ -255,7 +200,8 @@ def _load_blocked_scaffolds_from_csv(
         )
         if can is None or can == '':
             continue
-        scaffold = _scaffold_smiles_from_smiles(can, make_generic=make_generic)
+        mol = safe_mol_from_smiles(can)
+        scaffold = safe_murcko_scaffold_smiles(mol, make_generic=make_generic)
         if scaffold is not None and scaffold != '':
             blocked.add(scaffold)
     return blocked
@@ -424,11 +370,9 @@ def run_sampling_for_iteration(
     mol_by_smiles: dict[str, object] = {}
     pred_by_smiles: dict[str, np.ndarray] = {}
     target_by_smiles: dict[str, tuple[float, ...]] = {}
-    total_stats = _new_stats()
+    total_stats = create_sampling_stats()
     blocked_test_scaffolds: set[str] = set()
     blocked_heldout_scaffolds: set[str] = set()
-    rejected_by_test_scaffold = 0
-    rejected_by_heldout_scaffold = 0
 
     make_generic_scaffold = _read_bool_config(sampling_cfg, 'scaffold_make_generic', True)
     scaffold_mode = 'generic' if make_generic_scaffold else 'specific'
@@ -584,14 +528,18 @@ def run_sampling_for_iteration(
             bin_idx: int | None = None
 
             if blocked_test_scaffolds or blocked_heldout_scaffolds:
-                scaffold = _scaffold_smiles_from_mol(mol, make_generic=make_generic_scaffold)
+                scaffold = safe_murcko_scaffold_smiles(mol, make_generic=make_generic_scaffold)
                 if scaffold is not None and scaffold in blocked_test_scaffolds:
                     total_stats['rejected_by_filter'] = int(total_stats.get('rejected_by_filter', 0)) + 1
-                    rejected_by_test_scaffold += 1
+                    total_stats['rejected_by_validation_scaffold'] = int(
+                        total_stats.get('rejected_by_validation_scaffold', 0)
+                    ) + 1
                     continue
                 if scaffold is not None and scaffold in blocked_heldout_scaffolds:
                     total_stats['rejected_by_filter'] = int(total_stats.get('rejected_by_filter', 0)) + 1
-                    rejected_by_heldout_scaffold += 1
+                    total_stats['rejected_by_heldout_scaffold'] = int(
+                        total_stats.get('rejected_by_heldout_scaffold', 0)
+                    ) + 1
                     continue
 
             if run_uniform_range_strict:
@@ -636,8 +584,8 @@ def run_sampling_for_iteration(
                 f'[sampling] batches={batch_idx + 1}, unique_saved={len(mol_by_smiles)}/{num_unique}, '
                 f"accepted={total_stats['accepted']}, invalid={total_stats['invalid_or_empty']}, "
                 f"in_training={total_stats['in_training']}, duplicate={total_stats['duplicate']}, "
-                f'rejected_validation_scaffold={rejected_by_test_scaffold}, '
-                f'rejected_heldout_scaffold={rejected_by_heldout_scaffold}'
+                f"rejected_validation_scaffold={int(total_stats.get('rejected_by_validation_scaffold', 0))}, "
+                f"rejected_heldout_scaffold={int(total_stats.get('rejected_by_heldout_scaffold', 0))}"
             )
             if run_uniform_range_strict and strict_uniform_bin_counts is not None:
                 print(
@@ -759,9 +707,15 @@ def run_sampling_for_iteration(
         quality_summary_csv_path = 'SKIPPED_QUALITY_SUMMARY'
         print('[sampling] save_quality_summary=false, skipping quality summary CSV write')
     if blocked_test_scaffolds:
-        print(f'[sampling] rejected due to validation-scaffold overlap: {rejected_by_test_scaffold}')
+        print(
+            '[sampling] rejected due to validation-scaffold overlap: '
+            f"{int(total_stats.get('rejected_by_validation_scaffold', 0))}"
+        )
     if blocked_heldout_scaffolds:
-        print(f'[sampling] rejected due to heldout-scaffold overlap: {rejected_by_heldout_scaffold}')
+        print(
+            '[sampling] rejected due to heldout-scaffold overlap: '
+            f"{int(total_stats.get('rejected_by_heldout_scaffold', 0))}"
+        )
 
     if bool(sampling_cfg.get('save_sampling_debug', True)):
         debug_payload = {
@@ -783,8 +737,8 @@ def run_sampling_for_iteration(
             'scaffold_make_generic': bool(make_generic_scaffold),
             'num_blocked_validation_scaffolds': int(len(blocked_test_scaffolds)),
             'num_blocked_heldout_scaffolds': int(len(blocked_heldout_scaffolds)),
-            'rejected_by_validation_scaffold': int(rejected_by_test_scaffold),
-            'rejected_by_heldout_scaffold': int(rejected_by_heldout_scaffold),
+            'rejected_by_validation_scaffold': int(total_stats.get('rejected_by_validation_scaffold', 0)),
+            'rejected_by_heldout_scaffold': int(total_stats.get('rejected_by_heldout_scaffold', 0)),
             'num_saved': int(len(out_df)),
             'stats': total_stats,
             'generated_csv_path': generated_csv_path,

@@ -6,25 +6,19 @@ This script now optionally trains an auxiliary label predictor head (see
 `models/model_labels.py`) that predicts molecular labels from the latent vector `z`.
 
 Important invariants (kept):
-- `load_data()` signature and output semantics are unchanged.
-- Conditioning vector `c` is unchanged (still taken from the property file).
+- 'load_data()' signature and output semantics are unchanged.
+- Conditioning vector 'c' is unchanged (still taken from the property file).
 - Sampling pipeline is unchanged.
 
 CHANGELOG
 ---------
 2026-02-23
-- Added optional label predictor training via `predict_labels` config knobs.
-- Uses `models.model_labels.CVAE` so the new head can be trained without changing the
-    base `model.py` implementation.
+- Added optional label predictor training via 'predict_labels' config knobs.
+- Uses 'models.model_labels.CVAE' so the new head can be trained without changing the
+    base 'model.py' implementation.
 """
 
 import os
-import sys
-
-_THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-_ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
-if _ROOT_DIR not in sys.path:
-    sys.path.insert(0, _ROOT_DIR)
 
 from models.model_labels import CVAE
 from utils.core import (
@@ -167,77 +161,11 @@ def _load_runtime_config_override() -> dict:
 #    },
 #}
 
-config = {
-    'training_preset': 'custom',
-    'data': {
-        'prop_file': 'bace_pic50.txt',
-        'seq_length': 120,
-        'train_ratio': 0.8,
-        # Number of randomized SMILES strings generated per original train sample.
-        # 0 disables augmentation.
-        'smiles_augmentation_duplicates': 10,
-    },
-    'model': {
-        'mode': 'transformer',
-        'latent_size': 128,
-        'unit_size': 256,
-        'n_rnn_layer': 2,
-        'mean': 0.0,
-        'stddev': 1.0,
-        'num_prop': None,
-        'predict_labels': True,
-        'label_target_indices': None,
-        'label_dim': None,
-        'label_loss_weight': 1.0,
-        'include_condition_in_label_head': False,
-        'label_targets_use_raw_scale': False,
-    },
-    'transformer': {
-        'heads': 4,
-        'ff_size': 512,
-        'dropout': 0.1,
-    },
-    'optimization': {
-        'optimizer': 'adamw',
-        'lr': 5e-5,
-        'weight_decay': 0.001,
-        'use_amp': False,
-        'amp_dtype': 'float16', # use bfloat16 for transformer + amp.
-        'grad_clip_norm': 2.0, # dont be too harh with clipping, can hinder learning. 
-    },
-    'training': {
-        'batch_size': 64,
-        'num_epochs': 120,
-        'save_dir': 'save/',
-        'run_name': None,
-        'use_run_subdir': True,
-        'save_every': 10,
-        'early_stopping_patience': 10,
-        'early_stopping_min_delta': 0.001,
-        'early_stopping_restore_best': True,
-    },
-    'scheduler': {
-        'enabled': True,
-        'factor': 0.5, # reduce LR by this factor when test loss plateaus.
-        'patience': 2, # number of epochs with no improvement after which LR will be reduced.
-        'threshold': 1e-3, # minimum change in the monitored quantity to qualify as an improvement (for 'min' mode).
-        'min_lr': 1e-6, # lower bound on the learning rate after reductions.
-    },
-    'kl': {
-        'enabled': True,
-        'start_beta': 1.0,
-        'max_beta': 4.0,
-        'hold_epochs': 0,
-        'warmup_epochs': 8,
-    },
-    'diagnostics': {
-        'every': 1,
-    },
-}
+config = {}
 
 runtime_config_override = _load_runtime_config_override()
 config = deep_update_dict(config, runtime_config_override)
-print('applied runtime config from --config-json on top of in-file baseline config')
+print('applied runtime config from --config-json as training config source')
 
 
 def _augment_train_split_with_random_smiles(

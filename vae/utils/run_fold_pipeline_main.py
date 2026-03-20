@@ -15,23 +15,43 @@ from typing import Optional
 
 import numpy as np
 
+try:
+    import yaml
+except Exception:
+    yaml = None
+
 _THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 _ROOT_DIR = os.path.abspath(os.path.join(_THIS_DIR, '..'))
-if _ROOT_DIR not in sys.path:
-    sys.path.insert(0, _ROOT_DIR)
 
 from pipeline.fold_data import convert_cv_iteration_to_prop_files, discover_cv_fold_iterations
-from pipeline.sampling_pipeline import SamplingResult, run_sampling_for_iteration
 from analysis_modules import load_analysis_config_from_file, run_analysis_pipeline
-from utils.pipeline_helpers import coerce_float, coerce_int, deep_update_dict, resolve_target_sampling_mode
+from utils.core import load_json, save_json
+from utils.pipeline_helpers import (
+    coerce_float,
+    coerce_int,
+    compute_vun_from_counts,
+    deep_update_dict,
+    resolve_target_sampling_mode,
+)
+from utils.sampling_pipeline_main import SamplingResult, run_sampling_for_iteration
 
 
-DEFAULT_CONFIG_PATH = os.path.join(_ROOT_DIR, 'fold_pipeline_config.example.json')
+DEFAULT_CONFIG_PATH = os.path.join(_ROOT_DIR, 'fold_pipeline_config.example.yaml')
 
-
-def _read_json(path: str) -> dict:
-    with open(path, 'r', encoding='utf-8') as f:
-        payload = json.load(f)
+def _read_pipeline_config(path: str) -> dict:
+    ext = os.path.splitext(str(path))[1].strip().lower()
+    if ext in ('.yaml', '.yml'):
+        if yaml is None:
+            raise RuntimeError(
+                'YAML config requested but PyYAML is not available. '
+                'Install it with: pip install pyyaml'
+            )
+        with open(path, 'r', encoding='utf-8') as f:
+            payload = yaml.safe_load(f)
+        if not isinstance(payload, dict):
+            raise ValueError(f'Config must be a YAML mapping/object: {path}')
+        return payload
+    payload = load_json(path)
     if not isinstance(payload, dict):
         raise ValueError(f'Config must be a JSON object: {path}')
     return payload
@@ -74,13 +94,6 @@ def _resolve_script_path(value: Optional[str], *, workspace_root: str, key_name:
     if not os.path.isfile(script_path):
         raise FileNotFoundError(f'Configured script for {key_name} was not found: {script_path}')
     return script_path
-
-
-def _write_json(path: str, payload: dict) -> str:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, indent=2)
-    return path
 
 
 def _safe_remove_path(path: str) -> None:
@@ -196,43 +209,6 @@ def _count_csv_data_rows(path: str) -> int:
         if header is None:
             return 0
         return int(sum(1 for _ in reader))
-
-
-def _compute_vun_from_counts(
-    *,
-    total_generated: int,
-    invalid_or_empty: int,
-    discarded_cleanup: int,
-    in_training: int,
-    duplicate: int,
-    accepted: int,
-) -> dict:
-    total = int(total_generated)
-    if total <= 0:
-        return {
-            'validity': 0.0,
-            'uniqueness': 0.0,
-            'novelty': 0.0,
-            'acceptance_rate': 0.0,
-            'valid_count': 0,
-            'unique_count': 0,
-            'novel_count': 0,
-        }
-
-    valid_count = int(total - int(invalid_or_empty) - int(discarded_cleanup))
-    unique_count = int(total - int(duplicate))
-    novel_count = int(total - int(in_training))
-    accepted_count = int(accepted)
-
-    return {
-        'validity': float(valid_count) / float(total),
-        'uniqueness': float(unique_count) / float(total),
-        'novelty': float(novel_count) / float(total),
-        'acceptance_rate': float(accepted_count) / float(total),
-        'valid_count': int(valid_count),
-        'unique_count': int(unique_count),
-        'novel_count': int(novel_count),
-    }
 
 
 def _resolve_existing_sampling_result_for_analysis_only(
@@ -356,7 +332,7 @@ def _write_cross_fold_analysis_summary(
             tautomer_canonicalized += int(row_tautomer)
             folds_with_quality += 1
 
-            vun_fold = _compute_vun_from_counts(
+            vun_fold = compute_vun_from_counts(
                 total_generated=row_total_generated,
                 invalid_or_empty=row_invalid,
                 discarded_cleanup=row_discarded,
@@ -371,7 +347,7 @@ def _write_cross_fold_analysis_summary(
 
         analysis_summary_path = str(fold.get('analysis_summary_path', '')).strip()
         if analysis_summary_path and os.path.isfile(analysis_summary_path):
-            payload = _read_json(analysis_summary_path)
+            payload = load_json(analysis_summary_path)
             summary = dict(payload.get('summary', {}) or {})
             div = coerce_float(summary.get('diversity_score'))
             mean_sim = coerce_float(summary.get('mean_tanimoto_all_pairs'))
@@ -426,7 +402,7 @@ def _write_cross_fold_analysis_summary(
 
         per_fold.append(fold_row)
 
-    vun_agg = _compute_vun_from_counts(
+    vun_agg = compute_vun_from_counts(
         total_generated=total_generated,
         invalid_or_empty=invalid_or_empty,
         discarded_cleanup=discarded_cleanup,
@@ -496,13 +472,14 @@ def _write_cross_fold_analysis_summary(
         'per_fold': per_fold,
     }
 
-    out_path = _write_json(os.path.join(artifacts_root, 'cross_fold_analysis_summary.json'), payload)
+    out_path = os.path.join(artifacts_root, 'cross_fold_analysis_summary.json')
+    save_json(out_path, payload)
     print(f'[analysis] cross-fold summary written: {out_path}')
     return out_path
 
 
 def _write_cv_combo_error_summary_csv(*, cross_fold_summary_path: str, artifacts_root: str) -> Optional[str]:
-    payload = _read_json(cross_fold_summary_path)
+    payload = load_json(cross_fold_summary_path)
     per_fold = list(payload.get('per_fold', []) or [])
     if len(per_fold) == 0:
         return None
@@ -609,7 +586,7 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
         3) a mean standard error band,
         4) and a standard deviation band.
     """
-    payload = _read_json(cross_fold_summary_path)
+    payload = load_json(cross_fold_summary_path)
     per_fold = list(payload.get('per_fold', []) or [])
     if len(per_fold) == 0:
         print('[analysis] cv_combo skipped: cross-fold summary has no per_fold entries.')
@@ -891,7 +868,8 @@ def _write_cv_combo_metric_plots(*, cross_fold_summary_path: str, artifacts_root
         fig2.savefig(boxplot_path, dpi=300)
     plt.close(fig2)
 
-    stats_path = _write_json(os.path.join(out_dir, 'cv_combo_metrics_stats.json'), stats_payload)
+    stats_path = os.path.join(out_dir, 'cv_combo_metrics_stats.json')
+    save_json(stats_path, stats_payload)
 
     print(f'[analysis] cv_combo plot written: {plot_path}')
     if boxplot_path is not None:
@@ -1159,7 +1137,7 @@ def _contains_predicted_column(generated_csv_path: str, label_column: str) -> bo
 
 def _resolve_prediction_eval_csv_path(*, train_dir: str, train_cfg_path: str) -> Optional[str]:
     try:
-        payload = _read_json(train_cfg_path)
+        payload = load_json(train_cfg_path)
     except Exception:
         return None
 
@@ -1281,7 +1259,7 @@ def _print_iteration_end_summary(
 def main() -> None:
     args = _parse_args()
     config_path = _resolve_required_path(args.config, base_dir=os.getcwd(), key_name='--config')
-    cfg = _read_json(config_path)
+    cfg = _read_pipeline_config(config_path)
 
     workspace_root = _resolve_required_path(
         cfg.get('workspace_root', '.'),
@@ -1396,7 +1374,7 @@ def main() -> None:
         existing_manifest = {}
         if os.path.isfile(final_manifest_path):
             try:
-                existing_manifest = _read_json(final_manifest_path)
+                existing_manifest = load_json(final_manifest_path)
             except Exception:
                 existing_manifest = {}
 
@@ -1411,7 +1389,7 @@ def main() -> None:
         existing_manifest['cv_combo_metrics_stats_path'] = cv_combo_outputs.get('stats_path')
         existing_manifest['cv_combo_error_summary_csv_path'] = cv_combo_error_summary_path
         existing_manifest['finished_unix'] = time.time()
-        _write_json(final_manifest_path, existing_manifest)
+        save_json(final_manifest_path, existing_manifest)
 
         print('\n' + '=' * 90)
         print('CV combo-only run completed successfully.')
@@ -1556,7 +1534,8 @@ def main() -> None:
             test_prop_txt=converted.validation_prop_txt,
         )
         # Training config is part of the model setup; keep it under the training root (save/).
-        train_cfg_path = _write_json(os.path.join(training_fold_dir, 'train_config.json'), fold_train_cfg)
+        train_cfg_path = os.path.join(training_fold_dir, 'train_config.json')
+        save_json(train_cfg_path, fold_train_cfg)
         print(f'[{fold_name}] wrote train config: {train_cfg_path}')
         print(
             f'[{fold_name}] split policy: external files only (no random split). '
@@ -1724,7 +1703,8 @@ def main() -> None:
                 label_column=label_for_analysis,
                 training_was_done_this_run=train_enabled,
             )
-            analysis_config_path = _write_json(os.path.join(analysis_dir, 'analysis_config.json'), fold_analysis_cfg)
+            analysis_config_path = os.path.join(analysis_dir, 'analysis_config.json')
+            save_json(analysis_config_path, fold_analysis_cfg)
             analysis_summary_path = os.path.join(
                 analysis_dir,
                 str(fold_analysis_cfg.get('overrides', {}).get('summary_json_filename', 'analysis_summary.json')),
@@ -1759,13 +1739,14 @@ def main() -> None:
             'completed_unix': time.time(),
         }
         if write_iteration_manifest:
-            iteration_manifest_path = _write_json(os.path.join(fold_dir, 'iteration_manifest.json'), fold_manifest)
+            iteration_manifest_path = os.path.join(fold_dir, 'iteration_manifest.json')
+            save_json(iteration_manifest_path, fold_manifest)
         else:
             iteration_manifest_path = 'DISABLED_BY_CONFIG'
         global_manifest['iterations'].append(fold_manifest)
 
         if write_partial_global_manifest:
-            _write_json(os.path.join(artifacts_root, 'global_manifest.partial.json'), global_manifest)
+            save_json(os.path.join(artifacts_root, 'global_manifest.partial.json'), global_manifest)
         _print_iteration_end_summary(
             fold_name=fold_name,
             converted=converted,
@@ -1824,7 +1805,8 @@ def main() -> None:
         _safe_remove_path(os.path.join(artifacts_root, 'global_manifest.partial.json'))
 
     if write_global_manifest:
-        final_manifest_path = _write_json(os.path.join(artifacts_root, 'global_manifest.json'), global_manifest)
+        final_manifest_path = os.path.join(artifacts_root, 'global_manifest.json')
+        save_json(final_manifest_path, global_manifest)
     else:
         final_manifest_path = 'DISABLED_BY_CONFIG'
 
