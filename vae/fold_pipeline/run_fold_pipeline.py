@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import glob
 import json
@@ -21,6 +22,7 @@ if _ROOT_DIR not in sys.path:
 
 from fold_pipeline.fold_data import convert_cv_iteration_to_prop_files, discover_cv_fold_iterations
 from fold_pipeline.sampling_pipeline import SamplingResult, run_sampling_for_iteration
+from analysis_modules import load_analysis_config_from_file, run_analysis_pipeline
 
 
 DEFAULT_CONFIG_PATH = os.path.join(_THIS_DIR, 'fold_pipeline_config.example.json')
@@ -1059,6 +1061,35 @@ def _run_subprocess(command: list[str], *, cwd: str, log_file: Optional[str], st
         raise RuntimeError(f'{step_name} failed. See log: {log_file}')
 
 
+def _run_analysis_in_process(*, analysis_config_path: str, log_file: Optional[str], step_name: str) -> None:
+    started = time.time()
+
+    def _run() -> None:
+        cfg = load_analysis_config_from_file(analysis_config_path)
+        if bool(cfg.debug):
+            print('[analysis:debug] Debug mode enabled from config.')
+        summary = run_analysis_pipeline(cfg)
+        print(80 * '=')
+        print(f'Analysis pipeline finished using config: {analysis_config_path}')
+        print(json.dumps(summary, indent=2))
+
+    if log_file:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        with open(log_file, 'w', encoding='utf-8') as f:
+            f.write(f'analysis_config: {analysis_config_path}\n')
+            f.write('mode: in-process\n\n=== LIVE OUTPUT ===\n')
+            f.flush()
+            with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+                _run()
+        duration = time.time() - started
+        print(f'[{step_name}] exit_code=0, duration={duration:.1f}s, log={log_file}')
+        return
+
+    _run()
+    duration = time.time() - started
+    print(f'[{step_name}] exit_code=0, duration={duration:.1f}s, log=DISABLED')
+
+
 def _build_train_config_for_iteration(
     base_train_config: dict,
     *,
@@ -1464,11 +1495,8 @@ def main() -> None:
         workspace_root=workspace_root,
         key_name='train.script',
     )
-    analysis_script = _resolve_script_path(
-        cfg.get('analysis', {}).get('script', 'run_viz_pipeline.py'),
-        workspace_root=workspace_root,
-        key_name='analysis.script',
-    )
+    if 'script' in dict(cfg.get('analysis', {}) or {}):
+        print('[config] NOTE: analysis.script is ignored; analysis runs in-process via run_fold_pipeline.py.')
     print('===== CV fold iteration pipeline bootstrap =====')
     print(f'config_path={config_path}')
     print(f'workspace_root={workspace_root}')
@@ -1763,9 +1791,8 @@ def main() -> None:
             )
             print(f'[{fold_name}] wrote analysis config: {analysis_config_path}')
 
-            _run_subprocess(
-                [python_exe, analysis_script, '--config', analysis_config_path],
-                cwd=workspace_root,
+            _run_analysis_in_process(
+                analysis_config_path=analysis_config_path,
                 log_file=(os.path.join(logs_dir, 'analysis.log') if bool(analysis_log_enabled) else None),
                 step_name=f'{fold_name}:analysis',
             )

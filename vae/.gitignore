@@ -6,3 +6,6 @@ audit_outputs/
 CHANGELOG.md
 
 *.pth
+
+# Local planning scratch files (not for commit)
+PIPELINE_ONLY_REFACTOR_PLAN.local.md

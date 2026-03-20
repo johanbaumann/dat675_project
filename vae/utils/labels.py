@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """utils_labels.py
 
-Helper utilities for the label-augmented CVAE training/sampling scripts.
+Helper utilities for the label-augmented CVAE training/pipeline scripts.
 
 Goal:
-- Keep `train_labels.py` and `sample_labels.py` focused on their main flows.
+- Keep `train_labels.py` and fold-pipeline sampling focused on their main flows.
 - Centralize small reusable helpers (KL annealing, checkpoint IO helpers,
   sampling stats/quality metrics, label prediction-from-latent helpers).
 

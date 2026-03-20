@@ -19,8 +19,18 @@ CHANGELOG
 """
 
 from models.model_labels import CVAE
-from utils import *
-from utils import (
+from utils.core import (
+    build_train_run_save_dir,
+    compose_train_config_from_dict,
+    convert_to_smiles,
+    ensure_dir,
+    get_model_config,
+    load_condition_property_names,
+    load_data,
+    save_training_config,
+    split_train_test,
+)
+from utils.labels import (
     apply_training_preset,
     get_kl_beta,
     log_cuda_mem,
@@ -51,29 +61,21 @@ def _deep_update_dict(base: dict, override: dict) -> dict:
     return out
 
 
-def _parse_config_override_path_from_argv() -> Optional[str]:
-    """Read optional config override path from CLI or env var.
+def _parse_config_override_path_from_argv() -> str:
+    """Read required config override path from CLI.
 
-    Priority:
-      1) --config-json <path>
-      2) TRAIN_LABELS_CONFIG_JSON env var
+    In pipeline-only mode, `train_labels.py` must be invoked by
+    `run_fold_pipeline.py` with a generated per-iteration JSON config.
     """
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--config-json', type=str, default=None)
+    parser.add_argument('--config-json', type=str, required=True)
     args, _ = parser.parse_known_args()
-    if args.config_json:
-        return str(args.config_json)
-    env_path = os.environ.get('TRAIN_LABELS_CONFIG_JSON')
-    if env_path:
-        return str(env_path)
-    return None
+    return str(args.config_json)
 
 
 def _load_runtime_config_override() -> dict:
-    """Load optional JSON config override for non-interactive orchestration."""
+    """Load required JSON config override for fold-pipeline orchestration."""
     cfg_path = _parse_config_override_path_from_argv()
-    if not cfg_path:
-        return {}
     if not os.path.exists(cfg_path):
         raise FileNotFoundError(f'--config-json path does not exist: {cfg_path}')
     with open(cfg_path, 'r', encoding='utf-8') as f:
@@ -237,9 +239,8 @@ config = {
 }
 
 runtime_config_override = _load_runtime_config_override()
-if runtime_config_override:
-    config = _deep_update_dict(config, runtime_config_override)
-    print('applied runtime config overrides on top of in-file default config')
+config = _deep_update_dict(config, runtime_config_override)
+print('applied runtime config from --config-json on top of in-file baseline config')
 
 
 def _augment_train_split_with_random_smiles(

@@ -1,0 +1,13 @@
+{
+  "source_csvs": [
+    "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_1.csv",
+    "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_2.csv",
+    "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_3.csv",
+    "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\data\\combination_1300_molecules_and_0_%_synthetic\\original_fold_4.csv"
+  ],
+  "smiles_column": "smiles",
+  "property_names": [
+    "pIC50"
+  ],
+  "num_rows": 1045
+}

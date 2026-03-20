@@ -155,7 +155,7 @@ def _validate_analysis_config_paths(cfg: AnalysisConfig) -> None:
         joined = '; '.join(missing)
         raise FileNotFoundError(
             'Analysis config contains missing input paths. '
-            f'Fix these fields in analysis_run_config.json: {joined}'
+            f'Fix these fields in the provided analysis config file: {joined}'
         )
 
 

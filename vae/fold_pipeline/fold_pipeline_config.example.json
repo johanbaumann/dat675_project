@@ -91,7 +91,7 @@
     "_comment_mode_training_dist": "training_dist: sample targets from a Gaussian around training mean/std (uses training_dist_* settings).",
     "_comment_mode_uniform_range": "uniform_range: sample targets uniformly inside uniform_range/uniform_ranges.",
     "_comment_mode_uniform_range_strict": "uniform_range_strict: same uniform range, but with strict per-bin quotas to force balanced coverage across the range.",
-    "target_sampling_mode": "uniform_range_strict",
+    "target_sampling_mode": "training_dist",
     "run_training_dist": false,
     "enable_prop_cache": false,
     "training_dist_std_scale": 1.0,
@@ -115,7 +115,7 @@
     "target_prop": [
       8.0
     ],
-    "num_unique": 10000,
+    "num_unique": 1000,
     "max_batches": 5000,
     "do_sample": true,
     "temperature": 0.9,
@@ -151,7 +151,6 @@
   "analysis": {
     "enabled": true,
     "capture_log_file": false,
-    "script": "run_viz_pipeline.py",
     "profile": "bace_pic50_10k",
     "overrides": {
       "save_distribution_plot": true,

@@ -714,7 +714,7 @@ def run_sampling_for_iteration(
 
             # If the checkpoint contains label target metadata, try to expose human-friendly
             # pred_<name> columns in *raw/original property units*.
-            # This mirrors the behavior in sample_labels.py.
+            # This mirrors the legacy standalone sampling output schema.
             label_target_scale = str(model_config.get('label_target_scale', 'normalized')).lower()
             label_target_indices = model_config.get('label_target_indices')
             label_target_names = model_config.get('label_target_names')
