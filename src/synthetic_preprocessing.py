@@ -1,9 +1,14 @@
 import pandas as pd
 import numpy as np
 import shutil
+import os
 
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
+
+WORKSPACE_ROOT = os.path.dirname(__file__)
+DATA_ROOT = os.path.join(os.path.dirname(WORKSPACE_ROOT), "data")
+SYNTHETIC_ROOT = os.path.join(os.path.dirname(WORKSPACE_ROOT), "vae/fold_pipeline_outputs")
 
 
 
@@ -17,14 +22,20 @@ def clone_to_folders(destinations : list[str], source : str) -> dict:
 def add_synthetic_molecules(destinations : list[str], desired_counts : list[int], fold_count : int, source : str) -> tuple[dict, list[dict]]:
     for i in range(len(destinations)):
         for iteration in range(fold_count):
-            iteration_df = pd.read_csv(f"{source}/cv_iteration_{iteration}/generated/generated.csv").sample(n=desired_counts[i], ignore_index=True)
+            iteration_df = pd.read_csv(os.path.join(SYNTHETIC_ROOT, f"cv_iteration_{iteration}/generated/generated.csv")).sample(n=desired_counts[i], ignore_index=True)
             iteration_df.to_csv(f"{destinations[i]}/synthetic_data_iteration_{iteration}.csv")
 
 
-clone_to_folders(["data/combination_1950_molecules_and_33_%_synthetic", "data/combination_3900_molecules_and_67_%_synthetic"],
-                 "data/combination_1300_molecules_and_0_%_synthetic")
+clone_to_folders([os.path.join(DATA_ROOT, "combination_1950_molecules_and_33_%_synthetic"),
+                  os.path.join(DATA_ROOT, "combination_3900_molecules_and_67_%_synthetic")
+                 ],
+                  os.path.join(DATA_ROOT, "combination_1300_molecules_and_0_%_synthetic")
+                )
 
-add_synthetic_molecules(["data/combination_1950_molecules_and_33_%_synthetic", "data/combination_3900_molecules_and_67_%_synthetic"],
+add_synthetic_molecules([os.path.join(DATA_ROOT, "combination_1950_molecules_and_33_%_synthetic"),
+                         os.path.join(DATA_ROOT, "combination_3900_molecules_and_67_%_synthetic")
+                        ],
                         [650, 2600],
                         5,
-                        "vae/paper_based/CVAE/fold_pipeline_outputs")
+                        "vae/paper_based/CVAE/fold_pipeline_outputs"
+                       )
