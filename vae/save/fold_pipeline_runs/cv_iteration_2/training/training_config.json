@@ -1,0 +1,50 @@
+{
+  "batch_size": 64,
+  "latent_size": 200,
+  "unit_size": 256,
+  "n_rnn_layer": 3,
+  "seq_length": 120,
+  "mean": 0.0,
+  "stddev": 1.0,
+  "lr": 0.001,
+  "num_prop": 1,
+  "grad_clip_norm": 6.0,
+  "model_mode": "transformer",
+  "optimizer": "adamw",
+  "weight_decay": 0.001,
+  "use_amp": false,
+  "amp_dtype": "float16",
+  "transformer_heads": 8,
+  "transformer_ff_size": 512,
+  "transformer_dropout": 0.2,
+  "prop_file": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\fold_pipeline_outputs\\cv_iteration_2\\data\\cv_iteration_2_train_prop.txt",
+  "save_dir": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\save\\fold_pipeline_runs\\cv_iteration_2\\training",
+  "run_name": null,
+  "use_run_subdir": false,
+  "vocab_size": 32,
+  "smiles_augmentation_duplicates": 10,
+  "num_train_before_augmentation": 1035,
+  "num_train_after_augmentation": 11373,
+  "prop_norm_mean": [
+    6.475606441497803
+  ],
+  "prop_norm_std": [
+    1.3902359008789062
+  ],
+  "condition_property_names": [
+    "pIC50"
+  ],
+  "external_test_prop_file": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\fold_pipeline_outputs\\cv_iteration_2\\data\\cv_iteration_2_validation_prop.txt",
+  "split_strategy": "external_test_file",
+  "predict_labels": true,
+  "label_dim": 1,
+  "label_loss_weight": 1.0,
+  "include_condition_in_label_head": true,
+  "label_target_scale": "normalized",
+  "label_target_indices": [
+    0
+  ],
+  "label_target_names": [
+    "pIC50"
+  ]
+}

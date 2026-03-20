@@ -1,0 +1,72 @@
+{
+  "training_preset": "custom",
+  "data": {
+    "seq_length": 120,
+    "smiles_augmentation_duplicates": 10,
+    "prop_file": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_train_prop.txt",
+    "test_prop_file": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\fold_pipeline_outputs\\cv_iteration_0\\data\\cv_iteration_0_validation_prop.txt",
+    "train_ratio": 1.0
+  },
+  "model": {
+    "mode": "transformer",
+    "latent_size": 200,
+    "unit_size": 256,
+    "n_rnn_layer": 3,
+    "mean": 0.0,
+    "stddev": 1.0,
+    "num_prop": null,
+    "predict_labels": true,
+    "label_target_indices": null,
+    "label_dim": null,
+    "label_loss_weight": 1.0,
+    "include_condition_in_label_head": true,
+    "label_targets_use_raw_scale": false
+  },
+  "transformer": {
+    "heads": 8,
+    "ff_size": 512,
+    "dropout": 0.2
+  },
+  "optimization": {
+    "optimizer": "adamw",
+    "lr": 0.001,
+    "weight_decay": 0.001,
+    "use_amp": false,
+    "amp_dtype": "float16",
+    "grad_clip_norm": 6.0
+  },
+  "training": {
+    "batch_size": 64,
+    "num_epochs": 120,
+    "save_dir": "c:\\Users\\kjo02\\Desktop\\project\\dat676_project\\vae\\save\\fold_pipeline_runs\\cv_iteration_0\\training",
+    "run_name": null,
+    "use_run_subdir": false,
+    "save_every": 30,
+    "save_periodic_checkpoints": false,
+    "save_final_checkpoint": true,
+    "save_early_stop_checkpoint": false,
+    "save_history_csv": true,
+    "save_prediction_eval_csv": true,
+    "prediction_eval_filename": "train_validation_prediction_eval.csv",
+    "early_stopping_patience": 10,
+    "early_stopping_min_delta": 0.001,
+    "early_stopping_restore_best": true
+  },
+  "scheduler": {
+    "enabled": true,
+    "factor": 0.5,
+    "patience": 2,
+    "threshold": 0.001,
+    "min_lr": 1e-06
+  },
+  "kl": {
+    "enabled": true,
+    "start_beta": 1.0,
+    "max_beta": 4.0,
+    "hold_epochs": 0,
+    "warmup_epochs": 8
+  },
+  "diagnostics": {
+    "every": 1
+  }
+}

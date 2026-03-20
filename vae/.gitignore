@@ -1,4 +1,9 @@
-save/
+save/*
+# Re-include the folder itself
+!save/fold_pipeline_runs/
+# Re-include everything inside it
+!save/fold_pipeline_runs/**
+
 audit_outputs/
 
 */__pycache__/
@@ -6,4 +11,3 @@ audit_outputs/
 CHANGELOG.md
 
 *.pth
-
