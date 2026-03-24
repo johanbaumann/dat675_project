@@ -1,2 +1,5 @@
+
 *.pth
-.vscode/
+!0%/checkpoints/*
+!33%/checkpoints/*
+!67%/checkpoints/*
